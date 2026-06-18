@@ -1,0 +1,56 @@
+{
+  "BTCUSD": {
+    "ticker": "BTC-USD",
+    "point_value": 1.0,
+    "qty_step": 0.001,
+    "min_qty": 0.001,
+    "spread_points": 5.0,
+    "slippage_points": 1.0,
+    "commission_per_side": 0.0
+  },
+  "GBPUSD": {
+    "ticker": "GBPUSD=X",
+    "point_value": 1.0,
+    "qty_step": 1000.0,
+    "min_qty": 1000.0,
+    "spread_points": 0.0001,
+    "slippage_points": 0.00005,
+    "commission_per_side": 0.0
+  },
+  "EURUSD": {
+    "ticker": "EURUSD=X",
+    "point_value": 1.0,
+    "qty_step": 1000.0,
+    "min_qty": 1000.0,
+    "spread_points": 0.0001,
+    "slippage_points": 0.00005,
+    "commission_per_side": 0.0
+  },
+  "MNQ": {
+    "ticker": "MNQ=F",
+    "point_value": 2.0,
+    "qty_step": 1.0,
+    "min_qty": 1.0,
+    "spread_points": 0.25,
+    "slippage_points": 0.25,
+    "commission_per_side": 1.25
+  },
+  "MGC": {
+    "ticker": "MGC=F",
+    "point_value": 10.0,
+    "qty_step": 1.0,
+    "min_qty": 1.0,
+    "spread_points": 0.1,
+    "slippage_points": 0.1,
+    "commission_per_side": 1.25
+  },
+  "MES": {
+    "ticker": "MES=F",
+    "point_value": 5.0,
+    "qty_step": 1.0,
+    "min_qty": 1.0,
+    "spread_points": 0.25,
+    "slippage_points": 0.25,
+    "commission_per_side": 1.25
+  }
+}
