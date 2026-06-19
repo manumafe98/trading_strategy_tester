@@ -4,6 +4,7 @@ import argparse
 
 import pandas as pd
 
+from .analytics import analyze_trades, strategy_metrics
 from .backtest import add_trade_counts, result_columns, risk_for, risk_reward_ratios, run_backtest, self_check
 from .data import load_data
 from .reports import reset_output_dirs, write_results_html, write_trade_html
@@ -40,6 +41,7 @@ def run(args: argparse.Namespace) -> None:
     timeframes = csv_items(args.timeframe) or DEFAULT_TIMEFRAMES
     ratios = risk_reward_ratios(args.risk_reward_ratio)
     rows = []
+    financial_columns = ("Return", "Max DD", "Sharpe Ratio", "Return / DD")
     reset_output_dirs()
 
     for asset in assets:
@@ -54,6 +56,7 @@ def run(args: argparse.Namespace) -> None:
                 raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
             data = load_data(asset, asset_cfg.ticker, data_timeframe, args.time_period, args.data_source)
             signals = strategy.generate_signals(data.copy(), asset=asset, timeframe=timeframe, params={})
+            risk_pct = risk_for(asset, args.risk)
             for risk_reward_ratio in ratios:
                 for trailing_stop in trailing_stop_variants(args.trailing_stop, risk_reward_ratio):
                     metrics, trades = run_backtest(
@@ -64,25 +67,48 @@ def run(args: argparse.Namespace) -> None:
                         risk_reward_ratio=risk_reward_ratio,
                         trailing_stop=trailing_stop,
                         operation=args.operation,
-                        risk_pct=risk_for(asset, args.risk),
+                        risk_pct=risk_pct,
                         capital=args.capital,
                         with_costs=args.with_costs,
                         asset_cfg=asset_cfg,
                     )
+                    params = {
+                        "risk_reward_ratio": risk_reward_ratio,
+                        "trailing_stop": trailing_stop,
+                        "operation": args.operation,
+                        "risk_pct": risk_pct,
+                        "capital": args.capital,
+                        "with_costs": args.with_costs,
+                        "time_period": args.time_period,
+                        "data_source": args.data_source,
+                    }
+                    custom_metrics = strategy_metrics(strategy, data, signals, trades, asset, timeframe, params)
+                    for trade in trades:
+                        trade["chart_path"] = write_trade_html(data, trade, strategy)
+                    analytics = analyze_trades(trades, trailing_stop)
                     row = add_trade_counts(metrics, trades, args.operation)
+                    if args.with_costs:
+                        for column in financial_columns:
+                            row[column] = (metrics["Gross"][column], metrics["Net"][column])
                     row["RR"] = f"{risk_reward_ratio:g}"
                     row["Trailing"] = "yes" if trailing_stop else "no"
+                    row["_sort_return"] = metrics["Net" if args.with_costs else "Gross"]["Return"]
+                    row["_analytics"] = analytics
+                    row["_strategy_metrics"] = custom_metrics
                     rows.append(row)
-                    for trade in trades:
-                        write_trade_html(data, trade, strategy)
 
-    table = pd.DataFrame(rows, columns=result_columns(args.operation))
+    columns = result_columns(args.operation)
+    table = pd.DataFrame(rows)
     if not table.empty:
         order = {asset: i for i, asset in enumerate(assets)}
         table["_asset_order"] = table["Asset"].map(order)
-        table = table.sort_values(["_asset_order", "Return"], ascending=[True, False]).drop(columns="_asset_order")
-    print(table.to_string(index=False))
-    print(f"results: {write_results_html(table, args)}")
+        table = table.sort_values(["_asset_order", "_sort_return"], ascending=[True, False]).drop(columns="_asset_order")
+    console = table.reindex(columns=columns).copy()
+    if args.with_costs:
+        for column in financial_columns:
+            console[column] = console[column].map(lambda pair: f"{pair[0]:.2f} / {pair[1]:.2f}")
+    print(console.to_string(index=False))
+    print(f"results: {write_results_html(table, args, columns)}")
 
 
 def parser() -> argparse.ArgumentParser:

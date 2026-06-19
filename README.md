@@ -76,6 +76,15 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
+Strategies can also add scalar metrics to each expanded result variant:
+
+```python
+def calculate_metrics(data, signals, trades, asset, timeframe, params):
+    return {"Strategy metric": value}
+```
+
+`params` contains the effective RR, trailing mode, operation, risk percentage, capital, costs flag, time period, and data source. The hook is called even when a variant has no completed trades.
+
 ## Checks
 
 ```bash

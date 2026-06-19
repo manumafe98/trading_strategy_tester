@@ -4,6 +4,7 @@ import math
 
 import pandas as pd
 
+from .analytics import analyze_trades, classify_outcome, strategy_metrics, trade_stats
 from .models import AssetConfig, ExitReason, Side
 from .utils import csv_items
 
@@ -83,17 +84,28 @@ def adjusted_exit(price: float, side: Side, cfg: AssetConfig, with_costs: bool) 
 def fill_exit(cfg: AssetConfig, trade: dict, raw_exit_price: float, exit_i: int, exit_time, reason: ExitReason, with_costs: bool) -> dict:
     side = trade["side"]
     direction = 1 if side == Side.LONG else -1
-    exit_price = adjusted_exit(float(raw_exit_price), side, cfg, with_costs)
+    raw_exit = float(raw_exit_price)
+    net_exit = adjusted_exit(raw_exit, side, cfg, with_costs)
     commission = cfg.commission_per_side * trade["qty"] * 2 if with_costs else 0.0
-    pnl = (exit_price - trade["entry"]) * direction * trade["qty"] * cfg.point_value - commission
+    gross_pnl = (raw_exit - trade["raw_entry"]) * direction * trade["qty"] * cfg.point_value
+    net_pnl = (net_exit - trade["net_entry"]) * direction * trade["qty"] * cfg.point_value - commission
+    realized_r = (raw_exit - trade["raw_entry"]) * direction / trade["initial_risk"]
     closed = trade.copy()
     closed.update(
         {
             "exit_i": exit_i,
             "exit_time": exit_time,
-            "exit": exit_price,
+            "raw_exit": raw_exit,
+            "net_exit": net_exit,
+            "exit": raw_exit,
             "exit_reason": reason,
-            "pnl": pnl,
+            "gross_pnl": gross_pnl,
+            "net_pnl": net_pnl,
+            "pnl": net_pnl,
+            "realized_r": realized_r,
+            "outcome": classify_outcome(realized_r),
+            "giveback_r": max(0.0, float(trade["mfe_r"]) - realized_r),
+            "holding_duration": pd.Timestamp(exit_time) - pd.Timestamp(trade["entry_time"]),
         }
     )
     return closed
@@ -115,8 +127,10 @@ def run_backtest(
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
-    equity = capital
-    equity_curve = [capital]
+    gross_equity = capital
+    net_equity = capital
+    gross_equity_curve = [capital]
+    net_equity_curve = [capital]
     trades = []
     busy_until = -1
     signals = normalize_signals(signals)
@@ -137,17 +151,17 @@ def run_backtest(
 
         side = Side(signal["side"])
         raw_entry = float(signal_entry if close_entry else data.iloc[entry_i]["open"])
-        entry = adjusted_entry(raw_entry, side, asset_cfg, with_costs)
+        net_entry = adjusted_entry(raw_entry, side, asset_cfg, with_costs)
         stop = float(signal["stop"])
-        if (side == Side.LONG and stop >= entry) or (side == Side.SHORT and stop <= entry):
+        if (side == Side.LONG and stop >= raw_entry) or (side == Side.SHORT and stop <= raw_entry):
             continue
-        risk_points = abs(entry - stop)
-        qty = rounded_qty((equity * risk_pct / 100) / (risk_points * asset_cfg.point_value), asset_cfg.qty_step)
+        risk_points = abs(raw_entry - stop)
+        qty = rounded_qty((net_equity * risk_pct / 100) / (risk_points * asset_cfg.point_value), asset_cfg.qty_step)
         if qty < asset_cfg.min_qty:
             continue
 
         direction = 1 if side == Side.LONG else -1
-        target = entry + direction * risk_points * risk_reward_ratio
+        target = raw_entry + direction * risk_points * risk_reward_ratio
         trade = {
             "asset": asset,
             "timeframe": timeframe,
@@ -157,10 +171,14 @@ def run_backtest(
             "entry_i": entry_i,
             "entry_time": data.index[entry_i],
             "side": side,
-            "entry": entry,
+            "raw_entry": raw_entry,
+            "net_entry": net_entry,
+            "entry": raw_entry,
             "stop": stop,
             "target": target,
+            "initial_risk": risk_points,
             "qty": qty,
+            "mfe_r": 0.0,
         }
         for column in ("plot_start_time", "orb_high", "orb_low"):
             if column in signal and pd.notna(signal[column]):
@@ -177,9 +195,12 @@ def run_backtest(
                 trade = fill_exit(asset_cfg, trade, current_stop, i, data.index[i], ExitReason.STOP, with_costs)
                 break
             if target_hit:
+                trade["mfe_r"] = max(float(trade["mfe_r"]), risk_reward_ratio)
                 trade = fill_exit(asset_cfg, trade, target, i, data.index[i], ExitReason.TARGET, with_costs)
                 break
-            if trailing_stop and favor * direction >= (entry + direction * risk_points) * direction:
+            favorable_r = (favor - raw_entry) * direction / risk_points
+            trade["mfe_r"] = max(float(trade["mfe_r"]), favorable_r)
+            if trailing_stop and favor * direction >= (raw_entry + direction * risk_points) * direction:
                 next_stop = favor - direction * risk_points * 0.5
                 current_stop = max(current_stop, next_stop) if side == Side.LONG else min(current_stop, next_stop)
         else:
@@ -187,15 +208,17 @@ def run_backtest(
             busy_until = len(data) - 1
             continue
 
-        equity += trade["pnl"]
-        equity_curve.append(equity)
+        gross_equity += trade["gross_pnl"]
+        net_equity += trade["net_pnl"]
+        gross_equity_curve.append(gross_equity)
+        net_equity_curve.append(net_equity)
         busy_until = trade["exit_i"]
         trades.append(trade)
 
-    return make_metrics(asset, timeframe, equity_curve), trades
+    return make_metrics(asset, timeframe, gross_equity_curve, net_equity_curve, with_costs), trades
 
 
-def make_metrics(asset: str, timeframe: str, equity_curve: list[float]) -> dict:
+def _curve_metrics(equity_curve: list[float]) -> dict:
     curve = pd.Series(equity_curve, dtype="float64")
     returns = curve.pct_change().dropna()
     total_return = (curve.iloc[-1] / curve.iloc[0] - 1) * 100
@@ -205,8 +228,6 @@ def make_metrics(asset: str, timeframe: str, equity_curve: list[float]) -> dict:
     if len(returns) > 1 and float(returns.std()) != 0:
         sharpe = math.sqrt(len(returns)) * float(returns.mean() / returns.std())
     return {
-        "Asset": asset,
-        "TF": timeframe,
         "Return": round(float(total_return), 2),
         "Max DD": round(max_dd, 2),
         "Sharpe Ratio": round(sharpe, 2),
@@ -214,8 +235,24 @@ def make_metrics(asset: str, timeframe: str, equity_curve: list[float]) -> dict:
     }
 
 
+def make_metrics(asset: str, timeframe: str, gross_equity_curve: list[float], net_equity_curve: list[float], with_costs: bool) -> dict:
+    gross = _curve_metrics(gross_equity_curve)
+    net = _curve_metrics(net_equity_curve)
+    return {"Asset": asset, "TF": timeframe, **(net if with_costs else gross), "Gross": gross, "Net": net}
+
+
 def add_trade_counts(metrics: dict, trades: list[dict], operation: str) -> dict:
-    metrics = {"Trades": len(trades), **metrics}
+    stats = trade_stats(trades)
+    metrics = {
+        "Trades": len(trades),
+        "W": stats["Wins"],
+        "BE": stats["BE"],
+        "L": stats["Losses"],
+        "Win Rate": stats["Win Rate"],
+        "Expectancy R": stats["Expectancy R"],
+        "Avg Duration": stats["Avg Duration"],
+        **metrics,
+    }
     if operation == "all":
         metrics["Long"] = sum(1 for trade in trades if trade["side"] == Side.LONG)
         metrics["Short"] = sum(1 for trade in trades if trade["side"] == Side.SHORT)
@@ -226,7 +263,7 @@ def result_columns(operation: str) -> list[str]:
     columns = ["Asset", "TF", "RR", "Trailing", "Trades"]
     if operation == "all":
         columns += ["Long", "Short"]
-    return columns + ["Return", "Max DD", "Sharpe Ratio", "Return / DD"]
+    return columns + ["W", "BE", "L", "Win Rate", "Expectancy R", "Avg Duration", "Return", "Max DD", "Sharpe Ratio", "Return / DD"]
 
 
 def self_check() -> None:
@@ -278,6 +315,65 @@ def self_check() -> None:
     trail_data.loc[idx[2], ["high", "low"]] = [101.3, 100.6]
     _, trades = run_backtest(trail_data, signals, asset="TEST", timeframe="1h", risk_reward_ratio=2, trailing_stop=True, operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg)
     verify(trades[0]["exit_reason"] == ExitReason.STOP and abs(trades[0]["exit"] - 100.7) < 0.000001, "trailing stop failed")
+    trail_analytics = analyze_trades(trades, True)["trailing"]
+    verify(abs(trades[0]["realized_r"] - 0.7) < 0.000001, "trailing realized R failed")
+    verify(abs(trades[0]["mfe_r"] - 1.2) < 0.000001 and abs(trades[0]["giveback_r"] - 0.5) < 0.000001, "trailing excursion failed")
+    verify(trail_analytics["Target Hits"] == 0 and trail_analytics["Early Exits"] == 1, "trailing exit counts failed")
+    _, target_trades = run_backtest(base, signals, asset="TEST", timeframe="1h", risk_reward_ratio=1, trailing_stop=True, operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg)
+    target_analytics = analyze_trades(target_trades, True)["trailing"]
+    verify(target_analytics["Target Hits"] == 1 and target_analytics["Early Exits"] == 0, "trailing target count failed")
+
+    sample_trades = [
+        {"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01 23:30:00-02:00"), "holding_duration": pd.Timedelta(hours=1)},
+        {"side": Side.SHORT, "realized_r": 0.0, "entry_time": pd.Timestamp("2025-01-02 04:00:00"), "holding_duration": pd.Timedelta(hours=2)},
+        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2025-01-03 04:00:00"), "holding_duration": pd.Timedelta(hours=3)},
+        {"side": Side.LONG, "realized_r": -0.5, "entry_time": pd.Timestamp("2025-02-01 04:00:00"), "holding_duration": pd.Timedelta(hours=4)},
+    ]
+    analytics = analyze_trades(sample_trades, False)
+    overall, long_stats, short_stats = analytics["outcomes"]
+    verify((overall["Wins"], overall["BE"], overall["Losses"], overall["Win Rate"]) == (1, 1, 2, 25.0), "outcome counts failed")
+    verify(overall["Expectancy R"] == -0.125 and overall["Max Losing Streak"] == 2, "expectancy or streak failed")
+    verify(overall["Avg Duration"] == "2h 30m" and overall["Median Duration"] == "2h 30m", "duration analytics failed")
+    verify((long_stats["Wins"], long_stats["Losses"]) == (1, 1) and (short_stats["BE"], short_stats["Losses"]) == (1, 1), "side outcomes failed")
+    verify(analytics["daily"][0]["Period"] == "2025-01-02" and analytics["daily"][0]["Trades"] == 2, "UTC entry-day analytics failed")
+    verify(analytics["monthly"][0]["Period"] == "2025-01" and analytics["monthly"][0]["Trades"] == 3, "entry-month analytics failed")
+    verify(classify_outcome(1e-10) == "breakeven" and not analyze_trades([], True)["outcomes"][0]["Trades"], "breakeven or empty analytics failed")
+
+    cost_idx = pd.date_range("2025-02-01", periods=6, freq="h")
+    cost_data = pd.DataFrame(
+        {
+            "open": [100.0] * 6,
+            "high": [100.0, 101.1, 100.0, 100.0, 101.1, 100.0],
+            "low": [100.0, 99.5, 100.0, 100.0, 99.5, 100.0],
+            "close": [100.0] * 6,
+            "volume": [0] * 6,
+        },
+        index=cost_idx,
+    )
+    cost_signals = pd.DataFrame(
+        [
+            {"time": cost_idx[0], "side": "long", "entry": 100.0, "stop": 99.0},
+            {"time": cost_idx[3], "side": "long", "entry": 100.0, "stop": 99.0},
+        ]
+    )
+    cost_cfg = AssetConfig(ticker="TEST", point_value=1.0, qty_step=1.0, min_qty=1.0, spread_points=0.2, slippage_points=0.1, commission_per_side=0.1)
+    gross_metrics, gross_trades = run_backtest(cost_data, cost_signals, asset="TEST", timeframe="1h", risk_reward_ratio=1, trailing_stop=False, operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cost_cfg)
+    net_metrics, net_trades = run_backtest(cost_data, cost_signals, asset="TEST", timeframe="1h", risk_reward_ratio=1, trailing_stop=False, operation="all", risk_pct=1, capital=10000, with_costs=True, asset_cfg=cost_cfg)
+    verify(gross_trades[0]["target"] == net_trades[0]["target"] == 101.0 and gross_trades[0]["raw_exit"] == net_trades[0]["raw_exit"], "costs changed raw execution")
+    verify(gross_trades[0]["realized_r"] == net_trades[0]["realized_r"] == 1.0 and net_trades[0]["outcome"] == "win", "costs changed outcomes")
+    verify(gross_trades[0]["qty"] == net_trades[0]["qty"] and net_trades[1]["qty"] < gross_trades[1]["qty"], "net-equity sizing failed")
+    verify(net_metrics["Gross"]["Return"] > net_metrics["Net"]["Return"] and gross_metrics["Return"] > net_metrics["Return"], "gross/net metrics failed")
+
+    from types import SimpleNamespace
+
+    hook = SimpleNamespace(calculate_metrics=lambda data, signals, trades, asset, timeframe, params: {"Signals": len(signals), "RR": params["risk_reward_ratio"]})
+    verify(strategy_metrics(hook, base, signals, [], "TEST", "1h", {"risk_reward_ratio": 2}) == {"Signals": 1, "RR": 2}, "strategy metrics hook failed")
+    try:
+        strategy_metrics(SimpleNamespace(calculate_metrics=lambda *args: []), base, signals, [], "TEST", "1h", {})
+    except ValueError:
+        pass
+    else:
+        raise RuntimeError("invalid strategy metrics were accepted")
 
     metrics, trades = run_backtest(base, pd.DataFrame(), asset="TEST", timeframe="1h", risk_reward_ratio=1, trailing_stop=False, operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg)
     verify(not trades and metrics["Return"] == 0 and metrics["Max DD"] == 0, "empty signals failed")
