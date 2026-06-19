@@ -37,12 +37,12 @@ def format_duration(seconds: float) -> str:
     return " ".join(parts[:2])
 
 
-def trade_stats(trades: list[dict], label: str = "All") -> dict:
-    values = [float(trade["realized_r"]) for trade in trades]
+def trade_stats(trades: list[dict], label: str = "All", value_key: str = "realized_r") -> dict:
+    values = [float(trade[value_key]) for trade in trades]
     outcomes = [classify_outcome(value) for value in values]
     durations = [pd.Timedelta(trade["holding_duration"]).total_seconds() for trade in trades]
-    wins = [value for value in values if classify_outcome(value) == "win"]
-    losses = [value for value in values if classify_outcome(value) == "loss"]
+    wins = [value for value, outcome in zip(values, outcomes) if outcome == "win"]
+    losses = [value for value, outcome in zip(values, outcomes) if outcome == "loss"]
     losing_streak = max_losing_streak = 0
     for outcome in outcomes:
         losing_streak = losing_streak + 1 if outcome == "loss" else 0

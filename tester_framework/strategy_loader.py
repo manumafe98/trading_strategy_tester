@@ -12,6 +12,8 @@ __all__ = ["load_strategy"]
 
 def load_strategy(name: str) -> types.ModuleType:
     strategy_dir = STRATEGY_DIR.resolve()
+    if Path(name).parts != (name,):
+        raise ValueError(f"Strategy name must be a plain file name without path separators: {name}")
     path = (STRATEGY_DIR / f"{Path(name).stem}.py").resolve()
     if path.parent != strategy_dir:
         raise ValueError(f"Strategy path must stay inside {strategy_dir}")
