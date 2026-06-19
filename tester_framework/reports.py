@@ -38,6 +38,8 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
 
     TRADES_DIR.mkdir(exist_ok=True)
     start = max(0, trade["entry_i"] - 20)
+    if pd.notna(trade.get("plot_start_time")):
+        start = min(start, max(0, data.index.searchsorted(pd.Timestamp(trade["plot_start_time"]), side="left")))
     end = min(len(data), trade["exit_i"] + 21)
     view = data.iloc[start:end]
     fig = go.Figure(
@@ -55,14 +57,14 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     plot_indicators = getattr(strategy, "plot_indicators", None)
     if callable(plot_indicators):
         # ponytail: strategies own their overlays; the framework only gives them the chart.
-        plot_indicators(fig, data=data, view=view, asset=trade["asset"], timeframe=trade["timeframe"], params={})
+        plot_indicators(fig, data=data, view=view, asset=trade["asset"], timeframe=trade["timeframe"], params={"trade": trade})
     color = "green" if trade["side"] == "long" else "red"
     fig.add_trace(go.Scatter(x=[trade["entry_time"]], y=[trade["entry"]], mode="markers", name="entry", marker={"color": color, "size": 10}))
     fig.add_trace(go.Scatter(x=[trade["exit_time"]], y=[trade["exit"]], mode="markers", name=trade["exit_reason"], marker={"color": "black", "size": 10}))
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     if trade["target"] is not None:
         fig.add_hline(y=trade["target"], line_dash="dot", line_color="green", annotation_text="target")
-    fig.update_layout(title=f"{trade['asset']} {trade['timeframe']} {trade['side']}", xaxis_rangeslider_visible=False)
+    fig.update_layout(title=f"{trade['asset']} {trade['timeframe']} {trade['side']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     base = f"{trade['asset']}_{trade['timeframe']}_{clean_exit_name(trade['exit_structure'])}_{stamp}_{trade['side']}"

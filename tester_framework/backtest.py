@@ -53,6 +53,10 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Signals side must be long or short, got: {', '.join(invalid)}")
     signals["time"] = pd.to_datetime(signals["time"])
     signals["stop"] = pd.to_numeric(signals["stop"], errors="coerce")
+    if "entry" in signals.columns:
+        signals["entry"] = pd.to_numeric(signals["entry"], errors="coerce")
+    if "plot_start_time" in signals.columns:
+        signals["plot_start_time"] = pd.to_datetime(signals["plot_start_time"])
     signals = signals.dropna(subset=["time", "side", "stop"]).copy()
     signals["side"] = signals["side"].map(Side)
     return signals.sort_values("time")
@@ -117,12 +121,17 @@ def run_backtest(
 
     # ponytail: independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
     for _, signal in signals.iterrows():
-        entry_i = data.index.searchsorted(signal["time"], side="right")
+        signal_entry = signal.get("entry")
+        close_entry = pd.notna(signal_entry)
+        entry_i = data.index.searchsorted(signal["time"], side="left" if close_entry else "right")
         if entry_i >= len(data) or entry_i <= busy_until:
+            continue
+        if close_entry and data.index[entry_i] != signal["time"]:
             continue
 
         side = Side(signal["side"])
-        entry = adjusted_entry(float(data.iloc[entry_i]["open"]), side, asset_cfg, with_costs)
+        raw_entry = float(signal_entry if close_entry else data.iloc[entry_i]["open"])
+        entry = adjusted_entry(raw_entry, side, asset_cfg, with_costs)
         stop = float(signal["stop"])
         if (side == Side.LONG and stop >= entry) or (side == Side.SHORT and stop <= entry):
             continue
@@ -146,9 +155,12 @@ def run_backtest(
             "target": target,
             "qty": qty,
         }
+        for column in ("plot_start_time", "orb_high", "orb_low"):
+            if column in signal and pd.notna(signal[column]):
+                trade[column] = signal[column]
         trailing_stop = stop
 
-        for i in range(entry_i, len(data)):
+        for i in range(entry_i + int(close_entry), len(data)):
             bar = data.iloc[i]
             against = float(bar["low"] if side == Side.LONG else bar["high"])
             favor = float(bar["high"] if side == Side.LONG else bar["low"])
@@ -240,6 +252,12 @@ def self_check() -> None:
     _, trades = run_backtest(both_data, signals, asset="TEST", timeframe="1h", exit_structure="1RR", operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg)
     verify(trades[0]["exit_reason"] == ExitReason.STOP, "same-bar stop priority failed")
 
+    close_entry_data = base.copy()
+    close_entry_data.loc[idx[1], ["high", "low"]] = [102.0, 100.5]
+    close_entry = pd.DataFrame([{"time": idx[0], "side": "long", "entry": 101.0, "stop": 100.0}])
+    _, trades = run_backtest(close_entry_data, close_entry, asset="TEST", timeframe="1h", exit_structure="1RR", operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg)
+    verify(trades[0]["entry_i"] == 0 and trades[0]["entry"] == 101.0 and trades[0]["exit_reason"] == ExitReason.TARGET, "close-entry signal failed")
+
     metrics, trades = run_backtest(base, pd.DataFrame(), asset="TEST", timeframe="1h", exit_structure="1RR", operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg)
     verify(not trades and metrics["Return"] == 0 and metrics["Max DD"] == 0, "empty signals failed")
 
@@ -258,4 +276,52 @@ def self_check() -> None:
         pass
     else:
         raise RuntimeError("non-canonical signal side was accepted")
+
+    from tempfile import TemporaryDirectory
+    from pathlib import Path
+
+    from .data import load_local_data
+
+    with TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        forex_dir = data_dir / "forex" / "TEST"
+        forex_dir.mkdir(parents=True)
+        (forex_dir / "TEST.csv").write_text(
+            "\n".join(
+                [
+                    "timestamp,open,high,low,close,volume",
+                    "2024-12-30T00:00:00.000Z,1,2,0,1.5,1",
+                    "2025-01-01T00:00:00.000Z,10,11,9,10.5,1",
+                    "2025-01-01T00:01:00.000Z,20,22,18,21,2",
+                    "2025-01-01T00:02:00.000Z,30,33,28,32,3",
+                    "2025-01-01T00:03:00.000Z,40,44,38,43,4",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        local = load_local_data("TEST", "2m", "1d", data_dir=data_dir)
+        verify(len(local) == 2 and local.iloc[0]["open"] == 10 and local.iloc[0]["close"] == 21, "timestamp local resample failed")
+        verify(local.iloc[0]["volume"] == 3 and getattr(local.index, "tz", None) is None, "timestamp local normalization failed")
+
+        futures_dir = data_dir / "futures" / "FUT"
+        futures_dir.mkdir(parents=True)
+        (futures_dir / "FUT.csv").write_text(
+            "\n".join(
+                [
+                    "ts_event,rtype,publisher_id,instrument_id,open,high,low,close,volume,symbol",
+                    "2025-01-01T00:00:00.000000000Z,33,1,2,200,201,199,200.5,1,FUTH6",
+                    "2025-01-01T00:00:00.000000000Z,33,1,1,100,101,99,100.5,7,FUTZ5",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        local = load_local_data("FUT", "1m", "max", data_dir=data_dir)
+        verify(len(local) == 1 and local.index.name == "time" and local.iloc[0]["close"] == 100.5, "ts_event local parsing failed")
+
+        try:
+            load_local_data("FUT", "1m", "60mo", data_dir=data_dir)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("unsupported local period was accepted")
     print("self-check ok")

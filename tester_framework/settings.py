@@ -17,15 +17,10 @@ TIMEFRAMES = {
     "1m": ("1m", None),
     "2m": ("2m", None),
     "5m": ("5m", None),
-    "5min": ("5m", None),
     "10m": ("5m", "10min"),
-    "10min": ("5m", "10min"),
     "15m": ("15m", None),
-    "15min": ("15m", None),
     "30m": ("30m", None),
-    "30min": ("30m", None),
     "1h": ("1h", None),
-    "60m": ("60m", None),
     "1d": ("1d", None),
 }
 

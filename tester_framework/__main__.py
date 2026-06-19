@@ -18,6 +18,7 @@ __all__ = ["main", "parser", "run"]
 def run(args: argparse.Namespace) -> None:
     asset_configs = load_assets()
     strategy = load_strategy(args.strategy)
+    execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
     assets = [x.upper() for x in (csv_items(args.asset) or asset_configs.keys())]
     timeframes = csv_items(args.timeframe) or DEFAULT_TIMEFRAMES
     exits = csv_items(args.exit_structure) or ["1RR"]
@@ -32,7 +33,10 @@ def run(args: argparse.Namespace) -> None:
             for timeframe in timeframes:
                 if timeframe not in TIMEFRAMES:
                     raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-                data = load_data(asset_cfg.ticker, timeframe, args.time_period)
+                data_timeframe = execution_timeframe or timeframe
+                if data_timeframe not in TIMEFRAMES:
+                    raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
+                data = load_data(asset, asset_cfg.ticker, data_timeframe, args.time_period, args.data_source)
                 signals = strategy.generate_signals(data.copy(), asset=asset, timeframe=timeframe, params={})
                 metrics, trades = run_backtest(
                     data,
@@ -61,6 +65,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
     p.add_argument("--time_period", default="60d")
+    p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
     p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
     p.add_argument("--exit_structure", default="1RR", help="comma list, e.g. 1RR,2RR,trailing_stop")
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
