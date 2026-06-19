@@ -8,6 +8,8 @@ from .models import ExitReason, Side
 
 
 BREAKEVEN_TOLERANCE = 1e-9
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
 
 
 def classify_outcome(realized_r: float) -> str:
@@ -63,14 +65,20 @@ def trade_stats(trades: list[dict], label: str = "All") -> dict:
 
 
 def period_stats(trades: list[dict], period: str) -> list[dict]:
+    labels = WEEKDAYS if period == "weekday" else MONTHS if period == "month" else None
+    if labels is None:
+        raise ValueError(f"Unknown calendar period: {period}")
     grouped: dict[str, list[dict]] = {}
     for trade in trades:
         timestamp = pd.Timestamp(trade["entry_time"])
         timestamp = timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
-        key = timestamp.strftime("%Y-%m-%d" if period == "day" else "%Y-%m")
+        key = labels[timestamp.weekday()] if period == "weekday" else labels[timestamp.month - 1]
         grouped.setdefault(key, []).append(trade)
     rows = []
-    for key, items in sorted(grouped.items()):
+    for key in labels:
+        if key not in grouped:
+            continue
+        items = grouped[key]
         stats = trade_stats(items)
         rows.append({"Period": key, **{name: stats[name] for name in ("Trades", "Wins", "BE", "Losses", "Win Rate")}})
     return rows
@@ -85,8 +93,8 @@ def analyze_trades(trades: list[dict], exit_mode: str) -> dict:
     managed_trades = trades if exit_mode in {"trailing", "partial"} else []
     return {
         "outcomes": outcome_rows,
-        "daily": period_stats(trades, "day"),
-        "monthly": period_stats(trades, "month"),
+        "weekday": period_stats(trades, "weekday"),
+        "month": period_stats(trades, "month"),
         "managed": {
             "Mode": exit_mode,
             "Target Completions": sum(trade["exit_reason"] == ExitReason.TARGET for trade in managed_trades),

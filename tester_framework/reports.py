@@ -207,7 +207,7 @@ def _variant_details(row: pd.Series) -> str:
     overall = analytics["outcomes"][0]
     sections = [
         f"<section><h3>Outcomes</h3>{_outcome_table(analytics)}</section>",
-        f'<div class="detail-grid"><section><h3>Entry day UTC</h3>{_period_table(analytics["daily"])}</section><section><h3>Entry month UTC</h3>{_period_table(analytics["monthly"])}</section></div>',
+        f'<div class="detail-grid"><section><h3>Entry weekday (UTC)</h3>{_period_table(analytics["weekday"])}</section><section><h3>Entry month (UTC)</h3>{_period_table(analytics["month"])}</section></div>',
     ]
     if row["Exit Mode"] != "fixed":
         sections.append(_managed_section(analytics))

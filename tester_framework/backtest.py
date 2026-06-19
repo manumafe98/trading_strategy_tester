@@ -422,8 +422,8 @@ def self_check() -> None:
     verify(overall["Expectancy R"] == -0.125 and overall["Max Losing Streak"] == 2, "expectancy or streak failed")
     verify(overall["Avg Duration"] == "2h 30m" and overall["Median Duration"] == "2h 30m", "duration analytics failed")
     verify((long_stats["Wins"], long_stats["Losses"]) == (1, 1) and (short_stats["BE"], short_stats["Losses"]) == (1, 1), "side outcomes failed")
-    verify(analytics["daily"][0]["Period"] == "2025-01-02" and analytics["daily"][0]["Trades"] == 2, "UTC entry-day analytics failed")
-    verify(analytics["monthly"][0]["Period"] == "2025-01" and analytics["monthly"][0]["Trades"] == 3, "entry-month analytics failed")
+    verify([row["Period"] for row in analytics["weekday"]] == ["Thursday", "Friday", "Saturday"] and analytics["weekday"][0]["Trades"] == 2, "UTC entry-weekday analytics failed")
+    verify([row["Period"] for row in analytics["month"]] == ["January", "February"] and analytics["month"][0]["Trades"] == 3, "entry-month analytics failed")
     verify(classify_outcome(1e-10) == "breakeven" and not analyze_trades([], "trailing")["outcomes"][0]["Trades"], "breakeven or empty analytics failed")
 
     cost_idx = pd.date_range("2025-02-01", periods=6, freq="h")

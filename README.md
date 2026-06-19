@@ -30,6 +30,8 @@ Multiple values are comma-separated, without spaces:
 python -m tester_framework --strategy ema50 --asset MGC,MNQ --timeframe 1h,30m --risk_reward_ratio 1,2
 ```
 
+Each asset/timeframe/RR/exit variant runs in parallel up to the machine's logical CPU count. Use `--workers 1` for a sequential comparison or a smaller positive value to limit CPU usage. The command prints total elapsed time after writing the result report.
+
 Use all configured assets by omitting `--asset`; use the default timeframe list by omitting `--timeframe`:
 
 ```bash

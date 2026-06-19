@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import pandas as pd
@@ -91,7 +92,9 @@ def local_csv_path(asset: str, data_dir: Path) -> Path:
     return matches[0]
 
 
+@lru_cache(maxsize=1)
 def read_local_csv(path: Path) -> pd.DataFrame:
+    # ponytail: asset runs are contiguous, so one cached source avoids reparsing without retaining every asset.
     columns = pd.read_csv(path, nrows=0).columns
     original = {str(column).lower(): column for column in columns}
     time_column = original.get("timestamp") or original.get("ts_event")
