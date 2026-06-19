@@ -61,16 +61,17 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
         plot_indicators(fig, data=data, view=view, asset=trade["asset"], timeframe=trade["timeframe"], params={"trade": trade})
     color = "green" if trade["side"] == "long" else "red"
     fig.add_trace(go.Scatter(x=[trade["entry_time"]], y=[trade["entry"]], mode="markers", name="entry", marker={"color": color, "size": 10}))
-    fig.add_trace(go.Scatter(x=[trade["exit_time"]], y=[trade["exit"]], mode="markers", name=trade["exit_reason"], marker={"color": "black", "size": 10}))
+    for fill in trade["exits"]:
+        name = f'{fill["exit_reason"]} {fill["qty"]:g}'
+        fig.add_trace(go.Scatter(x=[fill["exit_time"]], y=[fill["exit"]], mode="markers", name=name, marker={"color": "black", "size": 10}))
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
-    if trade["target"] is not None:
-        fig.add_hline(y=trade["target"], line_dash="dot", line_color="green", annotation_text="target")
-    fig.update_layout(title=f"{trade['asset']} {trade['timeframe']} {trade['side']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
+    for target in trade["targets"]:
+        fig.add_hline(y=target["price"], line_dash="dot", line_color="green", annotation_text=f'{target["r"]:g}R target')
+    fig.update_layout(title=f"{trade['asset']} {trade['timeframe']} {trade['side']} {trade['exit_mode']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
-    trail = "trail" if trade["trailing_stop"] else "fixed"
-    base = f"{trade['asset']}_{trade['timeframe']}_{rr}_{trail}_{stamp}_{trade['side']}"
+    base = f"{trade['asset']}_{trade['timeframe']}_{rr}_{trade['exit_mode']}_{stamp}_{trade['side']}"
     path = TRADES_DIR / f"{base}.html"
     n = 2
     while path.exists():
@@ -155,14 +156,23 @@ def _period_table(rows: list[dict]) -> str:
     )
 
 
-def _trailing_section(analytics: dict) -> str:
-    trailing = analytics["trailing"]
+def _exit_path(trade: dict) -> str:
+    parts = []
+    for fill in trade["exits"]:
+        label = f'{fill["target_r"]:g}R' if fill["target_r"] is not None else f'{fill["realized_r"]:+.2f}R stop'
+        parts.append(f'{fill["qty"]:g} @ {label}')
+    return ", ".join(parts)
+
+
+def _managed_section(analytics: dict) -> str:
+    managed = analytics["managed"]
+    mode = str(managed["Mode"]).title()
     summary = _detail_table(
-        ["Target hits", "Early exits", "Avg realized", "Avg MFE", "Avg giveback"],
-        [[trailing["Target Hits"], trailing["Early Exits"], _r(trailing["Avg Realized R"]), _r(trailing["Avg MFE R"]), _r(trailing["Avg Giveback R"])]],
+        ["Target completions", "Stop completions", "Avg realized", "Avg MFE", "Avg giveback"],
+        [[managed["Target Completions"], managed["Stop Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
     )
     ledger = []
-    for trade in trailing["trades"]:
+    for trade in managed["trades"]:
         chart_path = trade.get("chart_path")
         chart = "-"
         if chart_path:
@@ -176,20 +186,20 @@ def _trailing_section(analytics: dict) -> str:
             f'<td>{html_escape(str(trade["holding_duration"]))}</td>'
             f'<td>{html_escape(str(trade["side"]))}</td>'
             f'<td>{html_escape(str(trade["outcome"]).replace("_", " ").title())}</td>'
-            f'<td>{html_escape("Target hit" if trade["exit_reason"] == "target" else "Early stop")}</td>'
+            f'<td>{html_escape(_exit_path(trade))}</td>'
             f'<td>{float(trade["risk_reward_ratio"]):g}R</td>'
             f'<td>{_r(trade["realized_r"])}</td>'
             f'<td>{_r(trade["mfe_r"])}</td>'
             f'<td>{_r(trade["giveback_r"])}</td>'
             "</tr>"
         )
-    headers = ["Trade", "Entry UTC", "Exit UTC", "Duration", "Side", "Outcome", "Exit", "Target", "Realized", "MFE", "Giveback"]
+    headers = ["Trade", "Entry UTC", "Exit UTC", "Duration", "Side", "Outcome", "Exit path", "Target", "Realized", "MFE", "Giveback"]
     if ledger:
         head = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
         ledger_html = f'<div class="detail-scroll"><table class="detail-table ledger"><thead><tr>{head}</tr></thead><tbody>{"".join(ledger)}</tbody></table></div>'
     else:
         ledger_html = '<p class="empty">No trades</p>'
-    return f'<section><h3>Trailing summary</h3>{summary}</section><section><h3>Trailing trades</h3>{ledger_html}</section>'
+    return f'<section><h3>{mode} summary</h3>{summary}</section><section><h3>{mode} trades</h3>{ledger_html}</section>'
 
 
 def _variant_details(row: pd.Series) -> str:
@@ -199,12 +209,12 @@ def _variant_details(row: pd.Series) -> str:
         f"<section><h3>Outcomes</h3>{_outcome_table(analytics)}</section>",
         f'<div class="detail-grid"><section><h3>Entry day UTC</h3>{_period_table(analytics["daily"])}</section><section><h3>Entry month UTC</h3>{_period_table(analytics["monthly"])}</section></div>',
     ]
-    if row["Trailing"] == "yes":
-        sections.append(_trailing_section(analytics))
+    if row["Exit Mode"] != "fixed":
+        sections.append(_managed_section(analytics))
     custom_metrics = row.get("_strategy_metrics", {})
     if custom_metrics:
         sections.append(f'<section><h3>Strategy metrics</h3>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
-    title = f'{row["Asset"]} {row["TF"]} | {row["RR"]}R | trailing {row["Trailing"]}'
+    title = f'{row["Asset"]} {row["TF"]} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     return f'<details class="variant"><summary><strong>{html_escape(title)}</strong><span>{html_escape(result)}</span></summary><div class="variant-body">{"".join(sections)}</div></details>'
 
@@ -240,7 +250,7 @@ def write_results_html(table: pd.DataFrame, args, columns: list[str] | None = No
         f"{args.time_period} period",
         f"{args.operation.replace('_', ' ')} operations",
         f"RR {args.risk_reward_ratio}",
-        f"trailing {args.trailing_stop}",
+        f"exit modes {args.exit_mode}",
         f"{args.risk}% risk",
         f"${args.capital:,.0f} capital",
         f"costs {'on' if args.with_costs else 'off'}",

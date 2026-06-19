@@ -76,24 +76,25 @@ def period_stats(trades: list[dict], period: str) -> list[dict]:
     return rows
 
 
-def analyze_trades(trades: list[dict], trailing_stop: bool) -> dict:
+def analyze_trades(trades: list[dict], exit_mode: str) -> dict:
     outcome_rows = [
         trade_stats(trades),
         trade_stats([trade for trade in trades if trade["side"] == Side.LONG], "Long"),
         trade_stats([trade for trade in trades if trade["side"] == Side.SHORT], "Short"),
     ]
-    trailing_trades = trades if trailing_stop else []
+    managed_trades = trades if exit_mode in {"trailing", "partial"} else []
     return {
         "outcomes": outcome_rows,
         "daily": period_stats(trades, "day"),
         "monthly": period_stats(trades, "month"),
-        "trailing": {
-            "Target Hits": sum(trade["exit_reason"] == ExitReason.TARGET for trade in trailing_trades),
-            "Early Exits": sum(trade["exit_reason"] == ExitReason.STOP for trade in trailing_trades),
-            "Avg Realized R": round(mean(float(trade["realized_r"]) for trade in trailing_trades), 4) if trailing_trades else 0.0,
-            "Avg MFE R": round(mean(float(trade["mfe_r"]) for trade in trailing_trades), 4) if trailing_trades else 0.0,
-            "Avg Giveback R": round(mean(float(trade["giveback_r"]) for trade in trailing_trades), 4) if trailing_trades else 0.0,
-            "trades": trailing_trades,
+        "managed": {
+            "Mode": exit_mode,
+            "Target Completions": sum(trade["exit_reason"] == ExitReason.TARGET for trade in managed_trades),
+            "Stop Completions": sum(trade["exit_reason"] == ExitReason.STOP for trade in managed_trades),
+            "Avg Realized R": round(mean(float(trade["realized_r"]) for trade in managed_trades), 4) if managed_trades else 0.0,
+            "Avg MFE R": round(mean(float(trade["mfe_r"]) for trade in managed_trades), 4) if managed_trades else 0.0,
+            "Avg Giveback R": round(mean(float(trade["giveback_r"]) for trade in managed_trades), 4) if managed_trades else 0.0,
+            "trades": managed_trades,
         },
     }
 
