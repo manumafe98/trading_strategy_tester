@@ -47,5 +47,5 @@ Run the smallest useful checks after changes:
 ```bash
 source .venv/Scripts/activate
 python -m tester_framework --self_check
-python -m tester_framework --strategy ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --exit_structure 1RR --risk 1 --capital 10000 --with_costs
+python -m tester_framework --strategy ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
 ```

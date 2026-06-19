@@ -4,7 +4,7 @@ import argparse
 
 import pandas as pd
 
-from .backtest import add_trade_counts, result_columns, risk_for, run_backtest, self_check
+from .backtest import add_trade_counts, result_columns, risk_for, risk_reward_ratios, run_backtest, self_check
 from .data import load_data
 from .reports import reset_output_dirs, write_results_html, write_trade_html
 from .settings import DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
@@ -15,48 +15,74 @@ from .utils import csv_items
 __all__ = ["main", "parser", "run"]
 
 
+def trailing_stop_variants(mode: str, risk_reward_ratio: float) -> list[bool]:
+    if mode == "off":
+        return [False]
+    if mode == "on":
+        return [True]
+    if risk_reward_ratio <= 1:
+        return [False]
+    return [False, True]
+
+
+def cli_self_check() -> None:
+    if trailing_stop_variants("off", 2) != [False] or trailing_stop_variants("on", 2) != [True]:
+        raise RuntimeError("trailing stop mode parsing failed")
+    if trailing_stop_variants("both", 1) != [False] or trailing_stop_variants("both", 2) != [False, True]:
+        raise RuntimeError("trailing stop combined variants failed")
+
+
 def run(args: argparse.Namespace) -> None:
     asset_configs = load_assets()
     strategy = load_strategy(args.strategy)
     execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
     assets = [x.upper() for x in (csv_items(args.asset) or asset_configs.keys())]
     timeframes = csv_items(args.timeframe) or DEFAULT_TIMEFRAMES
-    exits = csv_items(args.exit_structure) or ["1RR"]
+    ratios = risk_reward_ratios(args.risk_reward_ratio)
+    rows = []
     reset_output_dirs()
 
-    for exit_structure in exits:
-        rows = []
-        for asset in assets:
-            if asset not in asset_configs:
-                raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
-            asset_cfg = asset_configs[asset]
-            for timeframe in timeframes:
-                if timeframe not in TIMEFRAMES:
-                    raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-                data_timeframe = execution_timeframe or timeframe
-                if data_timeframe not in TIMEFRAMES:
-                    raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-                data = load_data(asset, asset_cfg.ticker, data_timeframe, args.time_period, args.data_source)
-                signals = strategy.generate_signals(data.copy(), asset=asset, timeframe=timeframe, params={})
-                metrics, trades = run_backtest(
-                    data,
-                    signals,
-                    asset=asset,
-                    timeframe=timeframe,
-                    exit_structure=exit_structure,
-                    operation=args.operation,
-                    risk_pct=risk_for(asset, args.risk),
-                    capital=args.capital,
-                    with_costs=args.with_costs,
-                    asset_cfg=asset_cfg,
-                )
-                rows.append(add_trade_counts(metrics, trades, args.operation))
-                for trade in trades:
-                    write_trade_html(data, trade, strategy)
+    for asset in assets:
+        if asset not in asset_configs:
+            raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
+        asset_cfg = asset_configs[asset]
+        for timeframe in timeframes:
+            if timeframe not in TIMEFRAMES:
+                raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
+            data_timeframe = execution_timeframe or timeframe
+            if data_timeframe not in TIMEFRAMES:
+                raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
+            data = load_data(asset, asset_cfg.ticker, data_timeframe, args.time_period, args.data_source)
+            signals = strategy.generate_signals(data.copy(), asset=asset, timeframe=timeframe, params={})
+            for risk_reward_ratio in ratios:
+                for trailing_stop in trailing_stop_variants(args.trailing_stop, risk_reward_ratio):
+                    metrics, trades = run_backtest(
+                        data,
+                        signals,
+                        asset=asset,
+                        timeframe=timeframe,
+                        risk_reward_ratio=risk_reward_ratio,
+                        trailing_stop=trailing_stop,
+                        operation=args.operation,
+                        risk_pct=risk_for(asset, args.risk),
+                        capital=args.capital,
+                        with_costs=args.with_costs,
+                        asset_cfg=asset_cfg,
+                    )
+                    row = add_trade_counts(metrics, trades, args.operation)
+                    row["RR"] = f"{risk_reward_ratio:g}"
+                    row["Trailing"] = "yes" if trailing_stop else "no"
+                    rows.append(row)
+                    for trade in trades:
+                        write_trade_html(data, trade, strategy)
 
-        table = pd.DataFrame(rows, columns=result_columns(args.operation))
-        print(table.to_string(index=False))
-        print(f"results: {write_results_html(table, args, exit_structure)}")
+    table = pd.DataFrame(rows, columns=result_columns(args.operation))
+    if not table.empty:
+        order = {asset: i for i, asset in enumerate(assets)}
+        table["_asset_order"] = table["Asset"].map(order)
+        table = table.sort_values(["_asset_order", "Return"], ascending=[True, False]).drop(columns="_asset_order")
+    print(table.to_string(index=False))
+    print(f"results: {write_results_html(table, args)}")
 
 
 def parser() -> argparse.ArgumentParser:
@@ -67,7 +93,8 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--time_period", default="60d")
     p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
     p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
-    p.add_argument("--exit_structure", default="1RR", help="comma list, e.g. 1RR,2RR,trailing_stop")
+    p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
+    p.add_argument("--trailing-stop", nargs="?", const="on", default="off", choices=["off", "on", "both"])
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
@@ -80,6 +107,7 @@ def main() -> None:
     try:
         if args.self_check:
             self_check()
+            cli_self_check()
             return
         if not args.strategy:
             raise ValueError("--strategy is required")

@@ -67,7 +67,9 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     fig.update_layout(title=f"{trade['asset']} {trade['timeframe']} {trade['side']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
-    base = f"{trade['asset']}_{trade['timeframe']}_{clean_exit_name(trade['exit_structure'])}_{stamp}_{trade['side']}"
+    rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
+    trail = "trail" if trade["trailing_stop"] else "fixed"
+    base = f"{trade['asset']}_{trade['timeframe']}_{rr}_{trail}_{stamp}_{trade['side']}"
     path = TRADES_DIR / f"{base}.html"
     n = 2
     while path.exists():
@@ -95,12 +97,16 @@ def metric_class(column: str, value) -> str:
     return "plain"
 
 
-def write_results_html(table: pd.DataFrame, args, exit_structure: str) -> Path:
+def write_results_html(table: pd.DataFrame, args) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     rows = []
-    for i, row in table.iterrows():
+    asset_colors = {}
+    for _, row in table.iterrows():
         cells = []
-        color = ASSET_COLORS[i % len(ASSET_COLORS)]
+        asset = str(row["Asset"])
+        if asset not in asset_colors:
+            asset_colors[asset] = ASSET_COLORS[len(asset_colors) % len(ASSET_COLORS)]
+        color = asset_colors[asset]
         for col in table.columns:
             if col == "Asset":
                 cells.append(f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(row[col]))}</span></div></td>')
@@ -119,6 +125,8 @@ def write_results_html(table: pd.DataFrame, args, exit_structure: str) -> Path:
     tags = [
         f"{args.time_period} period",
         f"{args.operation.replace('_', ' ')} operations",
+        f"RR {args.risk_reward_ratio}",
+        f"trailing {args.trailing_stop}",
         f"{args.risk}% risk",
         f"${args.capital:,.0f} capital",
         f"costs {'on' if args.with_costs else 'off'}",
@@ -128,7 +136,7 @@ def write_results_html(table: pd.DataFrame, args, exit_structure: str) -> Path:
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{html_escape(args.strategy)} {html_escape(exit_structure)} results</title>
+<title>{html_escape(args.strategy)} results</title>
 <style>
 *, *::before, *::after {{ box-sizing: border-box; margin: 0; padding: 0; }}
 :root {{
@@ -177,8 +185,8 @@ tr:last-child td {{ border-bottom: none; }}
 <body>
 <main>
 <div class="hdr">
-<p class="hdr-title"><em>{html_escape(args.strategy)}</em><span class="hdr-sep">/</span>{html_escape(exit_structure)}</p>
-<p class="hdr-sub">Individual asset results - final configuration</p>
+<p class="hdr-title"><em>{html_escape(args.strategy)}</em><span class="hdr-sep">/</span>results</p>
+<p class="hdr-sub">Grouped by asset - all variants</p>
 <div class="tags">
 {''.join(f'<span class="tag">{html_escape(tag)}</span>' for tag in tags)}
 </div>
@@ -200,6 +208,6 @@ tr:last-child td {{ border-bottom: none; }}
 </html>
 """
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = RESULTS_DIR / f"{args.strategy}_{clean_exit_name(exit_structure)}_{stamp}.html"
+    path = RESULTS_DIR / f"{args.strategy}_results_{stamp}.html"
     path.write_text(html, encoding="utf-8")
     return path
