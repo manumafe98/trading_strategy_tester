@@ -23,3 +23,5 @@ class VariantTask(TypedDict):
     with_costs: bool
     time_period: str
     data_source: str
+    max_trades: int | None
+    trade_html: bool

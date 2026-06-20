@@ -7,6 +7,7 @@ Use ponytail for this project: keep changes small, boring, and runnable.
 - `tester_framework/` is the tracked Python runner.
 - `config/` contains JSON runtime config such as asset aliases, point values, and cost assumptions.
 - `strategy/` contains strategy modules loaded by the runner.
+- `strategy/utils/` contains shared logic (ORB session helpers, FVG detection) used by ORB strategies.
 - `trades/` contains per-trade HTML charts.
 - `results/` contains visual HTML result reports.
 - `.venv` is the project virtual environment; do not install dependencies globally.
@@ -49,6 +50,16 @@ def calculate_metrics(data, signals, trades, asset, timeframe, params):
 
 Strategies own indicators and stops. The framework owns data loading, fills, exits, risk sizing, costs, result HTML, and trade HTML.
 
+## Code Quality
+
+- Keep changes focused and Python 3.11-compatible; prefer the standard library and existing dependencies.
+- Do not leave dead code, speculative abstractions, input mutation, or unrelated formatting churn.
+- Validate external inputs at the CLI boundary and again in callable core functions that rely on them.
+- Keep trading logic deterministic and free of lookahead: use confirmed/current-or-past bars and configured tick alignment.
+- Document intentional differences from reference strategies and protect them with small synthetic regression tests.
+- Keep unit tests offline and strategy samples small. Run targeted tests first and the full suite for cross-cutting changes.
+- Keep text files LF-only and run `git diff --check` before finishing.
+
 ## Checks
 
 Run the smallest useful checks after changes:
@@ -56,5 +67,5 @@ Run the smallest useful checks after changes:
 ```bash
 source .venv/Scripts/activate
 python -m pytest -q
-python -m tester_framework --strategy ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
+python -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
 ```

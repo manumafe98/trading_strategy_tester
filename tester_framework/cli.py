@@ -5,7 +5,7 @@ from dataclasses import dataclass
 
 @dataclass(frozen=True)
 class RunConfig:
-    strategy: str
+    strategies: tuple[str, ...]
     asset: str | None
     timeframe: str | None
     time_period: str
@@ -17,3 +17,5 @@ class RunConfig:
     capital: float
     with_costs: bool
     workers: int | None
+    max_trades: int | None = None
+    trade_html: bool = True

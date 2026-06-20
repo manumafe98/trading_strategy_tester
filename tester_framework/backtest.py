@@ -76,8 +76,12 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
     signals["stop"] = pd.to_numeric(signals["stop"], errors="coerce")
     if "entry" in signals.columns:
         signals["entry"] = pd.to_numeric(signals["entry"], errors="coerce")
-    if "plot_start_time" in signals.columns:
-        signals["plot_start_time"] = pd.to_datetime(signals["plot_start_time"])
+    for col in ("fvg_top", "fvg_bottom", "fvg_ext"):
+        if col in signals.columns:
+            signals[col] = pd.to_numeric(signals[col], errors="coerce")
+    for col in ("plot_start_time", "fvg_form_time", "fvg_ext_time"):
+        if col in signals.columns:
+            signals[col] = pd.to_datetime(signals[col])
     signals = signals.dropna(subset=["time", "side", "stop"]).copy()
     signals["side"] = signals["side"].map(Side)
     return signals.sort_values("time")
@@ -196,6 +200,7 @@ def _prepare_trade(
     exit_mode: str,
     asset: str,
     timeframe: str,
+    strategy: str,
     entry_i: int,
     close_entry: bool,
     with_costs: bool,
@@ -228,6 +233,7 @@ def _prepare_trade(
         for target_r, target_qty in target_specs
     ]
     trade = {
+        "strategy": strategy,
         "asset": asset,
         "timeframe": timeframe,
         "risk_reward_ratio": risk_reward_ratio,
@@ -248,7 +254,7 @@ def _prepare_trade(
         "qty": qty,
         "mfe_r": 0.0,
     }
-    for column in ("plot_start_time", "orb_high", "orb_low"):
+    for column in ("plot_start_time", "orb_high", "orb_low", "fvg_top", "fvg_bottom", "fvg_ext", "fvg_form_time", "fvg_ext_time"):
         if column in signal and pd.notna(signal[column]):
             trade[column] = signal[column]
     return trade
@@ -292,6 +298,7 @@ def run_backtest(
     *,
     asset: str,
     timeframe: str,
+    strategy: str,
     risk_reward_ratio: float,
     exit_mode: str,
     operation: str,
@@ -300,6 +307,7 @@ def run_backtest(
     with_costs: bool,
     asset_cfg: AssetConfig,
     execution_timeframe: str | None = None,
+    max_trades: int | None = None,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -311,6 +319,8 @@ def run_backtest(
         raise ValueError("--risk must be finite and positive")
     if not math.isfinite(capital) or capital <= 0:
         raise ValueError("--capital must be finite and positive")
+    if max_trades is not None and max_trades < 1:
+        raise ValueError("--max_trades must be a positive integer")
     if data.empty:
         raise ValueError(f"No data for {asset} {timeframe}")
     missing_data = {"open", "high", "low", "close"} - set(data.columns)
@@ -366,7 +376,7 @@ def run_backtest(
 
         trade = _prepare_trade(
             signal, data, asset_cfg, current_net, risk_pct, risk_reward_ratio, exit_mode,
-            asset, timeframe, entry_i, close_entry, with_costs,
+            asset, timeframe, strategy, entry_i, close_entry, with_costs,
         )
         if trade is None:
             discarded_signals += 1
@@ -490,6 +500,8 @@ def run_backtest(
         last_bar_idx = trade["exit_i"] + 1
         busy_until = trade["exit_i"]
         trades.append(trade)
+        if max_trades is not None and len(trades) >= max_trades:
+            break
 
     # Fill any remaining flat equity after the last completed trade.
     if last_bar_idx < bar_count:
@@ -499,7 +511,7 @@ def run_backtest(
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
     gross_curve = np.concatenate(([capital], bar_gross_equity))
     net_curve = np.concatenate(([capital], bar_net_equity))
-    return make_metrics(asset, timeframe, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
+    return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
 
 
 def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
@@ -524,6 +536,7 @@ def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
 def make_metrics(
     asset: str,
     timeframe: str,
+    strategy: str,
     gross_equity_curve: np.ndarray,
     net_equity_curve: np.ndarray,
     with_costs: bool,
@@ -534,6 +547,7 @@ def make_metrics(
     gross = _curve_metrics(gross_equity_curve, bars_per_year)
     net = _curve_metrics(net_equity_curve, bars_per_year)
     return {
+        "Strategy": strategy,
         "Asset": asset,
         "TF": timeframe,
         "Discarded": discarded_signals,
@@ -568,7 +582,7 @@ def add_trade_counts(metrics: dict, trades: list[dict], operation: str, with_cos
 
 
 def result_columns(operation: str) -> list[str]:
-    columns = ["Asset", "TF", "RR", "Exit Mode", "Trades", "Discarded", "Unresolved"]
+    columns = ["Strategy", "Asset", "TF", "RR", "Exit Mode", "Trades", "Discarded", "Unresolved"]
     if operation == "all":
         columns += ["Long", "Short"]
     return columns + ["W", "BE", "L", "Win Rate", "Expectancy R", "Avg Duration", "Return", "Max DD", "Sharpe Ratio", "Return / DD"]

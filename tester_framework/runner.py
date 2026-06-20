@@ -40,6 +40,7 @@ def run_variant(task: VariantTask) -> dict[str, object]:
             task["signals"],
             asset=task["asset"],
             timeframe=task["timeframe"],
+            strategy=task["strategy"],
             risk_reward_ratio=task["risk_reward_ratio"],
             exit_mode=task["exit_mode"],
             operation=task["operation"],
@@ -48,6 +49,7 @@ def run_variant(task: VariantTask) -> dict[str, object]:
             with_costs=task["with_costs"],
             asset_cfg=task["asset_cfg"],
             execution_timeframe=task["execution_timeframe"],
+            max_trades=task["max_trades"],
         )
         params = {
             "risk_reward_ratio": task["risk_reward_ratio"],
@@ -62,7 +64,10 @@ def run_variant(task: VariantTask) -> dict[str, object]:
         }
         custom_metrics = strategy_metrics(strategy, data, task["signals"], trades, task["asset"], task["timeframe"], params)
         for chart_number, trade in enumerate(trades, 1):
-            trade["chart_path"] = write_trade_html(data, trade, strategy)
+            if task["trade_html"]:
+                trade["chart_path"] = write_trade_html(data, trade, strategy)
+            else:
+                trade["chart_path"] = None
             if chart_number % 100 == 0:
                 # ponytail: Plotly retains cyclic objects long enough to exhaust parallel Windows workers.
                 gc.collect()

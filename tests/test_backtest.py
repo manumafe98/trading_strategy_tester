@@ -51,6 +51,7 @@ def test_long_target_trade(base_data, hourly_index, test_asset_cfg):
     metrics, trades = run_backtest(
         base_data,
         signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -72,6 +73,7 @@ def test_stop_trade(base_data, hourly_index, test_asset_cfg):
     metrics, trades = run_backtest(
         stop_data,
         signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -93,6 +95,7 @@ def test_same_bar_stop_priority(base_data, hourly_index, test_asset_cfg):
     _, trades = run_backtest(
         both_data,
         signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -113,6 +116,7 @@ def test_close_entry_signal(base_data, hourly_index, test_asset_cfg):
     _, trades = run_backtest(
         close_entry_data,
         close_entry,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -136,6 +140,7 @@ def test_trailing_stop(base_data, hourly_index, test_asset_cfg):
     _, trades = run_backtest(
         trail_data,
         signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=2,
@@ -157,6 +162,7 @@ def test_trailing_target_completion(base_data, hourly_index, test_asset_cfg):
     _, trades = run_backtest(
         base_data,
         pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}]),
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -192,6 +198,7 @@ def test_partial_exit_realized_r(test_asset_cfg):
     _, partial_trades = run_backtest(
         partial_data,
         partial_signal,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=3,
@@ -226,6 +233,7 @@ def test_partial_stop_aggregation(test_asset_cfg):
     _, partial_stop_trades = run_backtest(
         partial_stop_data,
         partial_signal,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=3,
@@ -263,6 +271,7 @@ def test_cost_accounting_preserves_raw_execution(base_data, hourly_index, cost_a
     gross_metrics, gross_trades = run_backtest(
         cost_data,
         cost_signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -276,6 +285,7 @@ def test_cost_accounting_preserves_raw_execution(base_data, hourly_index, cost_a
     net_metrics, net_trades = run_backtest(
         cost_data,
         cost_signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -312,6 +322,7 @@ def test_partial_cost_accounting(test_asset_cfg, cost_asset_cfg):
     _, gross_partial_trades = run_backtest(
         partial_data,
         partial_signal,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=3,
@@ -325,6 +336,7 @@ def test_partial_cost_accounting(test_asset_cfg, cost_asset_cfg):
     _, net_partial_trades = run_backtest(
         partial_data,
         partial_signal,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=3,
@@ -343,6 +355,7 @@ def test_empty_signals(base_data, test_asset_cfg):
     metrics, trades = run_backtest(
         base_data,
         pd.DataFrame(),
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -367,6 +380,7 @@ def test_unresolved_trade_discarded(base_data, hourly_index, test_asset_cfg):
     metrics, trades = run_backtest(
         unresolved,
         signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -397,6 +411,7 @@ def test_gap_stop_fills_at_open(test_asset_cfg):
     _, trades = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99.0}]),
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=3,
@@ -419,7 +434,7 @@ def test_high_first_path_reaches_target_before_stop(test_asset_cfg):
     _, trades = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
     )
     assert trades[0]["exit_reason"] == ExitReason.TARGET
@@ -434,7 +449,7 @@ def test_short_high_first_path_reaches_stop_before_target(test_asset_cfg):
     _, trades = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0], "side": "short", "stop": 101}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
     )
     assert trades[0]["exit_reason"] == ExitReason.STOP
@@ -455,7 +470,7 @@ def test_partial_peak_and_giveback_are_position_weighted(test_asset_cfg):
     _, trades = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
         risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
     )
     trade = trades[0]
@@ -473,7 +488,7 @@ def test_unresolved_partial_trade_discards_completed_fills(test_asset_cfg):
     metrics, trades = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
         risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
     )
     assert trades == []
@@ -490,7 +505,7 @@ def test_cost_outcomes_are_paired(cost_asset_cfg):
     metrics, trades = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99.9}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=True, asset_cfg=cost_asset_cfg,
     )
     row = add_trade_counts(metrics, trades, "all", with_costs=True)
@@ -507,7 +522,7 @@ def test_first_bar_return_includes_starting_capital(test_asset_cfg):
     metrics, _ = run_backtest(
         data,
         pd.DataFrame([{"time": idx[0] - pd.Timedelta(hours=1), "side": "long", "stop": 99}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
     )
     assert metrics["Return"] == 1
@@ -526,7 +541,7 @@ def test_sharpe_uses_execution_timeframe(test_asset_cfg):
     )
     kwargs = dict(
         data=data, signals=pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
     )
     hourly, _ = run_backtest(**kwargs, execution_timeframe="1h")
@@ -535,6 +550,7 @@ def test_sharpe_uses_execution_timeframe(test_asset_cfg):
 
 
 def test_result_columns_include_long_for_all():
+    assert "Strategy" in result_columns("all")
     assert "Long" in result_columns("all")
     assert "Long" not in result_columns("long_only")
     assert "Discarded" in result_columns("all")
@@ -546,6 +562,7 @@ def test_add_trade_counts_splits_sides(base_data, hourly_index, test_asset_cfg):
     metrics, trades = run_backtest(
         base_data,
         signals,
+        strategy="test",
         asset="TEST",
         timeframe="1h",
         risk_reward_ratio=1,
@@ -559,3 +576,96 @@ def test_add_trade_counts_splits_sides(base_data, hourly_index, test_asset_cfg):
     row = add_trade_counts(metrics, trades, "all")
     assert row["Long"] == 1
     assert row["Short"] == 0
+
+
+def test_max_trades_caps_closed_trades(test_asset_cfg):
+    idx = pd.date_range("2025-01-01", periods=6, freq="h")
+    data = pd.DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "high": [100.0, 102.0, 100.0, 102.0, 100.0, 102.0],
+            "low": [100.0, 99.5, 100.0, 99.5, 100.0, 99.5],
+            "close": [100.0, 101.0, 100.0, 101.0, 100.0, 101.0],
+            "volume": [0, 0, 0, 0, 0, 0],
+        },
+        index=idx,
+    )
+    signals = pd.DataFrame(
+        [
+            {"time": idx[0], "side": "long", "stop": 99},
+            {"time": idx[2], "side": "long", "stop": 99},
+            {"time": idx[4], "side": "long", "stop": 99},
+        ]
+    )
+    _, trades = run_backtest(
+        data,
+        signals,
+        strategy="test",
+        asset="TEST",
+        timeframe="1h",
+        risk_reward_ratio=1,
+        exit_mode="fixed",
+        operation="all",
+        risk_pct=1,
+        capital=10000,
+        with_costs=False,
+        asset_cfg=test_asset_cfg,
+        max_trades=2,
+    )
+    assert len(trades) == 2
+
+
+def test_max_trades_none_runs_all(test_asset_cfg):
+    idx = pd.date_range("2025-01-01", periods=6, freq="h")
+    data = pd.DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0, 100.0, 100.0, 100.0],
+            "high": [100.0, 102.0, 100.0, 102.0, 100.0, 102.0],
+            "low": [100.0, 99.5, 100.0, 99.5, 100.0, 99.5],
+            "close": [100.0, 101.0, 100.0, 101.0, 100.0, 101.0],
+            "volume": [0, 0, 0, 0, 0, 0],
+        },
+        index=idx,
+    )
+    signals = pd.DataFrame(
+        [
+            {"time": idx[0], "side": "long", "stop": 99},
+            {"time": idx[2], "side": "long", "stop": 99},
+            {"time": idx[4], "side": "long", "stop": 99},
+        ]
+    )
+    _, trades = run_backtest(
+        data,
+        signals,
+        strategy="test",
+        asset="TEST",
+        timeframe="1h",
+        risk_reward_ratio=1,
+        exit_mode="fixed",
+        operation="all",
+        risk_pct=1,
+        capital=10000,
+        with_costs=False,
+        asset_cfg=test_asset_cfg,
+    )
+    assert len(trades) == 3
+
+
+@pytest.mark.parametrize("max_trades", [0, -1])
+def test_max_trades_rejects_nonpositive_values(base_data, test_asset_cfg, max_trades):
+    with pytest.raises(ValueError, match="--max_trades"):
+        run_backtest(
+            base_data,
+            pd.DataFrame(),
+            strategy="test",
+            asset="TEST",
+            timeframe="1h",
+            risk_reward_ratio=1,
+            exit_mode="fixed",
+            operation="all",
+            risk_pct=1,
+            capital=10000,
+            with_costs=False,
+            asset_cfg=test_asset_cfg,
+            max_trades=max_trades,
+        )

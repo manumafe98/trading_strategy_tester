@@ -81,11 +81,11 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     for target in trade["targets"]:
         fig.add_hline(y=target["price"], line_dash="dot", line_color="green", annotation_text=f'{target["r"]:g}R target')
-    fig.update_layout(title=f"{trade['asset']} {trade['timeframe']} {trade['side']} {trade['exit_mode']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
+    fig.update_layout(title=f"{trade['strategy']} {trade['asset']} {trade['timeframe']} {trade['side']} {trade['exit_mode']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
-    base = f"{trade['asset']}_{trade['timeframe']}_{rr}_{trade['exit_mode']}_{stamp}_{trade['side']}"
+    base = f"{trade['strategy']}_{trade['asset']}_{trade['timeframe']}_{rr}_{trade['exit_mode']}_{stamp}_{trade['side']}"
     path = TRADES_DIR / f"{base}.html"
     n = 2
     while path.exists():
@@ -234,7 +234,7 @@ def _variant_details(row: pd.Series) -> str:
     custom_metrics = row.get("_strategy_metrics", {})
     if custom_metrics:
         sections.append(f'<section><h3>Strategy metrics</h3>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
-    title = f'{row["Asset"]} {row["TF"]} | {row["RR"]}R | {row["Exit Mode"]}'
+    title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     return f'<details class="variant"><summary><strong>{html_escape(title)}</strong><span>{html_escape(result)}</span></summary><div class="variant-body">{"".join(sections)}</div></details>'
 
@@ -246,6 +246,8 @@ def _render_header(column: str, with_costs: bool) -> str:
 
 
 def _render_cell(col: str, value, color: str) -> str:
+    if col == "Strategy":
+        return f'<td class="c"><span class="strategy-badge">{html_escape(str(value))}</span></td>'
     if col == "Asset":
         return f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(value))}</span></div></td>'
     if col == "TF":
@@ -262,7 +264,7 @@ def _render_cell(col: str, value, color: str) -> str:
 def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str] | None = None) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
-    columns = [column for column in ("Asset", "TF", "RR", "Exit Mode", *FINANCIAL_COLUMNS) if column in columns]
+    columns = [column for column in ("Strategy", "Asset", "TF", "RR", "Exit Mode", *FINANCIAL_COLUMNS) if column in columns]
     rows = []
     asset_colors = {}
     for _, row in table.iterrows():
@@ -287,10 +289,15 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
             f"costs {'on' if config.with_costs else 'off'}",
         )
     ]
+    if config.max_trades is not None:
+        tags.append(f'<span class="tag">first {config.max_trades} closed trades per variant</span>')
+    if not config.trade_html:
+        tags.append('<span class="tag">trade charts off</span>')
+    strategy_label = ", ".join(config.strategies)
     template = Template(RESULTS_TEMPLATE.read_text(encoding="utf-8"))
     html = template.substitute(
-        title=f"{html_escape(config.strategy)} results",
-        strategy=html_escape(config.strategy),
+        title=f"{html_escape(strategy_label)} results",
+        strategy=html_escape(strategy_label),
         tags="\n".join(tags),
         columns="".join(_render_header(col, config.with_costs) for col in columns),
         rows="\n".join(rows),
@@ -298,6 +305,7 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
         generated=generated,
     )
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    path = RESULTS_DIR / f"{config.strategy}_results_{stamp}.html"
+    safe_name = "_".join(config.strategies)
+    path = RESULTS_DIR / f"{safe_name}_results_{stamp}.html"
     path.write_text(html, encoding="utf-8")
     return path

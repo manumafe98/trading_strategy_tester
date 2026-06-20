@@ -31,7 +31,7 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantTask) -> str:
-    return f'{task["asset"]} {task["timeframe"]} {task["risk_reward_ratio"]:g}R {task["exit_mode"]}'
+    return f'{task["strategy"]} {task["asset"]} {task["timeframe"]} {task["risk_reward_ratio"]:g}R {task["exit_mode"]}'
 
 
 def status_lines(
@@ -166,7 +166,7 @@ def exit_mode_variants(value: str | None, risk_reward_ratio: float) -> list[str]
         expanded = EXIT_MODES if mode == "all" else (mode,)
         for item in expanded:
             if item not in EXIT_MODES:
-                raise ValueError(f"--exit-mode must use fixed, trailing, partial, or all; got: {item}")
+                raise ValueError(f"--exit_mode must use fixed, trailing, partial, or all; got: {item}")
             if item not in modes:
                 modes.append(item)
     if risk_reward_ratio < 2:
@@ -186,8 +186,9 @@ def worker_count(requested: int | None, task_count: int) -> int:
 def run(config: RunConfig) -> None:
     started = perf_counter()
     asset_configs = load_assets()
-    strategy = load_strategy(config.strategy)
-    execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
+    if not config.strategies:
+        raise ValueError("--strategies is required")
+    strategies = {name: load_strategy(name) for name in config.strategies}
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
     timeframes = list(dict.fromkeys(csv_items(config.timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
@@ -196,25 +197,31 @@ def run(config: RunConfig) -> None:
         raise ValueError("No exit modes are compatible with the requested risk/reward ratios")
     if not math.isfinite(config.capital) or config.capital <= 0:
         raise ValueError("--capital must be finite and positive")
+    if config.max_trades is not None and config.max_trades < 1:
+        raise ValueError("--max_trades must be a positive integer")
     for asset in assets:
         if asset not in asset_configs:
             raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
     for timeframe in timeframes:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-        data_timeframe = execution_timeframe or timeframe
-        if data_timeframe not in TIMEFRAMES:
-            raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-        for asset in assets:
-            if data_timeframe not in asset_configs[asset].bars_per_year:
-                raise ValueError(f"Missing bars_per_year for {asset} {data_timeframe}")
-    task_count = len(assets) * len(timeframes) * sum(len(variants[ratio]) for ratio in ratios)
+    for strategy in strategies.values():
+        execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
+        for timeframe in timeframes:
+            data_timeframe = execution_timeframe or timeframe
+            if data_timeframe not in TIMEFRAMES:
+                raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
+            for asset in assets:
+                if data_timeframe not in asset_configs[asset].bars_per_year:
+                    raise ValueError(f"Missing bars_per_year for {asset} {data_timeframe}")
+    task_count = len(strategies) * len(assets) * len(timeframes) * sum(len(variants[ratio]) for ratio in ratios)
     workers = worker_count(config.workers, task_count)
     risks = {asset: risk_for(asset, config.risk) for asset in assets}
     rows = []
     reset_output_dirs()
     status = StatusDisplay(workers, started)
-    status.update(phase="Preparing", detail=f"{config.strategy} | {task_count} variants", completed=0, total=task_count)
+    strategy_label = ", ".join(strategies)
+    status.update(phase="Preparing", detail=f"{strategy_label} | {task_count} variants", completed=0, total=task_count)
     status.start()
 
     try:
@@ -224,16 +231,20 @@ def run(config: RunConfig) -> None:
             for asset in assets:
                 asset_cfg = asset_configs[asset]
                 risk_pct = risks[asset]
-                timeframe_groups: dict[str, list[str]] = {}
-                for timeframe in timeframes:
-                    timeframe_groups.setdefault(execution_timeframe or timeframe, []).append(timeframe)
-                for data_timeframe, signal_timeframes in timeframe_groups.items():
+                timeframe_groups = {}
+                for strategy_name, strategy in strategies.items():
+                    execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
+                    for timeframe in timeframes:
+                        timeframe_groups.setdefault(execution_timeframe or timeframe, []).append(
+                            (strategy_name, strategy, timeframe)
+                        )
+                for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
                     data = load_data(asset, asset_cfg, data_timeframe, config.time_period, config.data_source)
                     data_cache = cache_data(data, cache_dir, cache_id)
                     cache_id += 1
-                    for timeframe in signal_timeframes:
-                        status.update(phase="Generating signals", detail=f"{asset} {timeframe}", total=task_count)
+                    for strategy_name, strategy, timeframe in strategy_timeframes:
+                        status.update(phase="Generating signals", detail=f"{strategy_name} {asset} {timeframe}", total=task_count)
                         signals = strategy.generate_signals(
                             data, asset=asset, timeframe=timeframe, params={"tick_size": asset_cfg.tick_size}
                         )
@@ -241,7 +252,7 @@ def run(config: RunConfig) -> None:
                             for exit_mode in variants[risk_reward_ratio]:
                                 tasks.append(
                                     VariantTask(
-                                        strategy=config.strategy,
+                                        strategy=strategy_name,
                                         data_cache=data_cache,
                                         signals=signals,
                                         asset=asset,
@@ -256,6 +267,8 @@ def run(config: RunConfig) -> None:
                                         with_costs=config.with_costs,
                                         time_period=config.time_period,
                                         data_source=config.data_source,
+                                        max_trades=config.max_trades,
+                                        trade_html=config.trade_html,
                                     )
                                 )
                     del data
@@ -304,9 +317,11 @@ def run(config: RunConfig) -> None:
         columns = result_columns(config.operation)
         table = pd.DataFrame(rows)
         if not table.empty:
+            strategy_order = {name: i for i, name in enumerate(strategies)}
             order = {asset: i for i, asset in enumerate(assets)}
+            table["_strategy_order"] = table["Strategy"].map(strategy_order)
             table["_asset_order"] = table["Asset"].map(order)
-            table = table.sort_values(["_asset_order", "_sort_return"], ascending=[True, False]).drop(columns="_asset_order")
+            table = table.sort_values(["_strategy_order", "_asset_order", "_sort_return"], ascending=[True, True, False]).drop(columns=["_strategy_order", "_asset_order"])
         console = table.reindex(columns=columns).copy()
         for column in console.columns:
             console[column] = console[column].map(lambda value, column=column: format_metric(column, value))
@@ -322,28 +337,31 @@ def run(config: RunConfig) -> None:
 
 def parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser()
-    p.add_argument("--strategy", help="strategy/<name>.py to run")
+    p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
     p.add_argument("--time_period", default="60d")
     p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
     p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
     p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
-    p.add_argument("--exit-mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
+    p.add_argument("--exit_mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
     p.add_argument("--workers", type=int, help="parallel variant workers, capped at logical CPU count")
+    p.add_argument("--max_trades", type=int, default=None, help="diagnostic cap on first N closed trades per variant")
+    p.add_argument("--no_trade_html", action="store_true", help="disable per-trade HTML charts")
     return p
 
 
 def main() -> None:
     args = parser().parse_args()
     try:
-        if not args.strategy:
-            raise ValueError("--strategy is required")
+        strategies = tuple(dict.fromkeys(csv_items(args.strategies)))
+        if not strategies:
+            raise ValueError("--strategies is required")
         config = RunConfig(
-            strategy=args.strategy,
+            strategies=strategies,
             asset=args.asset,
             timeframe=args.timeframe,
             time_period=args.time_period,
@@ -355,6 +373,8 @@ def main() -> None:
             capital=args.capital,
             with_costs=args.with_costs,
             workers=args.workers,
+            max_trades=args.max_trades,
+            trade_html=not args.no_trade_html,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
