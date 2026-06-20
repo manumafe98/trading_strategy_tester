@@ -49,6 +49,21 @@ def test_analyze_trades_periods_and_outcomes():
     assert analyze_trades([], "trailing")["outcomes"][0]["Trades"] == 0
 
 
+def test_analyze_trades_groups_entry_years_in_order():
+    trades = [
+        {"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01"), "holding_duration": pd.Timedelta(hours=1)},
+        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2024-12-31 23:30:00-02:00"), "holding_duration": pd.Timedelta(hours=1)},
+        {"side": Side.LONG, "realized_r": 0.0, "entry_time": pd.Timestamp("2024-01-01"), "holding_duration": pd.Timedelta(hours=1)},
+    ]
+
+    years = analyze_trades(trades, "fixed")["year"]
+
+    assert [row["Period"] for row in years] == ["2024", "2025"]
+    assert (years[0]["Trades"], years[0]["Wins"], years[0]["BE"], years[0]["Losses"], years[0]["Win Rate"]) == (1, 0, 1, 0, 0.0)
+    assert (years[1]["Trades"], years[1]["Wins"], years[1]["BE"], years[1]["Losses"], years[1]["Win Rate"]) == (2, 1, 0, 1, 50.0)
+    assert analyze_trades([], "fixed")["year"] == []
+
+
 def test_strategy_metrics_hook():
     hook = SimpleNamespace(
         calculate_metrics=lambda data, signals, trades, asset, timeframe, params: {"Signals": len(signals), "RR": params["risk_reward_ratio"]}

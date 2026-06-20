@@ -8,6 +8,7 @@ class RunConfig:
     strategies: tuple[str, ...]
     asset: str | None
     timeframe: str | None
+    sessions: str | None
     time_period: str
     data_source: str
     operation: str

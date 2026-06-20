@@ -9,6 +9,7 @@ import pandas as pd
 from .analytics import analyze_trades, strategy_metrics
 from .backtest import add_trade_counts, run_backtest
 from .reports import write_trade_html
+from .sessions import filter_signals, session_label
 from .settings import FINANCIAL_COLUMNS
 from .strategy_loader import load_strategy
 from .types import VariantTask
@@ -27,7 +28,12 @@ def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, 
 
 def run_variant(task: VariantTask) -> dict[str, object]:
     values = index_values = data = None
-    label = f'{task["asset"]} {task["timeframe"]} {task["risk_reward_ratio"]:g}R {task["exit_mode"]}'
+    session = session_label(task["session"])
+    label_parts = [task["asset"], task["timeframe"]]
+    if session:
+        label_parts.append(session)
+    label_parts.extend([f'{task["risk_reward_ratio"]:g}R', task["exit_mode"]])
+    label = " ".join(label_parts)
     try:
         values_path, index_path, columns = task["data_cache"]
         values = np.load(values_path, mmap_mode="r", allow_pickle=False)
@@ -35,9 +41,10 @@ def run_variant(task: VariantTask) -> dict[str, object]:
         index = pd.DatetimeIndex(index_values, copy=False, name="time")
         data = pd.DataFrame(values, index=index, columns=columns, copy=False)
         strategy = load_strategy(task["strategy"])
+        signals = filter_signals(task["signals"], task["session"])
         metrics, trades = run_backtest(
             data,
-            task["signals"],
+            signals,
             asset=task["asset"],
             timeframe=task["timeframe"],
             strategy=task["strategy"],
@@ -61,9 +68,12 @@ def run_variant(task: VariantTask) -> dict[str, object]:
             "time_period": task["time_period"],
             "data_source": task["data_source"],
             "tick_size": task["asset_cfg"].tick_size,
+            "session": task["session"],
         }
-        custom_metrics = strategy_metrics(strategy, data, task["signals"], trades, task["asset"], task["timeframe"], params)
+        custom_metrics = strategy_metrics(strategy, data, signals, trades, task["asset"], task["timeframe"], params)
         for chart_number, trade in enumerate(trades, 1):
+            if session:
+                trade["session"] = session
             if task["trade_html"]:
                 trade["chart_path"] = write_trade_html(data, trade, strategy)
             else:
@@ -78,6 +88,8 @@ def run_variant(task: VariantTask) -> dict[str, object]:
                 row[column] = (metrics["Gross"][column], metrics["Net"][column])
         row["RR"] = f'{task["risk_reward_ratio"]:g}'
         row["Exit Mode"] = task["exit_mode"]
+        if session:
+            row["Session"] = session
         row["_sort_return"] = metrics["Net" if task["with_costs"] else "Gross"]["Return"]
         row["_analytics"] = analytics
         row["_strategy_metrics"] = custom_metrics

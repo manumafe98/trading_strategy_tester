@@ -4,6 +4,10 @@ import pandas as pd
 import pytest
 
 from strategy.orb_candle import generate_signals
+from tester_framework.sessions import parse_sessions
+
+
+SESSION = parse_sessions("ny=09:30-12:00")[0]
 
 
 def make_day(close: float, high: float, low: float) -> pd.DataFrame:
@@ -26,7 +30,7 @@ def make_day(close: float, high: float, low: float) -> pd.DataFrame:
 )
 def test_orb_candle_breakout(close, high, low, side, stop):
     signals = generate_signals(
-        make_day(close, high, low), asset="MGC", timeframe="5m", params={"tick_size": 0.1}
+        make_day(close, high, low), asset="MGC", timeframe="5m", params={"tick_size": 0.1, "session": SESSION}
     )
     assert len(signals) == 1
     assert signals.iloc[0]["side"] == side
@@ -35,4 +39,15 @@ def test_orb_candle_breakout(close, high, low, side, stop):
 
 def test_orb_candle_rejects_daily_opening_range():
     with pytest.raises(ValueError, match="intraday"):
-        generate_signals(make_day(103, 103.5, 102.5), "MGC", "1d", {"tick_size": 0.1})
+        generate_signals(make_day(103, 103.5, 102.5), "MGC", "1d", {"tick_size": 0.1, "session": SESSION})
+
+
+def test_orb_candle_requires_session():
+    with pytest.raises(ValueError, match="require --sessions"):
+        generate_signals(make_day(103, 103.5, 102.5), "MGC", "5m", {"tick_size": 0.1})
+
+
+def test_orb_candle_rejects_session_without_breakout_time():
+    short_session = parse_sessions("ny=09:30-09:35")[0]
+    with pytest.raises(ValueError, match="leave time after"):
+        generate_signals(make_day(103, 103.5, 102.5), "MGC", "5m", {"tick_size": 0.1, "session": short_session})

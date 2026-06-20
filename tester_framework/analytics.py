@@ -65,17 +65,17 @@ def trade_stats(trades: list[dict], label: str = "All", value_key: str = "realiz
 
 
 def period_stats(trades: list[dict], period: str) -> list[dict]:
-    labels = WEEKDAYS if period == "weekday" else MONTHS if period == "month" else None
-    if labels is None:
+    labels = WEEKDAYS if period == "weekday" else MONTHS if period == "month" else ()
+    if period not in {"weekday", "month", "year"}:
         raise ValueError(f"Unknown calendar period: {period}")
     grouped: dict[str, list[dict]] = {}
     for trade in trades:
         timestamp = pd.Timestamp(trade["entry_time"])
         timestamp = timestamp.tz_localize("UTC") if timestamp.tzinfo is None else timestamp.tz_convert("UTC")
-        key = labels[timestamp.weekday()] if period == "weekday" else labels[timestamp.month - 1]
+        key = labels[timestamp.weekday()] if period == "weekday" else labels[timestamp.month - 1] if period == "month" else str(timestamp.year)
         grouped.setdefault(key, []).append(trade)
     rows = []
-    for key in labels:
+    for key in sorted(grouped) if period == "year" else labels:
         if key not in grouped:
             continue
         items = grouped[key]
@@ -95,6 +95,7 @@ def analyze_trades(trades: list[dict], exit_mode: str) -> dict:
         "outcomes": outcome_rows,
         "weekday": period_stats(trades, "weekday"),
         "month": period_stats(trades, "month"),
+        "year": period_stats(trades, "year"),
         "managed": {
             "Mode": exit_mode,
             "Target Completions": sum(trade["exit_reason"] == ExitReason.TARGET for trade in managed_trades),

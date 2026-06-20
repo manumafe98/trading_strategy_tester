@@ -56,6 +56,8 @@ def test_main_maps_new_cli_flags(monkeypatch):
             "tester_framework",
             "--strategies",
             "ema50,orb_candle",
+            "--sessions",
+            "ny=09:30-12:00",
             "--exit_mode",
             "trailing",
             "--max_trades",
@@ -67,6 +69,7 @@ def test_main_maps_new_cli_flags(monkeypatch):
     cli.main()
 
     assert configs[0].strategies == ("ema50", "orb_candle")
+    assert configs[0].sessions == "ny=09:30-12:00"
     assert configs[0].exit_mode == "trailing"
     assert configs[0].max_trades == 3
     assert not configs[0].trade_html
@@ -142,6 +145,7 @@ def test_run_reuses_data_for_strategies_with_same_execution_timeframe(
             strategies=("one", "two"),
             asset="TEST",
             timeframe="1h",
+            sessions=None,
             time_period="1d",
             data_source="local",
             operation="all",
@@ -157,3 +161,57 @@ def test_run_reuses_data_for_strategies_with_same_execution_timeframe(
     assert load_calls == [("TEST", "1h")]
     assert len(data_ids) == 2
     assert len(set(data_ids)) == 1
+
+
+def test_run_requires_strategy_owned_sessions(monkeypatch, test_asset_cfg):
+    strategy = SimpleNamespace(
+        generate_signals=lambda *_args, **_kwargs: pd.DataFrame(),
+        REQUIRED_FLAGS={"sessions": "ORB strategies require --sessions; none is not supported."},
+    )
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
+    monkeypatch.setattr(cli, "load_data", lambda *_args, **_kwargs: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="ORB strategies require --sessions; none is not supported."):
+        cli.run(
+            RunConfig(
+                strategies=("orb_candle",),
+                asset="TEST",
+                timeframe="1h",
+                sessions=None,
+                time_period="1d",
+                data_source="local",
+                operation="all",
+                risk_reward_ratio="1",
+                exit_mode="fixed",
+                risk="1",
+                capital=10_000,
+                with_costs=False,
+                workers=1,
+            )
+        )
+
+
+def test_run_rejects_unknown_required_flag(monkeypatch, test_asset_cfg):
+    strategy = SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame(), REQUIRED_FLAGS={"bogus": "x"})
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
+
+    with pytest.raises(ValueError, match="unknown required flag"):
+        cli.run(
+            RunConfig(
+                strategies=("test",),
+                asset="TEST",
+                timeframe="1h",
+                sessions=None,
+                time_period="1d",
+                data_source="local",
+                operation="all",
+                risk_reward_ratio="1",
+                exit_mode="fixed",
+                risk="1",
+                capital=10_000,
+                with_costs=False,
+                workers=1,
+            )
+        )

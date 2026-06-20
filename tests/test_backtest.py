@@ -551,6 +551,7 @@ def test_sharpe_uses_execution_timeframe(test_asset_cfg):
 
 def test_result_columns_include_long_for_all():
     assert "Strategy" in result_columns("all")
+    assert "Session" in result_columns("all", include_session=True)
     assert "Long" in result_columns("all")
     assert "Long" not in result_columns("long_only")
     assert "Discarded" in result_columns("all")

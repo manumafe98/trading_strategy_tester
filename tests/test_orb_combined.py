@@ -4,6 +4,10 @@ import pandas as pd
 import pytest
 
 from strategy.orb_combined import generate_signals
+from tester_framework.sessions import parse_sessions
+
+
+SESSION = parse_sessions("ny=09:30-12:00")[0]
 
 
 def make_combined_day(bull=True, with_ext=True):
@@ -51,7 +55,7 @@ def make_combined_day(bull=True, with_ext=True):
 
 
 def test_bull_combined_signal_with_ext():
-    signals = generate_signals(make_combined_day(bull=True, with_ext=True), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_combined_day(bull=True, with_ext=True), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
     assert row["side"] == "long"
@@ -64,7 +68,7 @@ def test_bull_combined_signal_with_ext():
 
 
 def test_bear_combined_signal_with_ext():
-    signals = generate_signals(make_combined_day(bull=False, with_ext=True), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_combined_day(bull=False, with_ext=True), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
     assert row["side"] == "short"
@@ -78,7 +82,7 @@ def test_combined_accepts_bull_extension_above_gap():
     df.iloc[3] = [103.0, 103.5, 102.5, 103.0, 0]
     df.iloc[8, df.columns.get_loc("high")] = 105.0
     df.iloc[10] = [105.0, 105.5, 104.5, 105.0, 0]
-    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert len(signals) == 1
     assert signals.iloc[0]["fvg_ext"] == 102.5
 
@@ -88,40 +92,40 @@ def test_combined_accepts_bear_extension_below_gap():
     df.iloc[3] = [97.0, 97.5, 96.5, 97.0, 0]
     df.iloc[8, df.columns.get_loc("low")] = 94.0
     df.iloc[10] = [95.0, 95.5, 94.5, 95.0, 0]
-    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert len(signals) == 1
     assert signals.iloc[0]["fvg_ext"] == 97.5
 
 
 def test_no_signal_without_extension():
-    signals = generate_signals(make_combined_day(bull=True, with_ext=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_combined_day(bull=True, with_ext=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_no_signal_bear_without_extension():
-    signals = generate_signals(make_combined_day(bull=False, with_ext=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_combined_day(bull=False, with_ext=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_no_signal_outside_trade_session():
     df = make_combined_day(bull=True, with_ext=True)
     df.index = pd.date_range("2025-01-02 17:00", periods=20, freq="1min")
-    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_tick_size_uses_asset_config():
-    signals = generate_signals(make_combined_day(bull=True, with_ext=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1})
+    signals = generate_signals(make_combined_day(bull=True, with_ext=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
     assert abs(row["stop"] - (row["fvg_ext"] - 0.1)) < 1e-9
 
 
 def test_empty_data():
-    signals = generate_signals(pd.DataFrame(), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(pd.DataFrame(), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_requires_positive_tick_size():
     with pytest.raises(ValueError, match="tick_size"):
-        generate_signals(make_combined_day(), asset="MNQ", timeframe="5m", params={"tick_size": 0})
+        generate_signals(make_combined_day(), asset="MNQ", timeframe="5m", params={"tick_size": 0, "session": SESSION})

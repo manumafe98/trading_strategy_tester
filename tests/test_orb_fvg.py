@@ -4,6 +4,10 @@ import pandas as pd
 import pytest
 
 from strategy.orb_fvg import generate_signals
+from tester_framework.sessions import parse_sessions
+
+
+SESSION = parse_sessions("ny=09:30-12:00")[0]
 
 
 def make_fvg_day(bull=True, with_fvg=True):
@@ -42,7 +46,7 @@ def make_fvg_day(bull=True, with_fvg=True):
 
 
 def test_bull_fvg_signal():
-    signals = generate_signals(make_fvg_day(bull=True), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_fvg_day(bull=True), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
     assert row["side"] == "long"
@@ -56,7 +60,7 @@ def test_bull_fvg_signal():
 
 
 def test_bear_fvg_signal():
-    signals = generate_signals(make_fvg_day(bull=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_fvg_day(bull=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
     assert row["side"] == "short"
@@ -66,29 +70,29 @@ def test_bear_fvg_signal():
 
 
 def test_no_signal_without_fvg():
-    signals = generate_signals(make_fvg_day(with_fvg=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(make_fvg_day(with_fvg=False), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_no_signal_outside_trade_session():
     df = make_fvg_day(bull=True)
     df.index = pd.date_range("2025-01-02 17:00", periods=20, freq="1min")
-    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_tick_size_uses_asset_config():
-    signals = generate_signals(make_fvg_day(bull=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1})
+    signals = generate_signals(make_fvg_day(bull=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
     assert abs(row["stop"] - (row["fvg_bottom"] - 0.1)) < 1e-9
 
 
 def test_empty_data():
-    signals = generate_signals(pd.DataFrame(), asset="MNQ", timeframe="5m", params={"tick_size": 0.25})
+    signals = generate_signals(pd.DataFrame(), asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
     assert signals.empty
 
 
 def test_requires_positive_tick_size():
     with pytest.raises(ValueError, match="tick_size"):
-        generate_signals(make_fvg_day(), asset="MNQ", timeframe="5m", params={"tick_size": 0})
+        generate_signals(make_fvg_day(), asset="MNQ", timeframe="5m", params={"tick_size": 0, "session": SESSION})

@@ -36,7 +36,7 @@ Multiple values are comma-separated, without spaces:
 
 ```bash
 python -m tester_framework --strategies ema50 --asset MGC,MNQ --timeframe 1h,30m --risk_reward_ratio 1,2
-python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --risk_reward_ratio 2 --with_costs
+python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
 ```
 
 `--strategies` accepts a comma-separated list of strategy modules. Each strategy runs independently with its own signal generation; results include a `Strategy` column for side-by-side comparison. Each asset/timeframe/RR/exit/strategy variant runs in parallel up to the machine's logical CPU count. Use `--workers 1` for a sequential comparison or a smaller positive value to limit CPU usage. The command prints total elapsed time after writing the result report.
@@ -44,7 +44,7 @@ python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset 
 For quick diagnostic samples, `--max_trades N` stops each variant after its first N closed trades and records the cap in the result report. These truncated metrics are not a substitute for a full strategy study. `--no_trade_html` skips per-trade charts while keeping the result report and trade ledger.
 
 ```bash
-python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --time_period 5d --max_trades 3 --no_trade_html --workers 1
+python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --time_period 5d --max_trades 3 --no_trade_html --workers 1
 ```
 
 Use all configured assets by omitting `--asset`; use the default timeframe list by omitting `--timeframe`:
@@ -73,6 +73,8 @@ python -m tester_framework --strategies ema50 --asset MGC,MNQ --risk MGC=1,MNQ=0
 ```
 
 Sizing is fixed-fractional: the risk percentage is applied to current net equity, so wins and losses compound. It measures entry-to-stop price risk; costs are reported separately and can make the net loss exceed the configured percentage. Only one position can be open per asset/timeframe, so overlapping signals are discarded.
+
+`--sessions` filters entries by market-local session windows for any strategy. Use presets like `asia`, `london`, `ny`, expand `all`, or pass subranges such as `ny=09:30-12:00` and `london=08:00-10:00`. Omit it, or use `--sessions none`, to keep the unfiltered framework behavior. ORB strategies override this and require a real session value.
 
 ## Execution Model
 
@@ -109,7 +111,7 @@ def generate_signals(df, asset, timeframe, params):
 
 `side` must be `long` or `short`. The strategy owns entries and stops; the framework owns fixed, trailing, and partial exits.
 
-`params["tick_size"]` contains the configured price tick for the current asset.
+`params["tick_size"]` contains the configured price tick for the current asset. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`.
 
 The input `df` is shared across timeframes; strategies **must not mutate** it. Copy inside the strategy if needed.
 
@@ -145,8 +147,8 @@ Three Opening Range Breakout strategies share common logic in `strategy/utils/`:
 - **`orb_fvg`** — SL from a Fair Value Gap boundary (FVG bottom - tick for long, FVG top + tick for short). Only trades when a directional FVG exists at breakout time.
 - **`orb_combined`** — SL from the FVG extension line (ext price - tick for long, ext price + tick for short). Only trades when a directional FVG with an extension line exists.
 
-All three use 1-minute execution data (`EXECUTION_TIMEFRAME = "1m"`). For these strategies, `--timeframe` is the opening-range duration rather than the execution-bar size; every configured intraday duration from 1 minute through 1 hour is supported. They build the ORB high/low from the first NY session bars and look for breakouts during the 9:30–11:59 AM NY trade session. FVG detection runs in the 9:30–12:00 NY window with mitigation tracking. The SL offset uses the asset's configured tick size.
+All three use 1-minute execution data (`EXECUTION_TIMEFRAME = "1m"`). For these strategies, `--timeframe` is the opening-range duration rather than the execution-bar size; every configured intraday duration from 1 minute through 1 hour is supported. They require `--sessions` and build the ORB from that session's local start time, then look for breakouts until the session window ends. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
 
 ```bash
-python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --risk_reward_ratio 2 --with_costs
+python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
 ```

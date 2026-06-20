@@ -17,6 +17,7 @@ from .cli import RunConfig
 from .data import load_data
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variant
+from .sessions import SessionSpec, parse_sessions, session_label
 from .settings import DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .types import VariantTask
@@ -31,7 +32,13 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantTask) -> str:
-    return f'{task["strategy"]} {task["asset"]} {task["timeframe"]} {task["risk_reward_ratio"]:g}R {task["exit_mode"]}'
+    session = session_label(task["session"])
+    parts = [task["strategy"], task["asset"], task["timeframe"]]
+    if session:
+        parts.append(session)
+    parts.append(f'{task["risk_reward_ratio"]:g}R')
+    parts.append(task["exit_mode"])
+    return " ".join(parts)
 
 
 def status_lines(
@@ -183,12 +190,33 @@ def worker_count(requested: int | None, task_count: int) -> int:
     return min(requested or cpus, cpus, task_count)
 
 
+def validate_required_flags(strategies: dict[str, object], sessions: list[SessionSpec]) -> None:
+    errors = []
+    available = {"sessions": sessions}
+    for name, strategy in strategies.items():
+        required = getattr(strategy, "REQUIRED_FLAGS", {})
+        if not required:
+            continue
+        if not isinstance(required, dict):
+            raise ValueError(f"{name} REQUIRED_FLAGS must be a dict of flag -> message")
+        for flag, message in required.items():
+            if flag not in available:
+                raise ValueError(f"{name} declares unknown required flag: {flag}")
+            if not available[flag]:
+                errors.append(f"{name}: {message}")
+    if errors:
+        raise ValueError("\n".join(errors))
+
+
 def run(config: RunConfig) -> None:
     started = perf_counter()
     asset_configs = load_assets()
     if not config.strategies:
         raise ValueError("--strategies is required")
     strategies = {name: load_strategy(name) for name in config.strategies}
+    session_specs = parse_sessions(config.sessions)
+    session_variants = session_specs or [None]
+    validate_required_flags(strategies, session_specs)
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
     timeframes = list(dict.fromkeys(csv_items(config.timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
@@ -214,7 +242,13 @@ def run(config: RunConfig) -> None:
             for asset in assets:
                 if data_timeframe not in asset_configs[asset].bars_per_year:
                     raise ValueError(f"Missing bars_per_year for {asset} {data_timeframe}")
-    task_count = len(strategies) * len(assets) * len(timeframes) * sum(len(variants[ratio]) for ratio in ratios)
+    task_count = (
+        len(strategies)
+        * len(assets)
+        * len(timeframes)
+        * len(session_variants)
+        * sum(len(variants[ratio]) for ratio in ratios)
+    )
     workers = worker_count(config.workers, task_count)
     risks = {asset: risk_for(asset, config.risk) for asset in assets}
     rows = []
@@ -244,33 +278,42 @@ def run(config: RunConfig) -> None:
                     data_cache = cache_data(data, cache_dir, cache_id)
                     cache_id += 1
                     for strategy_name, strategy, timeframe in strategy_timeframes:
-                        status.update(phase="Generating signals", detail=f"{strategy_name} {asset} {timeframe}", total=task_count)
-                        signals = strategy.generate_signals(
-                            data, asset=asset, timeframe=timeframe, params={"tick_size": asset_cfg.tick_size}
-                        )
-                        for risk_reward_ratio in ratios:
-                            for exit_mode in variants[risk_reward_ratio]:
-                                tasks.append(
-                                    VariantTask(
-                                        strategy=strategy_name,
-                                        data_cache=data_cache,
-                                        signals=signals,
-                                        asset=asset,
-                                        asset_cfg=asset_cfg,
-                                        timeframe=timeframe,
-                                        execution_timeframe=data_timeframe,
-                                        risk_reward_ratio=risk_reward_ratio,
-                                        exit_mode=exit_mode,
-                                        operation=config.operation,
-                                        risk_pct=risk_pct,
-                                        capital=config.capital,
-                                        with_costs=config.with_costs,
-                                        time_period=config.time_period,
-                                        data_source=config.data_source,
-                                        max_trades=config.max_trades,
-                                        trade_html=config.trade_html,
+                        for session in session_variants:
+                            detail = f"{strategy_name} {asset} {timeframe}"
+                            session_name = session_label(session)
+                            if session_name:
+                                detail = f"{detail} {session_name}"
+                            status.update(phase="Generating signals", detail=detail, total=task_count)
+                            signals = strategy.generate_signals(
+                                data,
+                                asset=asset,
+                                timeframe=timeframe,
+                                params={"tick_size": asset_cfg.tick_size, "session": session},
+                            )
+                            for risk_reward_ratio in ratios:
+                                for exit_mode in variants[risk_reward_ratio]:
+                                    tasks.append(
+                                        VariantTask(
+                                            strategy=strategy_name,
+                                            data_cache=data_cache,
+                                            signals=signals,
+                                            asset=asset,
+                                            asset_cfg=asset_cfg,
+                                            timeframe=timeframe,
+                                            execution_timeframe=data_timeframe,
+                                            risk_reward_ratio=risk_reward_ratio,
+                                            exit_mode=exit_mode,
+                                            operation=config.operation,
+                                            risk_pct=risk_pct,
+                                            capital=config.capital,
+                                            with_costs=config.with_costs,
+                                            time_period=config.time_period,
+                                            data_source=config.data_source,
+                                            max_trades=config.max_trades,
+                                            trade_html=config.trade_html,
+                                            session=session,
+                                        )
                                     )
-                                )
                     del data
 
             status.update(phase="Backtesting", detail=f"{workers} workers", completed=0, total=task_count)
@@ -314,7 +357,7 @@ def run(config: RunConfig) -> None:
         status.update(phase="Writing results", detail="console + html", completed=len(rows), total=task_count)
         status.start()
 
-        columns = result_columns(config.operation)
+        columns = result_columns(config.operation, include_session=bool(session_specs))
         table = pd.DataFrame(rows)
         if not table.empty:
             strategy_order = {name: i for i, name in enumerate(strategies)}
@@ -340,6 +383,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
+    p.add_argument("--sessions", help="comma list of asia, london, ny, all, none, or custom ranges like ny=09:30-12:00")
     p.add_argument("--time_period", default="60d")
     p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
     p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
@@ -364,6 +408,7 @@ def main() -> None:
             strategies=strategies,
             asset=args.asset,
             timeframe=args.timeframe,
+            sessions=args.sessions,
             time_period=args.time_period,
             data_source=args.data_source,
             operation=args.operation,

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+import re
+
 
 def clean_exit_name(name: str) -> str:
-    return name.strip().lower().replace(" ", "_")
+    return re.sub(r"[^a-z0-9._-]+", "_", name.strip().lower()).strip("_")
 
 
 def csv_items(value: str | None) -> list[str]:

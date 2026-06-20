@@ -81,11 +81,20 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     for target in trade["targets"]:
         fig.add_hline(y=target["price"], line_dash="dot", line_color="green", annotation_text=f'{target["r"]:g}R target')
-    fig.update_layout(title=f"{trade['strategy']} {trade['asset']} {trade['timeframe']} {trade['side']} {trade['exit_mode']}", xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
+    title = f"{trade['strategy']} {trade['asset']} {trade['timeframe']}"
+    if trade.get("session"):
+        title = f"{title} {trade['session']}"
+    title = f"{title} {trade['side']} {trade['exit_mode']}"
+    fig.update_layout(title=title, xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
-    base = f"{trade['strategy']}_{trade['asset']}_{trade['timeframe']}_{rr}_{trade['exit_mode']}_{stamp}_{trade['side']}"
+    session = clean_exit_name(str(trade["session"])) if trade.get("session") else None
+    parts = [trade["strategy"], trade["asset"], trade["timeframe"]]
+    if session:
+        parts.append(session)
+    parts.extend([rr, trade["exit_mode"], stamp, str(trade["side"])])
+    base = "_".join(parts)
     path = TRADES_DIR / f"{base}.html"
     n = 2
     while path.exists():
@@ -228,13 +237,16 @@ def _variant_details(row: pd.Series) -> str:
     sections = [
         f"<section><h3>Outcomes</h3>{_outcome_table(analytics)}</section>",
         f'<div class="detail-grid"><section><h3>Entry weekday (UTC)</h3>{_period_table(analytics["weekday"])}</section><section><h3>Entry month (UTC)</h3>{_period_table(analytics["month"])}</section></div>',
+        f'<section><h3>Entry year (UTC)</h3>{_period_table(analytics["year"])}</section>',
     ]
     if row["Exit Mode"] != "fixed":
         sections.append(_managed_section(analytics))
     custom_metrics = row.get("_strategy_metrics", {})
     if custom_metrics:
         sections.append(f'<section><h3>Strategy metrics</h3>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
-    title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]} | {row["RR"]}R | {row["Exit Mode"]}'
+    session = row.get("Session")
+    session_text = f' {session}' if pd.notna(session) else ""
+    title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     return f'<details class="variant"><summary><strong>{html_escape(title)}</strong><span>{html_escape(result)}</span></summary><div class="variant-body">{"".join(sections)}</div></details>'
 
@@ -242,6 +254,8 @@ def _variant_details(row: pd.Series) -> str:
 def _render_header(column: str, with_costs: bool) -> str:
     label = html_escape(HTML_LABELS.get(column, column))
     suffix = '<span class="pair-label">Gross / Net</span>' if with_costs and column in COST_PAIR_COLUMNS else ""
+    if column in FINANCIAL_COLUMNS:
+        return f'<th aria-sort="none"><button type="button" class="sort-button">{label}{suffix}</button></th>'
     return f"<th>{label}{suffix}</th>"
 
 
@@ -258,22 +272,26 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td class="c"><span class="dir short">- {html_escape(str(value))}</span></td>'
     if col == "Trades":
         return f'<td class="c n">{html_escape(str(value))}</td>'
-    return f'<td class="c"><span class="pill {metric_class(col, value)}">{html_escape(format_metric(col, value))}</span></td>'
+    sort_attr = ""
+    if col in FINANCIAL_COLUMNS:
+        sort_value = value[-1] if isinstance(value, (tuple, list)) else value
+        sort_attr = f' data-sort-value="{float(sort_value)}"' if math.isfinite(float(sort_value)) else ' data-sort-value=""'
+    return f'<td class="c"{sort_attr}><span class="pill {metric_class(col, value)}">{html_escape(format_metric(col, value))}</span></td>'
 
 
 def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str] | None = None) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
-    columns = [column for column in ("Strategy", "Asset", "TF", "RR", "Exit Mode", *FINANCIAL_COLUMNS) if column in columns]
+    columns = [column for column in ("Strategy", "Asset", "TF", "Session", "RR", "Exit Mode", *FINANCIAL_COLUMNS) if column in columns]
     rows = []
     asset_colors = {}
-    for _, row in table.iterrows():
+    for original_order, (_, row) in enumerate(table.iterrows()):
         asset = str(row["Asset"])
         if asset not in asset_colors:
             asset_colors[asset] = ASSET_COLORS[len(asset_colors) % len(ASSET_COLORS)]
         color = asset_colors[asset]
         cells = [_render_cell(col, row[col], color) for col in columns]
-        rows.append("<tr>" + "".join(cells) + "</tr>")
+        rows.append(f'<tr data-original-order="{original_order}">' + "".join(cells) + "</tr>")
 
     details = "\n".join(_variant_details(row) for _, row in table.iterrows())
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -289,6 +307,8 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
             f"costs {'on' if config.with_costs else 'off'}",
         )
     ]
+    if config.sessions and config.sessions.lower() != "none":
+        tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')
     if config.max_trades is not None:
         tags.append(f'<span class="tag">first {config.max_trades} closed trades per variant</span>')
     if not config.trade_html:

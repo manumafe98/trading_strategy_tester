@@ -29,6 +29,10 @@ main { max-width: 1540px; margin: 0 auto; padding: 52px 52px 72px; }
 table { border-collapse: collapse; width: 100%; min-width: 880px; }
 th { font-size: 10px; font-weight: 600; letter-spacing: .8px; text-transform: uppercase; color: var(--dim); padding: 11px 20px; text-align: center; border-bottom: 1px solid var(--border); background: var(--surface2); white-space: nowrap; }
 th:first-child { text-align: left; }
+.sort-button { border: 0; padding: 0; background: none; color: inherit; font: inherit; letter-spacing: inherit; text-transform: inherit; cursor: pointer; }
+.sort-button:focus-visible { outline: 1px solid var(--gold); outline-offset: 4px; }
+th[aria-sort="ascending"] .sort-button::after { content: " \2191"; color: var(--gold); }
+th[aria-sort="descending"] .sort-button::after { content: " \2193"; color: var(--gold); }
 td { padding: 20px; border-bottom: 1px solid var(--border); vertical-align: middle; white-space: nowrap; }
 tr:last-child td { border-bottom: none; }
 .c { text-align: center; }
@@ -82,7 +86,7 @@ $tags
 <div class="tbl-wrap">
 <div class="tbl-bar"><span class="tbl-lbl">Asset breakdown</span></div>
 <div class="tbl-scroll">
-<table>
+<table id="results-table">
 <thead><tr>$columns</tr></thead>
 <tbody>
 $rows
@@ -95,5 +99,29 @@ $details
 </section>
 <div class="footer"><span>generated $generated</span></div>
 </main>
+<script>
+const table = document.getElementById("results-table");
+const headers = Array.from(table.querySelectorAll("th[aria-sort]"));
+const body = table.tBodies[0];
+for (const header of headers) {
+  header.querySelector("button").addEventListener("click", () => {
+    const direction = header.getAttribute("aria-sort") === "ascending" ? "descending" : "ascending";
+    for (const item of headers) item.setAttribute("aria-sort", "none");
+    header.setAttribute("aria-sort", direction);
+    const column = header.cellIndex;
+    const rows = Array.from(body.rows);
+    rows.sort((left, right) => {
+      const leftValue = Number.parseFloat(left.cells[column].dataset.sortValue);
+      const rightValue = Number.parseFloat(right.cells[column].dataset.sortValue);
+      const originalOrder = Number(left.dataset.originalOrder) - Number(right.dataset.originalOrder);
+      if (Number.isNaN(leftValue)) return Number.isNaN(rightValue) ? originalOrder : 1;
+      if (Number.isNaN(rightValue)) return -1;
+      const difference = leftValue - rightValue;
+      return difference ? (direction === "ascending" ? difference : -difference) : originalOrder;
+    });
+    body.append(...rows);
+  });
+}
+</script>
 </body>
 </html>

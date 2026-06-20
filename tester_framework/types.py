@@ -5,6 +5,7 @@ from typing import TypedDict
 import pandas as pd
 
 from .models import AssetConfig
+from .sessions import SessionSpec
 
 
 class VariantTask(TypedDict):
@@ -25,3 +26,4 @@ class VariantTask(TypedDict):
     data_source: str
     max_trades: int | None
     trade_html: bool
+    session: SessionSpec | None
