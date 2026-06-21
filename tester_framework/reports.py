@@ -11,9 +11,10 @@ from typing import TypeAlias
 
 import pandas as pd
 
-from .cli import RunConfig
+from .analytics import decode_analytics
+from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
 from .models import Side
-from .settings import COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, TRADES_DIR
+from .settings import COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, TIMEFRAMES, TRADES_DIR
 from .utils import clean_exit_name
 
 
@@ -22,7 +23,23 @@ MetricValue: TypeAlias = float | int | tuple[float | int, ...] | list[float | in
 
 ASSET_COLORS = ["#f9c22e", "#ff922b", "#4c8bf5", "#5cc9c8", "#b197fc", "#69db7c"]
 HTML_LABELS = {"Sharpe Ratio": "Sharpe", "Return / DD": "Ret / DD"}
+FILTER_SPECS = (
+    ("strategy", "Strategy", "Strategy"),
+    ("asset", "Asset", "Asset"),
+    ("timeframe", "Timeframe", "TF"),
+    ("session", "Session", "Session"),
+    ("rr", "RR", "RR"),
+    ("exit-mode", "Exit Mode", "Exit Mode"),
+    ("risk", "Risk", "_risk_pct"),
+)
+FILTER_ORDERS = {
+    "timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
+    "session": {value: index for index, value in enumerate(("asia", "london", "ny"))},
+    "exit-mode": {value: index for index, value in enumerate(("fixed", "trailing", "partial"))},
+}
 RESULTS_TEMPLATE = Path(__file__).resolve().parent / "templates" / "results.html"
+VARIANT_TEMPLATE = Path(__file__).resolve().parent / "templates" / "variant.html"
+TRADE_ROWS_PER_PAGE = 1_000
 TRADE_CHART_BEFORE_BARS = 20
 TRADE_CHART_AFTER_BARS = 20
 __all__ = ["format_metric", "metric_class", "reset_output_dirs", "write_results_html", "write_trade_html"]
@@ -193,62 +210,196 @@ def _exit_path(trade: dict) -> str:
     return ", ".join(parts)
 
 
-def _managed_section(analytics: dict) -> str:
+def _managed_summary(analytics: dict) -> str:
     managed = analytics["managed"]
     mode = str(managed["Mode"]).title()
     summary = _detail_table(
         ["Target completions", "Stop completions", "Avg realized", "Avg MFE", "Avg giveback"],
         [[managed["Target Completions"], managed["Stop Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
     )
-    ledger = []
-    for trade in managed["trades"]:
-        chart_path = trade.get("chart_path")
-        chart = "-"
-        if chart_path:
-            name = html_escape(Path(chart_path).name, quote=True)
-            chart = f'<a href="../trades/{name}" target="_blank" rel="noopener">chart</a>'
-        ledger.append(
-            "<tr>"
-            f"<td>{chart}</td>"
-            f'<td>{html_escape(pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d %H:%M"))}</td>'
-            f'<td>{html_escape(pd.Timestamp(trade["exit_time"]).strftime("%Y-%m-%d %H:%M"))}</td>'
-            f'<td>{html_escape(str(trade["holding_duration"]))}</td>'
-            f'<td>{html_escape(str(trade["side"]))}</td>'
-            f'<td>{html_escape(str(trade["outcome"]).replace("_", " ").title())}</td>'
-            f'<td>{html_escape(_exit_path(trade))}</td>'
-            f'<td>{float(trade["risk_reward_ratio"]):g}R</td>'
-            f'<td>{_r(trade["realized_r"])}</td>'
-            f'<td>{_r(trade["mfe_r"])}</td>'
-            f'<td>{_r(trade["giveback_r"])}</td>'
-            "</tr>"
-        )
-    headers = ["Trade", "Entry UTC", "Exit UTC", "Duration", "Side", "Outcome", "Exit path", "Target", "Realized", "MFE", "Giveback"]
-    if ledger:
-        head = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
-        ledger_html = f'<div class="detail-scroll"><table class="detail-table ledger"><thead><tr>{head}</tr></thead><tbody>{"".join(ledger)}</tbody></table></div>'
-    else:
-        ledger_html = '<p class="empty">No trades</p>'
-    return f'<section><h3>{mode} summary</h3>{summary}</section><section><h3>{mode} trades</h3>{ledger_html}</section>'
+    return f'<section><h2>{mode} summary</h2>{summary}</section>'
 
 
-def _variant_details(row: pd.Series) -> str:
-    analytics = row["_analytics"]
-    overall = analytics["outcomes"][0]
+def _trade_row(trade: dict) -> str:
+    chart_path = trade.get("chart_path")
+    chart = "-"
+    if chart_path:
+        name = html_escape(Path(chart_path).name, quote=True)
+        chart = f'<a href="../../../trades/{name}" target="_blank" rel="noopener">chart</a>'
+    return (
+        '<tr class="trade-row">'
+        f"<td>{chart}</td>"
+        f'<td>{html_escape(pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d %H:%M"))}</td>'
+        f'<td>{html_escape(pd.Timestamp(trade["exit_time"]).strftime("%Y-%m-%d %H:%M"))}</td>'
+        f'<td>{html_escape(str(trade["holding_duration"]))}</td>'
+        f'<td>{html_escape(str(trade["side"]))}</td>'
+        f'<td>{html_escape(str(trade["outcome"]).replace("_", " ").title())}</td>'
+        f'<td>{html_escape(_exit_path(trade))}</td>'
+        f'<td>{float(trade["risk_reward_ratio"]):g}R</td>'
+        f'<td>{_r(trade["realized_r"])}</td>'
+        f'<td>{_r(trade["mfe_r"])}</td>'
+        f'<td>{_r(trade["giveback_r"])}</td>'
+        "</tr>"
+    )
+
+
+def _trade_table(trades: list[dict]) -> str:
+    if not trades:
+        return '<p class="empty">No trades</p>'
+    headers = [
+        "Trade",
+        "Entry UTC",
+        "Exit UTC",
+        "Duration",
+        "Side",
+        "Outcome",
+        "Exit path",
+        "Target",
+        "Realized",
+        "MFE",
+        "Giveback",
+    ]
+    head = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
+    rows = "".join(_trade_row(trade) for trade in trades)
+    return (
+        '<div class="detail-scroll"><table class="detail-table ledger">'
+        f"<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
+    )
+
+
+def _variant_sections(row: pd.Series, analytics: dict) -> str:
     sections = [
-        f"<section><h3>Outcomes</h3>{_outcome_table(analytics)}</section>",
-        f'<div class="detail-grid"><section><h3>Entry weekday (UTC)</h3>{_period_table(analytics["weekday"])}</section><section><h3>Entry month (UTC)</h3>{_period_table(analytics["month"])}</section></div>',
-        f'<section><h3>Entry year (UTC)</h3>{_period_table(analytics["year"])}</section>',
+        f"<section><h2>Outcomes</h2>{_outcome_table(analytics)}</section>",
+        f'<div class="detail-grid"><section><h2>Entry weekday (UTC)</h2>{_period_table(analytics["weekday"])}</section><section><h2>Entry month (UTC)</h2>{_period_table(analytics["month"])}</section></div>',
+        f'<section><h2>Entry year (UTC)</h2>{_period_table(analytics["year"])}</section>',
     ]
     if row["Exit Mode"] != "fixed":
-        sections.append(_managed_section(analytics))
+        sections.append(_managed_summary(analytics))
     custom_metrics = row.get("_strategy_metrics", {})
     if custom_metrics:
-        sections.append(f'<section><h3>Strategy metrics</h3>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
+        sections.append(f'<section><h2>Strategy metrics</h2>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
+    return "".join(sections)
+
+
+def _variant_filename(variant_id: int, page: int = 1) -> str:
+    stem = f"{variant_id:06d}"
+    return f"{stem}.html" if page == 1 else f"{stem}-p{page}.html"
+
+
+def _pagination(variant_id: int, page: int, page_count: int, start: int, stop: int, total: int) -> str:
+    previous = (
+        f'<a rel="prev" href="{_variant_filename(variant_id, page - 1)}">Previous</a>' if page > 1 else "<span></span>"
+    )
+    next_page = (
+        f'<a rel="next" href="{_variant_filename(variant_id, page + 1)}">Next</a>'
+        if page < page_count
+        else "<span></span>"
+    )
+    range_text = f"trades {start + 1}-{stop} of {total}" if total else "0 trades"
+    return (
+        f'<nav class="pagination">{previous}<span>Page {page} of {page_count} | '
+        f"{range_text}</span>{next_page}</nav>"
+    )
+
+
+def _write_variant_pages(
+    row: pd.Series,
+    variant_id: int,
+    variants_dir: Path,
+    template: Template,
+    generated: str,
+) -> None:
+    analytics = decode_analytics(row["_analytics"])
+    overall = analytics["outcomes"][0]
     session = row.get("Session")
     session_text = f' {session}' if pd.notna(session) else ""
     title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
-    return f'<details class="variant"><summary><strong>{html_escape(title)}</strong><span>{html_escape(result)}</span></summary><div class="variant-body">{"".join(sections)}</div></details>'
+    trades = analytics["managed"]["trades"] if row["Exit Mode"] != "fixed" else []
+    page_count = max(1, (len(trades) + TRADE_ROWS_PER_PAGE - 1) // TRADE_ROWS_PER_PAGE)
+    for page in range(1, page_count + 1):
+        start = (page - 1) * TRADE_ROWS_PER_PAGE
+        stop = min(start + TRADE_ROWS_PER_PAGE, len(trades))
+        page_trades = trades[start:stop]
+        pagination = (
+            _pagination(variant_id, page, page_count, start, stop, len(trades))
+            if row["Exit Mode"] != "fixed"
+            else ""
+        )
+        trade_section = ""
+        if row["Exit Mode"] != "fixed":
+            mode = html_escape(str(analytics["managed"]["Mode"]).title())
+            trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(page_trades)}</section>'
+        html = template.substitute(
+            title=html_escape(title),
+            result=html_escape(result),
+            page_note=f"Trade page {page} of {page_count}" if page_count > 1 else "Variant details",
+            sections=_variant_sections(row, analytics) if page == 1 else "",
+            trade_section=trade_section,
+            pagination=pagination,
+            generated=generated,
+        )
+        (variants_dir / _variant_filename(variant_id, page)).write_text(html, encoding="utf-8")
+
+
+def _filter_text(column: str, value) -> str:
+    if value is None or (not isinstance(value, (tuple, list)) and pd.isna(value)):
+        return "None"
+    if column == "_risk_pct":
+        return f"{float(value):g}%"
+    return str(value)
+
+
+def _filter_attrs(row: pd.Series) -> str:
+    attrs = []
+    for key, _, column in FILTER_SPECS:
+        value = _filter_text(column, row.get(column))
+        attrs.append(f'data-{key}="{html_escape(value, quote=True)}"')
+    return " ".join(attrs)
+
+
+def _filter_sort_key(key: str, value: str) -> tuple:
+    if key in {"rr", "risk"}:
+        return 0, float(value.removesuffix("%"))
+    order = FILTER_ORDERS.get(key, {})
+    base = value.partition("=")[0]
+    return order.get(base, len(order)), value.casefold()
+
+
+def _render_filters(table: pd.DataFrame) -> str:
+    menus = []
+    for key, label, column in FILTER_SPECS:
+        if column not in table:
+            continue
+        values = sorted(
+            dict.fromkeys(_filter_text(column, value) for value in table[column]),
+            key=lambda value: _filter_sort_key(key, value),
+        )
+        if len(values) < 2:
+            continue
+        options = []
+        for index, value in enumerate(values):
+            safe_value = html_escape(value, quote=True)
+            option_id = f"filter-{key}-{index}"
+            options.append(
+                f'<label class="filter-option" for="{option_id}"><input id="{option_id}" type="checkbox" '
+                f'data-filter-key="{key}" value="{safe_value}" checked><span>{html_escape(value)}</span></label>'
+            )
+        count = len(values)
+        menus.append(
+            f'<details class="filter-menu" data-filter-menu="{key}"><summary><span>{html_escape(label)}</span>'
+            f'<span class="filter-selection">{count}/{count}</span></summary><div class="filter-options">'
+            f'{"".join(options)}</div></details>'
+        )
+    if not menus:
+        return ""
+    count = len(table)
+    return (
+        '<section class="filter-bar" id="filter-bar" aria-label="Variant filters">'
+        f'<div class="filter-menus">{"".join(menus)}</div><div class="filter-status">'
+        f'<span id="filter-match-count" aria-live="polite">{count} of {count} variants</span>'
+        '<button type="button" id="reset-filters">Reset filters</button></div></section>'
+    )
 
 
 def _render_header(column: str, with_costs: bool) -> str:
@@ -283,6 +434,15 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
     columns = [column for column in ("Strategy", "Asset", "TF", "Session", "RR", "Exit Mode", *FINANCIAL_COLUMNS) if column in columns]
+    generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    safe_name = "_".join(config.strategies)
+    bundle_dir = RESULTS_DIR / f"{safe_name}_results_{stamp}"
+    if bundle_dir.exists():
+        shutil.rmtree(bundle_dir)
+    variants_dir = bundle_dir / "variants"
+    variants_dir.mkdir(parents=True)
+    variant_template = Template(VARIANT_TEMPLATE.read_text(encoding="utf-8"))
     rows = []
     asset_colors = {}
     for original_order, (_, row) in enumerate(table.iterrows()):
@@ -291,10 +451,17 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
             asset_colors[asset] = ASSET_COLORS[len(asset_colors) % len(ASSET_COLORS)]
         color = asset_colors[asset]
         cells = [_render_cell(col, row[col], color) for col in columns]
-        rows.append(f'<tr data-original-order="{original_order}">' + "".join(cells) + "</tr>")
-
-    details = "\n".join(_variant_details(row) for _, row in table.iterrows())
-    generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        details = (
+            f'<td class="c"><a class="details-link" href="variants/{_variant_filename(original_order)}" '
+            'target="_blank" rel="noopener">View</a></td>'
+        )
+        rows.append(
+            f'<tr data-variant-id="{original_order}" data-original-order="{original_order}" {_filter_attrs(row)}>'
+            + "".join(cells)
+            + details
+            + "</tr>"
+        )
+        _write_variant_pages(row, original_order, variants_dir, variant_template, generated)
     tags = [
         f'<span class="tag">{html_escape(tag)}</span>'
         for tag in (
@@ -309,23 +476,29 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
     ]
     if config.sessions and config.sessions.lower() != "none":
         tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')
+    if config.days:
+        tags.append(f'<span class="tag">days {html_escape(", ".join(DAY_NAMES[day] for day in sorted(config.days)))}</span>')
+    if config.months:
+        tags.append(
+            f'<span class="tag">months {html_escape(", ".join(MONTH_NAMES[month - 1] for month in sorted(config.months)))}</span>'
+        )
     if config.max_trades is not None:
         tags.append(f'<span class="tag">first {config.max_trades} closed trades per variant</span>')
-    if not config.trade_html:
+    if config.trade_html == 0:
         tags.append('<span class="tag">trade charts off</span>')
+    elif config.trade_html is not None:
+        tags.append(f'<span class="tag">first {config.trade_html} trade charts per variant</span>')
     strategy_label = ", ".join(config.strategies)
     template = Template(RESULTS_TEMPLATE.read_text(encoding="utf-8"))
     html = template.substitute(
         title=f"{html_escape(strategy_label)} results",
         strategy=html_escape(strategy_label),
         tags="\n".join(tags),
-        columns="".join(_render_header(col, config.with_costs) for col in columns),
+        filters=_render_filters(table),
+        columns="".join(_render_header(col, config.with_costs) for col in columns) + "<th>Details</th>",
         rows="\n".join(rows),
-        details=details,
         generated=generated,
     )
-    stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    safe_name = "_".join(config.strategies)
-    path = RESULTS_DIR / f"{safe_name}_results_{stamp}.html"
+    path = bundle_dir / "index.html"
     path.write_text(html, encoding="utf-8")
     return path

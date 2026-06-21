@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
+import tester_framework.backtest as backtest
 from tester_framework.backtest import (
     add_trade_counts,
     _curve_metrics,
@@ -496,6 +497,64 @@ def test_unresolved_partial_trade_discards_completed_fills(test_asset_cfg):
     assert metrics["Return"] == 0
 
 
+def test_calendar_filters_use_actual_entry_timestamp_and_count_discarded(test_asset_cfg):
+    index = pd.date_range("2025-01-31 23:00", periods=3, freq="h")
+    data = pd.DataFrame(
+        {
+            "open": [100.0, 100.0, 100.0],
+            "high": [100.0, 102.0, 100.0],
+            "low": [100.0, 99.5, 100.0],
+            "close": [100.0, 101.0, 100.0],
+            "volume": [0, 0, 0],
+        },
+        index=index,
+    )
+    signals = pd.DataFrame([{"time": index[0], "side": "long", "stop": 99}])
+    kwargs = dict(
+        data=data,
+        signals=signals,
+        strategy="test",
+        asset="TEST",
+        timeframe="1h",
+        risk_reward_ratio=1,
+        exit_mode="fixed",
+        operation="all",
+        risk_pct=1,
+        capital=10_000,
+        with_costs=False,
+        asset_cfg=test_asset_cfg,
+    )
+
+    accepted, trades = run_backtest(**kwargs, days=(5,), months=(2,))
+    rejected_day, _ = run_backtest(**kwargs, days=(4,), months=(2,))
+    rejected_month, _ = run_backtest(**kwargs, days=(5,), months=(1,))
+
+    assert len(trades) == 1
+    assert accepted["Discarded"] == 0
+    assert rejected_day["Discarded"] == 1
+    assert rejected_month["Discarded"] == 1
+
+
+@pytest.mark.parametrize(("filters", "message"), [({"days": (7,)}, "--days"), ({"months": (0,)}, "--months")])
+def test_backtest_rejects_invalid_calendar_filters(base_data, test_asset_cfg, filters, message):
+    with pytest.raises(ValueError, match=message):
+        run_backtest(
+            base_data,
+            pd.DataFrame(),
+            strategy="test",
+            asset="TEST",
+            timeframe="1h",
+            risk_reward_ratio=1,
+            exit_mode="fixed",
+            operation="all",
+            risk_pct=1,
+            capital=10_000,
+            with_costs=False,
+            asset_cfg=test_asset_cfg,
+            **filters,
+        )
+
+
 def test_cost_outcomes_are_paired(cost_asset_cfg):
     idx = pd.date_range("2025-01-01", periods=2, freq="h")
     data = pd.DataFrame(
@@ -530,6 +589,41 @@ def test_first_bar_return_includes_starting_capital(test_asset_cfg):
 
 def test_nonpositive_equity_has_no_sharpe():
     assert math.isnan(_curve_metrics(np.array([100.0, 0.0, 100.0]), 252)["Sharpe Ratio"])
+
+
+def test_curve_metrics_match_pandas_reference():
+    curve = np.array([10_000.0, 10_100.0, 9_950.0, 10_200.0])
+    series = pd.Series(curve)
+    returns = series.pct_change(fill_method=None).dropna()
+    drawdown = (series / series.cummax() - 1) * 100
+    total_return = (curve[-1] / curve[0] - 1) * 100
+    max_dd = abs(float(drawdown.min()))
+    sharpe = math.sqrt(252) * float(returns.mean() / returns.std())
+
+    assert _curve_metrics(curve, 252) == {
+        "Return": round(total_return, 2),
+        "Max DD": round(max_dd, 2),
+        "Sharpe Ratio": round(sharpe, 2),
+        "Return / DD": round(total_return / max_dd, 2),
+    }
+
+
+def test_make_metrics_skips_duplicate_net_calculation_without_costs(monkeypatch):
+    calls = []
+    monkeypatch.setattr(
+        backtest,
+        "_curve_metrics",
+        lambda curve, _bars: calls.append(curve) or {"Return": 0, "Max DD": 0, "Sharpe Ratio": 0, "Return / DD": 0},
+    )
+    curve = np.array([10_000.0, 10_100.0])
+
+    metrics = backtest.make_metrics("TEST", "1h", "test", curve, curve, False, 252)
+    assert len(calls) == 1
+    assert metrics["Gross"] == metrics["Net"]
+
+    calls.clear()
+    backtest.make_metrics("TEST", "1h", "test", curve, curve, True, 252)
+    assert len(calls) == 2
 
 
 def test_sharpe_uses_execution_timeframe(test_asset_cfg):

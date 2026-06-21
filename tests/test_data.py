@@ -6,7 +6,7 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 import pytest
 
-from tester_framework.data import load_local_data
+from tester_framework.data import load_local_data, load_yfinance_data
 from tester_framework.models import AssetConfig
 
 
@@ -92,6 +92,56 @@ def test_daily_resample_uses_session_boundary_across_dst():
         )
         local = load_local_data("TEST", "1d", "max", data_dir=data_dir, asset_cfg=cfg)
         assert list(local.index) == [pd.Timestamp("2025-03-08 22:00:00"), pd.Timestamp("2025-03-09 21:00:00")]
+
+
+def test_calendar_period_filters_local_data_with_inclusive_year_range():
+    with TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        path = data_dir / "forex" / "TEST"
+        path.mkdir(parents=True)
+        (path / "TEST.csv").write_text(
+            "timestamp,open,high,low,close,volume\n"
+            "2019-12-31T23:00:00Z,1,2,0,1.5,1\n"
+            "2020-01-01T00:00:00Z,2,3,1,2.5,1\n"
+            "2021-12-31T23:00:00Z,3,4,2,3.5,1\n"
+            "2022-01-01T00:00:00Z,4,5,3,4.5,1\n",
+            encoding="utf-8",
+        )
+
+        local = load_local_data("TEST", "1m", "2020-2021", data_dir=data_dir)
+
+        assert list(local.index) == [pd.Timestamp("2020-01-01"), pd.Timestamp("2021-12-31 23:00:00")]
+
+
+def test_yfinance_calendar_period_uses_dates_and_rolling_period_is_unchanged(monkeypatch):
+    calls = []
+    frame = pd.DataFrame(
+        {"open": [1], "high": [2], "low": [0], "close": [1.5], "volume": [1]},
+        index=pd.DatetimeIndex(["2021-01-04"]),
+    )
+
+    class FakeTicker:
+        def __init__(self, _ticker):
+            pass
+
+        def history(self, **kwargs):
+            calls.append(kwargs)
+            return frame
+
+    monkeypatch.setattr("yfinance.Ticker", FakeTicker)
+
+    load_yfinance_data("TEST", "1d", "2021")
+    load_yfinance_data("TEST", "1d", "2020-2021")
+    load_yfinance_data("TEST", "1d", "60d")
+
+    assert calls[0]["start"] == "2021-01-01"
+    assert calls[0]["end"] == "2022-01-01"
+    assert "period" not in calls[0]
+    assert calls[1]["start"] == "2020-01-01"
+    assert calls[1]["end"] == "2022-01-01"
+    assert calls[2]["period"] == "60d"
+    assert "start" not in calls[2]
+    assert "end" not in calls[2]
 
 
 def test_unsupported_local_period_rejected():

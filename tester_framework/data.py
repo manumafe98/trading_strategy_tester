@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from functools import lru_cache
-from datetime import time
+from datetime import date, time
 from pathlib import Path
+import re
 
 import pandas as pd
 
@@ -10,7 +11,7 @@ from .models import AssetConfig
 from .settings import ROOT, TIMEFRAMES
 
 
-__all__ = ["load_data", "normalize_data"]
+__all__ = ["load_data", "normalize_data", "time_period_args"]
 OHLCV = ["open", "high", "low", "close", "volume"]
 RESAMPLE_AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
 LOCAL_RESAMPLE_RULES = {
@@ -23,6 +24,32 @@ LOCAL_RESAMPLE_RULES = {
     "1h": "1h",
     "1d": "1D",
 }
+CALENDAR_PERIOD = re.compile(r"^(\d{4})(?:-(\d{4}))?$")
+ROLLING_PERIOD = re.compile(r"^[1-9]\d*(d|wk|mo|y)$")
+
+
+def time_period_args(period: str, data_source: str) -> dict[str, str]:
+    if data_source not in {"yfinance", "local"}:
+        raise ValueError(f"Unknown data_source {data_source}")
+    value = str(period).strip().lower()
+    match = CALENDAR_PERIOD.fullmatch(value)
+    if match:
+        start_year = int(match.group(1))
+        end_year = int(match.group(2) or start_year)
+        if end_year < start_year:
+            raise ValueError("--time_period year range must increase")
+        try:
+            start = date(start_year, 1, 1)
+            end = date(end_year + 1, 1, 1)
+        except ValueError:
+            raise ValueError("--time_period contains an unsupported year") from None
+        return {"start": start.isoformat(), "end": end.isoformat()}
+    if data_source == "yfinance" and (value in {"ytd", "max"} or ROLLING_PERIOD.fullmatch(value)):
+        return {"period": value}
+    if data_source == "local" and (value == "max" or re.fullmatch(r"[1-9]\d*(d|mo|y)", value)):
+        return {"period": value}
+    supported = "Nd, Nwk, Nmo, Ny, ytd, max" if data_source == "yfinance" else "Nd, Nmo, Ny, max"
+    raise ValueError(f"--time_period for {data_source} must use {supported}, YYYY, or YYYY-YYYY")
 
 
 def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
@@ -95,8 +122,9 @@ def load_yfinance_data(ticker: str, timeframe: str, period: str) -> pd.DataFrame
     if timeframe not in TIMEFRAMES:
         raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
     base_interval, resample_rule = TIMEFRAMES[timeframe]
+    period_args = time_period_args(period, "yfinance")
     try:
-        df = yf.Ticker(ticker).history(period=period, interval=base_interval, auto_adjust=False, actions=False)
+        df = yf.Ticker(ticker).history(interval=base_interval, auto_adjust=False, actions=False, **period_args)
     except Exception as exc:
         raise RuntimeError(f"Failed to download {ticker} {timeframe} {period} from yfinance: {exc}") from exc
     if df.empty:
@@ -201,7 +229,12 @@ def read_local_csv(path: Path, session_timezone: str = "UTC", session_start: str
 
 
 def filter_local_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
-    value = str(period).strip().lower()
+    period_args = time_period_args(period, "local")
+    if "start" in period_args:
+        start = pd.Timestamp(period_args["start"])
+        end = pd.Timestamp(period_args["end"])
+        return df[(df.index >= start) & (df.index < end)]
+    value = period_args["period"]
     if value == "max":
         return df
     if value.endswith("d") and value[:-1].isdigit():
@@ -210,7 +243,5 @@ def filter_local_period(df: pd.DataFrame, period: str) -> pd.DataFrame:
         delta = pd.DateOffset(months=int(value[:-2]))
     elif value.endswith("y") and value[:-1].isdigit():
         delta = pd.DateOffset(years=int(value[:-1]))
-    else:
-        raise ValueError("Local data only supports --time_period like 60d, 6mo, 1y or max")
     latest = df.index.max()
     return df[df.index >= latest - delta]

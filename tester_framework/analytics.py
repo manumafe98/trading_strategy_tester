@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import pickle
 from statistics import mean, median
+import zlib
 
 import pandas as pd
 
@@ -10,6 +12,14 @@ from .models import ExitReason, Side
 BREAKEVEN_TOLERANCE = 1e-9
 WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
+
+
+def encode_analytics(value: dict) -> bytes:
+    return zlib.compress(pickle.dumps(value, protocol=pickle.HIGHEST_PROTOCOL), level=1)
+
+
+def decode_analytics(value: dict | bytes) -> dict:
+    return pickle.loads(zlib.decompress(value)) if isinstance(value, bytes) else value
 
 
 def classify_outcome(realized_r: float) -> str:

@@ -2,22 +2,18 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-import pandas as pd
-
 from .models import AssetConfig
 from .sessions import SessionSpec
 
 
-class VariantTask(TypedDict):
+class VariantBatchTask(TypedDict):
     strategy: str
     data_cache: tuple[str, str, tuple[str, ...]]
-    signals: pd.DataFrame
+    variants: tuple[tuple[float, str], ...]
     asset: str
     asset_cfg: AssetConfig
     timeframe: str
     execution_timeframe: str
-    risk_reward_ratio: float
-    exit_mode: str
     operation: str
     risk_pct: float
     capital: float
@@ -25,5 +21,7 @@ class VariantTask(TypedDict):
     time_period: str
     data_source: str
     max_trades: int | None
-    trade_html: bool
+    trade_html: int | None
     session: SessionSpec | None
+    days: tuple[int, ...]
+    months: tuple[int, ...]

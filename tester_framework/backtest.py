@@ -192,7 +192,8 @@ def finalize_trade(trade: dict, exits: list[dict]) -> dict:
 
 def _prepare_trade(
     signal: pd.Series,
-    data: pd.DataFrame,
+    entry_open: float,
+    entry_time,
     asset_cfg: AssetConfig,
     current_net: float,
     risk_pct: float,
@@ -207,7 +208,7 @@ def _prepare_trade(
 ) -> dict | None:
     """Validate a signal and build the trade record, or return None if it should be discarded."""
     side = Side(signal["side"])
-    raw_entry = float(signal["entry"] if close_entry else data.iloc[entry_i]["open"])
+    raw_entry = float(signal["entry"] if close_entry else entry_open)
     stop = float(signal["stop"])
     if not math.isfinite(raw_entry) or not math.isfinite(stop):
         return None
@@ -240,7 +241,7 @@ def _prepare_trade(
         "exit_mode": exit_mode,
         "signal_time": signal["time"],
         "entry_i": entry_i,
-        "entry_time": data.index[entry_i],
+        "entry_time": entry_time,
         "side": side,
         "raw_entry": raw_entry,
         "net_entry": net_entry,
@@ -283,8 +284,7 @@ def _update_peak_r(trade: dict, exits: list[dict], remaining_qty: float, price: 
     trade["mfe_r"] = max(float(trade["mfe_r"]), realized + remaining_qty / trade["qty"] * open_r)
 
 
-def _bar_path(bar: pd.Series, side: Side) -> tuple[float, float, float, float]:
-    opened, high, low, close = map(float, (bar["open"], bar["high"], bar["low"], bar["close"]))
+def _bar_path(opened: float, high: float, low: float, close: float, side: Side) -> tuple[float, float, float, float]:
     high_distance = abs(high - opened)
     low_distance = abs(opened - low)
     if high_distance < low_distance or (high_distance == low_distance and side == Side.SHORT):
@@ -308,6 +308,8 @@ def run_backtest(
     asset_cfg: AssetConfig,
     execution_timeframe: str | None = None,
     max_trades: int | None = None,
+    days: tuple[int, ...] = (),
+    months: tuple[int, ...] = (),
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -321,25 +323,30 @@ def run_backtest(
         raise ValueError("--capital must be finite and positive")
     if max_trades is not None and max_trades < 1:
         raise ValueError("--max_trades must be a positive integer")
+    validate_calendar_filters(days, months)
     if data.empty:
         raise ValueError(f"No data for {asset} {timeframe}")
     missing_data = {"open", "high", "low", "close"} - set(data.columns)
     if missing_data:
         raise ValueError(f"Data missing columns: {', '.join(sorted(missing_data))}")
-    prices = data[["open", "high", "low", "close"]]
-    if not np.isfinite(prices.to_numpy(dtype=float)).all():
+    opens, highs, lows, closes = (
+        data[column].to_numpy(dtype=float, copy=False) for column in ("open", "high", "low", "close")
+    )
+    if not all(np.isfinite(values).all() for values in (opens, highs, lows, closes)):
         raise ValueError("Data prices must be finite")
-    if ((prices["high"] < prices[["open", "low", "close"]].max(axis=1)) | (
-        prices["low"] > prices[["open", "high", "close"]].min(axis=1)
-    )).any():
+    if any((highs < values).any() for values in (opens, lows, closes)) or any(
+        (lows > values).any() for values in (opens, highs, closes)
+    ):
         raise ValueError("Data contains invalid OHLC ranges")
     annualization_timeframe = execution_timeframe or timeframe
     if annualization_timeframe not in asset_cfg.bars_per_year:
         raise ValueError(f"Missing bars_per_year for {asset} {annualization_timeframe}")
 
     bar_count = len(data)
-    bar_gross_equity = np.full(bar_count, capital, dtype=float)
-    bar_net_equity = np.full(bar_count, capital, dtype=float)
+    gross_curve = np.full(bar_count + 1, capital, dtype=float)
+    net_curve = np.full(bar_count + 1, capital, dtype=float) if with_costs else gross_curve
+    bar_gross_equity = gross_curve[1:]
+    bar_net_equity = net_curve[1:]
     current_gross = capital
     current_net = capital
     last_bar_idx = 0
@@ -347,6 +354,8 @@ def run_backtest(
     discarded_signals = 0
     unresolved_trades = 0
     busy_until = -1
+    day_filter = set(days)
+    month_filter = set(months)
     try:
         signals = normalize_signals(signals)
     except ValueError as exc:
@@ -367,6 +376,12 @@ def run_backtest(
         if close_entry and data.index[entry_i] != signal["time"]:
             discarded_signals += 1
             continue
+        entry_time = pd.Timestamp(data.index[entry_i])
+        if (day_filter and entry_time.weekday() not in day_filter) or (
+            month_filter and entry_time.month not in month_filter
+        ):
+            discarded_signals += 1
+            continue
 
         # Fill flat equity for the period before this potential trade.
         if last_bar_idx < entry_i:
@@ -375,7 +390,7 @@ def run_backtest(
             last_bar_idx = entry_i
 
         trade = _prepare_trade(
-            signal, data, asset_cfg, current_net, risk_pct, risk_reward_ratio, exit_mode,
+            signal, opens[entry_i], data.index[entry_i], asset_cfg, current_net, risk_pct, risk_reward_ratio, exit_mode,
             asset, timeframe, strategy, entry_i, close_entry, with_costs,
         )
         if trade is None:
@@ -396,8 +411,7 @@ def run_backtest(
 
         resolved = False
         for i in range(start_i, bar_count):
-            bar = data.iloc[i]
-            path = _bar_path(bar, side)
+            path = _bar_path(opens[i], highs[i], lows[i], closes[i], side)
             opened = path[0]
 
             # Orders crossed between the previous close and this open fill at the open.
@@ -509,20 +523,31 @@ def run_backtest(
         bar_net_equity[last_bar_idx:bar_count] = current_net
 
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
-    gross_curve = np.concatenate(([capital], bar_gross_equity))
-    net_curve = np.concatenate(([capital], bar_net_equity))
     return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
 
 
+def validate_calendar_filters(days: tuple[int, ...], months: tuple[int, ...]) -> None:
+    if not isinstance(days, tuple) or any(type(day) is not int or day < 0 or day > 6 for day in days):
+        raise ValueError("--days must contain weekday values from Monday through Sunday")
+    if not isinstance(months, tuple) or any(type(month) is not int or month < 1 or month > 12 for month in months):
+        raise ValueError("--months must contain month values from January through December")
+
+
 def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
-    curve = pd.Series(equity_curve, dtype="float64")
-    returns = curve.pct_change(fill_method=None).dropna()
-    total_return = (curve.iloc[-1] / curve.iloc[0] - 1) * 100
-    drawdown = (curve / curve.cummax() - 1) * 100
-    max_dd = abs(float(drawdown.min()))
+    curve = np.asarray(equity_curve, dtype="float64")
+    scratch = np.empty_like(curve)
+    np.maximum.accumulate(curve, out=scratch)
+    np.divide(curve, scratch, out=scratch)
+    scratch -= 1
+    max_dd = abs(float(np.nanmin(scratch)) * 100)
+    total_return = (curve[-1] / curve[0] - 1) * 100
     sharpe = float("nan")
-    if (curve > 0).all() and len(returns) > 1 and np.isfinite(returns).all():
-        std = float(returns.std())
+    returns = scratch[:-1]
+    with np.errstate(divide="ignore", invalid="ignore"):
+        np.divide(curve[1:], curve[:-1], out=returns)
+    returns -= 1
+    if curve.min() > 0 and len(returns) > 1 and np.isfinite(returns).all():
+        std = float(returns.std(ddof=1))
         if math.isfinite(std) and std > 0:
             sharpe = math.sqrt(bars_per_year) * float(returns.mean() / std)
     return {
@@ -545,7 +570,7 @@ def make_metrics(
     unresolved_trades: int = 0,
 ) -> dict:
     gross = _curve_metrics(gross_equity_curve, bars_per_year)
-    net = _curve_metrics(net_equity_curve, bars_per_year)
+    net = _curve_metrics(net_equity_curve, bars_per_year) if with_costs else gross.copy()
     return {
         "Strategy": strategy,
         "Asset": asset,

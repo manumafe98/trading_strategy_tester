@@ -12,15 +12,15 @@ from time import perf_counter
 import pandas as pd
 
 from .analytics import format_duration
-from .backtest import result_columns, risk_for, risk_reward_ratios
-from .cli import RunConfig
-from .data import load_data
+from .backtest import result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
+from .cli import RunConfig, days_arg, months_arg
+from .data import load_data, read_local_csv, time_period_args
 from .reports import format_metric, reset_output_dirs, write_results_html
-from .runner import cache_data, run_variant
+from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
 from .settings import DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
-from .types import VariantTask
+from .types import VariantBatchTask
 from .utils import csv_items
 
 
@@ -31,13 +31,12 @@ EXIT_MODES = ("fixed", "trailing", "partial")
 WorkerState = tuple[str, float] | None
 
 
-def variant_label(task: VariantTask) -> str:
+def variant_label(task: VariantBatchTask) -> str:
     session = session_label(task["session"])
     parts = [task["strategy"], task["asset"], task["timeframe"]]
     if session:
         parts.append(session)
-    parts.append(f'{task["risk_reward_ratio"]:g}R')
-    parts.append(task["exit_mode"])
+    parts.append(f'{len(task["variants"])} variants')
     return " ".join(parts)
 
 
@@ -190,6 +189,24 @@ def worker_count(requested: int | None, task_count: int) -> int:
     return min(requested or cpus, cpus, task_count)
 
 
+def trade_html_count(value: str) -> int:
+    try:
+        count = int(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("--trade_html must be a non-negative integer") from None
+    if count < 0:
+        raise argparse.ArgumentTypeError("--trade_html must be a non-negative integer")
+    return count
+
+
+def time_period_value(value: str) -> str:
+    try:
+        time_period_args(value, "yfinance")
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from None
+    return str(value).strip().lower()
+
+
 def validate_required_flags(strategies: dict[str, object], sessions: list[SessionSpec]) -> None:
     errors = []
     available = {"sessions": sessions}
@@ -213,6 +230,8 @@ def run(config: RunConfig) -> None:
     asset_configs = load_assets()
     if not config.strategies:
         raise ValueError("--strategies is required")
+    time_period_args(config.time_period, config.data_source)
+    validate_calendar_filters(config.days, config.months)
     strategies = {name: load_strategy(name) for name in config.strategies}
     session_specs = parse_sessions(config.sessions)
     session_variants = session_specs or [None]
@@ -223,10 +242,15 @@ def run(config: RunConfig) -> None:
     variants = {ratio: exit_mode_variants(config.exit_mode, ratio) for ratio in ratios}
     if not any(variants.values()):
         raise ValueError("No exit modes are compatible with the requested risk/reward ratios")
+    variant_pairs = tuple((ratio, mode) for ratio in ratios for mode in variants[ratio])
     if not math.isfinite(config.capital) or config.capital <= 0:
         raise ValueError("--capital must be finite and positive")
     if config.max_trades is not None and config.max_trades < 1:
         raise ValueError("--max_trades must be a positive integer")
+    if config.trade_html is not None and (
+        isinstance(config.trade_html, bool) or not isinstance(config.trade_html, int) or config.trade_html < 0
+    ):
+        raise ValueError("--trade_html must be a non-negative integer")
     for asset in assets:
         if asset not in asset_configs:
             raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
@@ -247,9 +271,10 @@ def run(config: RunConfig) -> None:
         * len(assets)
         * len(timeframes)
         * len(session_variants)
-        * sum(len(variants[ratio]) for ratio in ratios)
+        * len(variant_pairs)
     )
-    workers = worker_count(config.workers, task_count)
+    batch_count = len(strategies) * len(assets) * len(timeframes) * len(session_variants)
+    workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk) for asset in assets}
     rows = []
     reset_output_dirs()
@@ -259,10 +284,10 @@ def run(config: RunConfig) -> None:
     status.start()
 
     try:
-        with TemporaryDirectory(prefix="tester_framework_") as cache_dir:
-            tasks: list[VariantTask] = []
+        with TemporaryDirectory(prefix="tester_framework_") as cache_dir, ProcessPoolExecutor(max_workers=workers) as executor:
             cache_id = 0
             for asset in assets:
+                tasks: list[VariantBatchTask] = []
                 asset_cfg = asset_configs[asset]
                 risk_pct = risks[asset]
                 timeframe_groups = {}
@@ -277,48 +302,35 @@ def run(config: RunConfig) -> None:
                     data = load_data(asset, asset_cfg, data_timeframe, config.time_period, config.data_source)
                     data_cache = cache_data(data, cache_dir, cache_id)
                     cache_id += 1
-                    for strategy_name, strategy, timeframe in strategy_timeframes:
+                    for strategy_name, _strategy, timeframe in strategy_timeframes:
                         for session in session_variants:
-                            detail = f"{strategy_name} {asset} {timeframe}"
-                            session_name = session_label(session)
-                            if session_name:
-                                detail = f"{detail} {session_name}"
-                            status.update(phase="Generating signals", detail=detail, total=task_count)
-                            signals = strategy.generate_signals(
-                                data,
-                                asset=asset,
-                                timeframe=timeframe,
-                                params={"tick_size": asset_cfg.tick_size, "session": session},
+                            tasks.append(
+                                VariantBatchTask(
+                                    strategy=strategy_name,
+                                    data_cache=data_cache,
+                                    variants=variant_pairs,
+                                    asset=asset,
+                                    asset_cfg=asset_cfg,
+                                    timeframe=timeframe,
+                                    execution_timeframe=data_timeframe,
+                                    operation=config.operation,
+                                    risk_pct=risk_pct,
+                                    capital=config.capital,
+                                    with_costs=config.with_costs,
+                                    time_period=config.time_period,
+                                    data_source=config.data_source,
+                                    max_trades=config.max_trades,
+                                    trade_html=config.trade_html,
+                                    session=session,
+                                    days=config.days,
+                                    months=config.months,
+                                )
                             )
-                            for risk_reward_ratio in ratios:
-                                for exit_mode in variants[risk_reward_ratio]:
-                                    tasks.append(
-                                        VariantTask(
-                                            strategy=strategy_name,
-                                            data_cache=data_cache,
-                                            signals=signals,
-                                            asset=asset,
-                                            asset_cfg=asset_cfg,
-                                            timeframe=timeframe,
-                                            execution_timeframe=data_timeframe,
-                                            risk_reward_ratio=risk_reward_ratio,
-                                            exit_mode=exit_mode,
-                                            operation=config.operation,
-                                            risk_pct=risk_pct,
-                                            capital=config.capital,
-                                            with_costs=config.with_costs,
-                                            time_period=config.time_period,
-                                            data_source=config.data_source,
-                                            max_trades=config.max_trades,
-                                            trade_html=config.trade_html,
-                                            session=session,
-                                        )
-                                    )
                     del data
 
-            status.update(phase="Backtesting", detail=f"{workers} workers", completed=0, total=task_count)
-            status.pause()
-            with ProcessPoolExecutor(max_workers=workers) as executor:
+                if config.data_source == "local":
+                    read_local_csv.cache_clear()
+                status.update(phase="Backtesting", detail=f"{workers} workers | {asset}", total=task_count)
                 pending_tasks = iter(tasks)
                 active: dict[object, int] = {}
 
@@ -329,28 +341,24 @@ def run(config: RunConfig) -> None:
                         status.set_worker(slot, None)
                         return
                     started_at = perf_counter()
-                    future = executor.submit(run_variant, task)
+                    future = executor.submit(run_variants, task)
                     active[future] = slot
                     status.set_worker(slot, variant_label(task), started_at)
 
                 # ponytail: keep one task per slot so the dashboard shows real work, not queued futures.
                 for slot in range(workers):
                     submit(slot)
-                status.render()
                 try:
                     while active:
-                        done, _ = wait(tuple(active), timeout=1, return_when=FIRST_COMPLETED)
-                        if not done:
-                            status.render()
-                            continue
+                        done, _ = wait(tuple(active), return_when=FIRST_COMPLETED)
                         for future in done:
                             slot = active.pop(future)
-                            rows.append(future.result())
+                            rows.extend(future.result())
                             status.update(completed=len(rows))
                             submit(slot)
-                        status.render()
-                except Exception:
-                    executor.shutdown(wait=False, cancel_futures=True)
+                except BaseException:
+                    for future in active:
+                        future.cancel()
                     raise
 
         status.clear_workers()
@@ -384,8 +392,15 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
     p.add_argument("--sessions", help="comma list of asia, london, ny, all, none, or custom ranges like ny=09:30-12:00")
-    p.add_argument("--time_period", default="60d")
+    p.add_argument(
+        "--time_period",
+        type=time_period_value,
+        default="60d",
+        help="rolling period, calendar year, or inclusive year range such as 2020-2021",
+    )
     p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
+    p.add_argument("--days", type=days_arg, default=(), help="comma list of weekdays, e.g. monday,wed")
+    p.add_argument("--months", type=months_arg, default=(), help="comma list of months, e.g. january,sep")
     p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
     p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
     p.add_argument("--exit_mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
@@ -394,7 +409,12 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--with_costs", action="store_true")
     p.add_argument("--workers", type=int, help="parallel variant workers, capped at logical CPU count")
     p.add_argument("--max_trades", type=int, default=None, help="diagnostic cap on first N closed trades per variant")
-    p.add_argument("--no_trade_html", action="store_true", help="disable per-trade HTML charts")
+    p.add_argument(
+        "--trade_html",
+        type=trade_html_count,
+        metavar="N",
+        help="trade charts per variant; 0 disables them, omitted writes all",
+    )
     return p
 
 
@@ -419,7 +439,9 @@ def main() -> None:
             with_costs=args.with_costs,
             workers=args.workers,
             max_trades=args.max_trades,
-            trade_html=not args.no_trade_html,
+            trade_html=args.trade_html,
+            days=args.days,
+            months=args.months,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

@@ -121,9 +121,9 @@ def local_index(index, timezone: str) -> pd.DatetimeIndex:
 
 
 def add_session_columns(df: pd.DataFrame, session: SessionSpec) -> pd.DataFrame:
-    work = df.copy()
+    work = df.copy(deep=False)
     local = local_index(work.index, session["timezone"])
-    work["_session_date"] = local.date
+    work["_session_date"] = local.tz_localize(None).normalize()
     work["_session_minute"] = local.hour * 60 + local.minute
     return work
 

@@ -5,7 +5,14 @@ from types import SimpleNamespace
 import pandas as pd
 import pytest
 
-from tester_framework.analytics import analyze_trades, classify_outcome, strategy_metrics, trade_stats
+from tester_framework.analytics import (
+    analyze_trades,
+    classify_outcome,
+    decode_analytics,
+    encode_analytics,
+    strategy_metrics,
+    trade_stats,
+)
 from tester_framework.models import Side
 
 
@@ -13,6 +20,13 @@ def test_classify_outcome():
     assert classify_outcome(1e-10) == "breakeven"
     assert classify_outcome(1.0) == "win"
     assert classify_outcome(-1.0) == "loss"
+
+
+def test_analytics_round_trip_uses_compressed_bytes():
+    analytics = {"managed": {"trades": [{"side": Side.LONG, "realized_r": 1.0}] * 10}}
+    encoded = encode_analytics(analytics)
+    assert isinstance(encoded, bytes)
+    assert decode_analytics(encoded) == analytics
 
 
 def test_trade_stats_counts_and_expectancy():

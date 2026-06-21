@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from strategy.utils.orb import (
@@ -26,6 +27,8 @@ def generate_signals(df, asset, timeframe, params):
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     work = add_session_columns(df, session)
+    minute = work["_session_minute"]
+    work = work[(minute >= start_minute) & (minute < end_minute)]
     rows = []
 
     for day, day_data in work.groupby("_session_date", sort=True):
@@ -37,37 +40,30 @@ def generate_signals(df, asset, timeframe, params):
         orb_high = float(orb["high"].max())
         orb_low = float(orb["low"].min())
         candidates = day_data[(minute >= start_minute + orb_minutes) & (minute < end_minute)]
-
-        for time, bar in candidates.iterrows():
-            close = float(bar["close"])
-            if close > orb_high:
-                rows.append(
-                    {
-                        "time": time,
-                        "side": "long",
-                        "stop": round(float(bar["low"]) - tick_size, places),
-                        "entry": close,
-                        "reason": "close_break_above_orb",
-                        "plot_start_time": session_start_utc(day, session),
-                        "orb_high": orb_high,
-                        "orb_low": orb_low,
-                    }
-                )
-                break
-            if close < orb_low:
-                rows.append(
-                    {
-                        "time": time,
-                        "side": "short",
-                        "stop": round(float(bar["high"]) + tick_size, places),
-                        "entry": close,
-                        "reason": "close_break_below_orb",
-                        "plot_start_time": session_start_utc(day, session),
-                        "orb_high": orb_high,
-                        "orb_low": orb_low,
-                    }
-                )
-                break
+        closes = candidates["close"].to_numpy(dtype=float)
+        breakouts = np.flatnonzero((closes > orb_high) | (closes < orb_low))
+        if not len(breakouts):
+            continue
+        pos = int(breakouts[0])
+        close = float(closes[pos])
+        is_long = close > orb_high
+        rows.append(
+            {
+                "time": candidates.index[pos],
+                "side": "long" if is_long else "short",
+                "stop": round(
+                    float(candidates["low"].to_numpy(dtype=float)[pos]) - tick_size
+                    if is_long
+                    else float(candidates["high"].to_numpy(dtype=float)[pos]) + tick_size,
+                    places,
+                ),
+                "entry": close,
+                "reason": "close_break_above_orb" if is_long else "close_break_below_orb",
+                "plot_start_time": session_start_utc(day, session),
+                "orb_high": orb_high,
+                "orb_low": orb_low,
+            }
+        )
 
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS).sort_values("time") if rows else pd.DataFrame(columns=OUTPUT_COLUMNS)
 

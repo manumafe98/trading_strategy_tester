@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 
 from strategy.utils.fvg import find_qualifying_fvg, track_fvgs_to_bar
@@ -40,6 +41,8 @@ def generate_signals(df, asset, timeframe, params):
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     work = add_session_columns(df, session)
+    minute = work["_session_minute"]
+    work = work[(minute >= start_minute) & (minute < end_minute)]
     rows = []
 
     for day, day_data in work.groupby("_session_date", sort=True):
@@ -57,25 +60,14 @@ def generate_signals(df, asset, timeframe, params):
         day_index = day_data.index
         candidate_positions = day_data.index.get_indexer(candidates.index)
 
-        breakout_idx = None
-        breakout_dir = 0
-        breakout_close = 0.0
-        for pos in candidate_positions:
-            bar = day_data.iloc[pos]
-            close = float(bar["close"])
-            if close > orb_high:
-                breakout_idx = pos
-                breakout_dir = 1
-                breakout_close = close
-                break
-            if close < orb_low:
-                breakout_idx = pos
-                breakout_dir = -1
-                breakout_close = close
-                break
-
-        if breakout_idx is None:
+        closes = day_data["close"].to_numpy(dtype=float)
+        candidate_closes = closes[candidate_positions]
+        breakouts = np.flatnonzero((candidate_closes > orb_high) | (candidate_closes < orb_low))
+        if not len(breakouts):
             continue
+        breakout_idx = int(candidate_positions[breakouts[0]])
+        breakout_close = float(closes[breakout_idx])
+        breakout_dir = 1 if breakout_close > orb_high else -1
 
         fvgs = track_fvgs_to_bar(
             day_data,
