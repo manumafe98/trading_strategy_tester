@@ -10,7 +10,7 @@ from tester_framework.data import load_local_data, load_yfinance_data, normalize
 from tester_framework.models import AssetConfig
 
 
-def test_timestamp_local_resample():
+def test_local_timestamp_csv_resamples_within_period_as_naive_utc():
     with TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         forex_dir = data_dir / "forex" / "TEST"
@@ -36,7 +36,7 @@ def test_timestamp_local_resample():
         assert getattr(local.index, "tz", None) is None
 
 
-def test_ts_event_local_parsing():
+def test_continuous_futures_use_contract_with_most_previous_session_volume():
     with TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         futures_dir = data_dir / "futures" / "FUT"
@@ -153,7 +153,7 @@ def test_unsupported_local_period_rejected():
             "ts_event,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,2,0,1.5,1\n",
             encoding="utf-8",
         )
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="--time_period for local must use"):
             load_local_data("FUT", "1m", "60x", data_dir=data_dir)
 
 

@@ -118,7 +118,7 @@ def test_no_signal_outside_trade_session():
     assert signals.empty
 
 
-def test_tick_size_uses_asset_config():
+def test_stop_offset_uses_params_tick_size():
     signals = generate_signals(make_combined_day(bull=True, with_ext=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]

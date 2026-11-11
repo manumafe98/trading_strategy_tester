@@ -630,39 +630,28 @@ def test_nonpositive_equity_has_no_sharpe():
     assert math.isnan(_curve_metrics(np.array([100.0, 0.0, 100.0]), 252)["Sharpe Ratio"])
 
 
-def test_curve_metrics_match_pandas_reference():
-    curve = np.array([10_000.0, 10_100.0, 9_950.0, 10_200.0])
-    series = pd.Series(curve)
-    returns = series.pct_change(fill_method=None).dropna()
-    drawdown = (series / series.cummax() - 1) * 100
-    total_return = (curve[-1] / curve[0] - 1) * 100
-    max_dd = abs(float(drawdown.min()))
-    sharpe = math.sqrt(252) * float(returns.mean() / returns.std())
-
-    assert _curve_metrics(curve, 252) == {
-        "Return": round(total_return, 2),
-        "Max DD": round(max_dd, 2),
-        "Sharpe Ratio": round(sharpe, 2),
-        "Return / DD": round(total_return / max_dd, 2),
+def test_curve_metrics_worked_example():
+    # Returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
+    # Peak 110 -> trough 99 is a 10% drawdown; 100 -> 121 is a 21% return.
+    assert _curve_metrics(np.array([100.0, 110.0, 99.0, 121.0]), 4) == {
+        "Return": 21.0,
+        "Max DD": 10.0,
+        "Sharpe Ratio": 0.91,
+        "Return / DD": 2.1,
     }
 
 
-def test_make_metrics_skips_duplicate_net_calculation_without_costs(monkeypatch):
-    calls = []
-    monkeypatch.setattr(
-        backtest,
-        "_curve_metrics",
-        lambda curve, _bars: calls.append(curve) or {"Return": 0, "Max DD": 0, "Sharpe Ratio": 0, "Return / DD": 0},
-    )
-    curve = np.array([10_000.0, 10_100.0])
+def test_make_metrics_reports_net_curve_only_with_costs():
+    gross = np.array([100.0, 110.0, 99.0, 121.0])
+    net = np.array([100.0, 105.0])
 
-    metrics = backtest.make_metrics("TEST", "1h", "test", curve, curve, False, 252)
-    assert len(calls) == 1
-    assert metrics["Gross"] == metrics["Net"]
+    without_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, False, 4)
+    with_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, True, 4)
 
-    calls.clear()
-    backtest.make_metrics("TEST", "1h", "test", curve, curve, True, 252)
-    assert len(calls) == 2
+    assert without_costs["Net"] == without_costs["Gross"]
+    assert without_costs["Return"] == 21.0
+    assert with_costs["Gross"]["Return"] == 21.0
+    assert with_costs["Net"]["Return"] == with_costs["Return"] == 5.0
 
 
 def test_sharpe_uses_execution_timeframe(test_asset_cfg):
@@ -682,7 +671,7 @@ def test_sharpe_uses_execution_timeframe(test_asset_cfg):
     assert five_minute["Sharpe Ratio"] == pytest.approx(hourly["Sharpe Ratio"] * 2, abs=0.02)
 
 
-def test_result_columns_include_long_for_all():
+def test_result_columns_follow_operation_and_session():
     assert "Strategy" in result_columns("all")
     assert "Session" in result_columns("all", include_session=True)
     assert "Long" in result_columns("all")

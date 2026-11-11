@@ -52,7 +52,7 @@ def test_no_fvg_when_overlapping():
     assert len(fvgs) == 0
 
 
-def test_fvg_requires_min_two_bars():
+def test_fvg_requires_three_bars():
     bars = [
         {"open": 100, "high": 100, "low": 99, "close": 100, "volume": 0},
         {"open": 100, "high": 101, "low": 100, "close": 101, "volume": 0},
