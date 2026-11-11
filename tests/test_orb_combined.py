@@ -61,7 +61,8 @@ def test_bull_combined_signal_with_ext():
     assert row["side"] == "long"
     assert row["entry"] == 103.0
     assert row["reason"] == "close_break_above_orb_fvg_ext_cover"
-    assert row["stop"] == row["fvg_ext"] - 0.25
+    assert row["stop"] == 99.25
+    assert row["fvg_ext"] == 99.5
     assert pd.notna(row["fvg_ext"])
     assert "fvg_ext_time" in row.index
     assert pd.notna(row["fvg_ext_time"])
@@ -74,7 +75,8 @@ def test_bear_combined_signal_with_ext():
     assert row["side"] == "short"
     assert row["entry"] == 97.0
     assert row["reason"] == "close_break_below_orb_fvg_ext_cover"
-    assert row["stop"] == row["fvg_ext"] + 0.25
+    assert row["stop"] == 100.75
+    assert row["fvg_ext"] == 100.5
 
 
 def test_combined_accepts_bull_extension_above_gap():
@@ -118,7 +120,7 @@ def test_tick_size_uses_asset_config():
     signals = generate_signals(make_combined_day(bull=True, with_ext=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
-    assert abs(row["stop"] - (row["fvg_ext"] - 0.1)) < 1e-9
+    assert row["stop"] == 99.4
 
 
 def test_empty_data():

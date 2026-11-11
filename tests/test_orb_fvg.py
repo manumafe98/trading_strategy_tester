@@ -52,7 +52,8 @@ def test_bull_fvg_signal():
     assert row["side"] == "long"
     assert row["entry"] == 103.0
     assert row["reason"] == "close_break_above_orb_fvg_cover"
-    assert row["stop"] == row["fvg_bottom"] - 0.25
+    assert row["stop"] == 100.25
+    assert row["fvg_bottom"] == 100.5
     assert "fvg_top" in row.index
     assert "fvg_bottom" in row.index
     assert "fvg_form_time" in row.index
@@ -66,7 +67,8 @@ def test_bear_fvg_signal():
     assert row["side"] == "short"
     assert row["entry"] == 97.0
     assert row["reason"] == "close_break_below_orb_fvg_cover"
-    assert row["stop"] == row["fvg_top"] + 0.25
+    assert row["stop"] == 99.75
+    assert row["fvg_top"] == 99.5
 
 
 def test_no_signal_without_fvg():
@@ -85,7 +87,7 @@ def test_tick_size_uses_asset_config():
     signals = generate_signals(make_fvg_day(bull=True), asset="MGC", timeframe="5m", params={"tick_size": 0.1, "session": SESSION})
     assert len(signals) == 1
     row = signals.iloc[0]
-    assert abs(row["stop"] - (row["fvg_bottom"] - 0.1)) < 1e-9
+    assert row["stop"] == 100.4
 
 
 def test_empty_data():
