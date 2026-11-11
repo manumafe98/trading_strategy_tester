@@ -60,9 +60,8 @@ def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     missing = [c for c in OHLCV if c not in df]
     if missing:
         raise ValueError(f"Data missing columns: {', '.join(missing)}")
-    idx = pd.to_datetime(df.index)
-    if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_convert(None)
+    # Naive stamps are UTC; offset stamps (even mixed across DST) convert to naive UTC.
+    idx = pd.to_datetime(df.index, utc=True).tz_convert(None)
     df = df[OHLCV]
     df.index = idx
     df.index.name = "time"
