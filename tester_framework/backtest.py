@@ -365,7 +365,7 @@ def run_backtest(
     if operation == "short_only":
         signals = signals[signals["side"] == Side.SHORT]
 
-    # ponytail: independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
+    # Independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
     for _, signal in signals.iterrows():
         signal_entry = signal.get("entry")
         close_entry = pd.notna(signal_entry)
@@ -499,7 +499,7 @@ def run_backtest(
             bar_net_equity[i] = current_net + realized_net + net_mtm
 
         if not resolved:
-            # ponytail: incomplete trades are discarded; add partial/open-trade accounting only if research needs it.
+            # Incomplete trades are discarded; add partial/open-trade accounting only if research needs it.
             unresolved_trades += 1
             bar_gross_equity[last_bar_idx:bar_count] = current_gross
             bar_net_equity[last_bar_idx:bar_count] = current_net

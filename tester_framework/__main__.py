@@ -76,7 +76,7 @@ class StatusDisplay:
         self.total = 0
         self.workers: list[WorkerState] = [None] * workers
         self._stream = sys.stderr
-        # ponytail: redraw only in a real terminal; pipes keep the old final-only output.
+        # Redraw only in a real terminal; pipes keep the old final-only output.
         self._enabled = self._stream.isatty()
         self._line_count = 0
         self._lock = Lock()
@@ -345,7 +345,7 @@ def run(config: RunConfig) -> None:
                     active[future] = slot
                     status.set_worker(slot, variant_label(task), started_at)
 
-                # ponytail: keep one task per slot so the dashboard shows real work, not queued futures.
+                # Keep one task per slot so the dashboard shows real work, not queued futures.
                 for slot in range(workers):
                     submit(slot)
                 try:

@@ -75,7 +75,7 @@ def _run_variant(
                 charted += 1
                 trade["chart_path"] = write_trade_html(data, trade, strategy)
                 if charted % 100 == 0:
-                    # ponytail: Plotly retains cyclic objects long enough to exhaust parallel Windows workers.
+                    # Plotly retains cyclic objects long enough to exhaust parallel Windows workers.
                     gc.collect()
             else:
                 trade["chart_path"] = None

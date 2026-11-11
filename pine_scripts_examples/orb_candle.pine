@@ -1,0 +1,314 @@
+//@version=6
+strategy("ORB Candle [NY]", overlay=true,
+         pyramiding=0,
+         process_orders_on_close=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=1,
+         initial_capital=10000,
+         currency=currency.USD,
+         margin_long=5,
+         margin_short=5,
+         max_lines_count=500,
+         max_labels_count=500)
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  INPUTS
+// ─────────────────────────────────────────────────────────────────────────────
+var string G1 = "⏱  ORB Period  ·  All times: America / New_York"
+var string G2 = "📐  Lines"
+var string G3 = "🏷  Labels"
+var string G4 = "🟦  Zone"
+var string G5 = "⏰  Trade Session"
+var string G6 = "💰  Position"
+
+// ── ORB period ────────────────────────────────────────────────────────────────
+i_orbPeriod = input.string(
+     "5-min  (9:30 – 9:35)",
+     "ORB Period",
+     options  = ["5-min  (9:30 – 9:35)", "15-min  (9:30 – 9:45)"],
+     tooltip  = "Captures the exact High / Low of the first candle of the NY session.\n• 5-min  → single 9:30–9:35 AM candle\n• 15-min → single 9:30–9:45 AM candle\nAll times are New York (America/New_York).",
+     group    = G1)
+
+// ── Lines ─────────────────────────────────────────────────────────────────────
+i_highColor = input.color(color.new(#26a69a, 0), "High Line Color", group=G2)
+i_lowColor  = input.color(color.new(#ef5350, 0), "Low Line Color",  group=G2)
+i_lWidth    = input.int  (2, "Line Width", minval=1, maxval=4,       group=G2)
+i_lStyle    = input.string("Solid", "Line Style",
+     options = ["Solid","Dashed","Dotted"],                           group=G2)
+
+// ── Labels ────────────────────────────────────────────────────────────────────
+i_showLbl   = input.bool  (true,   "Show Labels",                    group=G3)
+i_lblHText  = input.string("ORBH", "High Label Text",                group=G3)
+i_lblLText  = input.string("ORBL", "Low Label Text",                 group=G3)
+i_lblHPos   = input.string("Right","High Label H-Position",
+     options = ["Left","Center","Right"],                             group=G3)
+i_lblLPos   = input.string("Right","Low Label H-Position",
+     options = ["Left","Center","Right"],                             group=G3)
+i_lblVAlign = input.string("Middle","Label Vertical Alignment",
+     options = ["Top","Middle","Bottom"],                             group=G3)
+i_lblSize   = input.string("Small", "Label Size",
+     options = ["Tiny","Small","Normal","Large"],                     group=G3)
+
+// ── Zone ──────────────────────────────────────────────────────────────────────
+i_showZone  = input.bool(true, "Show ORB Zone",                      group=G4)
+i_zoneAlpha = input.int (90,   "Zone Transparency",
+     minval=50, maxval=99,                                            group=G4)
+
+// ── Trade Session (hardcoded 9:30–11:59 NY for deterministic behavior on futures) ──
+// Only breakouts during this window trigger trades.  Bars opening at 12:00+ are excluded.
+// To change the window, edit the inTradeSession calculation below.
+
+// ── Position ──────────────────────────────────────────────────────────────────
+i_accountSize = input.float(10000, "Account Size ($)",
+     minval=1000, step=1000,
+     tooltip = "Starting account size for fixed-fractional position sizing.",
+     group   = G6)
+
+i_riskPercent = input.float(1.0, "Risk per Trade (%)",
+     minval=0.1, maxval=100, step=0.1,
+     tooltip = "% of account size risked per trade.\nDetermines position size based on SL distance.",
+     group   = G6) / 100
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  DERIVED CONSTANTS
+// ─────────────────────────────────────────────────────────────────────────────
+NY = "America/New_York"
+
+orbEndMin = i_orbPeriod == "5-min  (9:30 – 9:35)"  ? 35  : 45
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  HELPER FUNCTIONS
+// ─────────────────────────────────────────────────────────────────────────────
+f_ls() =>
+    i_lStyle == "Dashed" ? line.style_dashed  :
+     i_lStyle == "Dotted" ? line.style_dotted : line.style_solid
+
+f_sz() =>
+    i_lblSize == "Tiny"   ? size.tiny   :
+     i_lblSize == "Normal" ? size.normal :
+     i_lblSize == "Large"  ? size.large  : size.small
+
+f_vStyle() =>
+    switch i_lblVAlign
+        "Top"    => label.style_label_down
+        "Bottom" => label.style_label_up
+        =>          label.style_label_center
+
+f_lx(pos, s, e) =>
+    switch pos
+        "Left"   => s
+        "Center" => math.round((s + e) / 2)
+        =>          e
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  CURRENT-BAR TIME  (1-minute chart required)
+// ─────────────────────────────────────────────────────────────────────────────
+nyH = hour      (time, NY)
+nyM = minute    (time, NY)
+nyD = dayofmonth(time, NY)
+
+// ORB windows
+inORBWindow = nyH == 9 and nyM >= 30 and nyM < orbEndMin
+pastORB     = (nyH == 9 and nyM >= orbEndMin) or nyH > 9
+
+// Trade session — explicit NY hour/minute check avoids session-parsing pitfalls on futures
+// Eligible: 9:30 AM through 11:59 AM New York time
+inTradeSession = (nyH == 9 and nyM >= 30) or (nyH >= 10 and nyH <= 11)
+
+// ── Timeframe guard ────────────────────────────────────────────────────────
+if timeframe.period != "1"
+    runtime.error("ORB Candle [NY] requires a 1-minute chart.\nCurrent timeframe: " + timeframe.period)
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  PERSISTENT STATE
+// ─────────────────────────────────────────────────────────────────────────────
+// --- ORB state ---
+var float orbH            = na
+var float orbL            = na
+var bool  drawn           = false
+var bool  stopped         = false
+var int   startBar        = na
+var int   sessionStartBar = na
+var line  lnH             = na
+var line  lnL             = na
+var label lbH             = na
+var label lbL             = na
+var linefill zFill        = na
+
+// --- Trade level state (computed at breakout) ---
+var float candleCover = na
+var float candleEntry = na
+var float candleTP    = na
+var int   orbBreakDir = 0        // 0=unbroken, 1=broke high, -1=broke low
+
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  RESET  ─  new trading day (robust for futures / weekends)
+// ─────────────────────────────────────────────────────────────────────────────
+if na(nyD[1]) or nyD != nyD[1]
+
+    // Close any open position from previous day
+    strategy.close_all(comment="EOD")
+
+    // --- Delete old ORB drawings ---
+    if not na(lnH)
+        line.delete(lnH)
+        line.delete(lnL)
+    if not na(lbH)
+        label.delete(lbH)
+        label.delete(lbL)
+    if not na(zFill)
+        linefill.delete(zFill)
+
+    orbH            := na
+    orbL            := na
+    drawn           := false
+    stopped         := false
+    startBar        := na
+    sessionStartBar := na
+    lnH             := na
+    lnL             := na
+    lbH             := na
+    lbL             := na
+    zFill           := na
+
+    candleCover     := na
+    candleEntry     := na
+    candleTP        := na
+    orbBreakDir     := 0
+
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  ORB — Opening Range Breakout
+// ═════════════════════════════════════════════════════════════════════════════
+
+// ── STEP 0  —  Record the 9:30 bar_index ──────────────────────────────────
+if nyH == 9 and nyM == 30 and na(sessionStartBar)
+    sessionStartBar := bar_index
+
+// ── STEP 1  —  Accumulate the ORB High / Low ──────────────────────────────
+if inORBWindow and not drawn
+    orbH := na(orbH) ? high : math.max(orbH, high)
+    orbL := na(orbL) ? low  : math.min(orbL, low)
+
+// ── STEP 2  —  Draw lines & labels ────────────────────────────────────────
+if pastORB and not drawn and not na(orbH) and not na(orbL)
+    drawn    := true
+    startBar := not na(sessionStartBar) ? sessionStartBar : bar_index
+
+    lnH := line.new(startBar, orbH, bar_index + 1, orbH,
+         color=i_highColor, width=i_lWidth, style=f_ls(), extend=extend.right)
+    lnL := line.new(startBar, orbL, bar_index + 1, orbL,
+         color=i_lowColor,  width=i_lWidth, style=f_ls(), extend=extend.right)
+
+    if i_showZone
+        zFill := linefill.new(lnH, lnL, color.new(color.gray, i_zoneAlpha))
+
+    if i_showLbl
+        lbH := label.new(
+             x         = startBar,
+             y         = orbH,
+             text      = i_lblHText,
+             color     = chart.bg_color,
+             textcolor = i_highColor,
+             style     = f_vStyle(),
+             size      = f_sz())
+        lbL := label.new(
+             x         = startBar,
+             y         = orbL,
+             text      = i_lblLText,
+             color     = chart.bg_color,
+             textcolor = i_lowColor,
+             style     = f_vStyle(),
+             size      = f_sz())
+
+// ── STEP 3  —  Update label X positions every bar ─────────────────────────
+if drawn and not stopped and i_showLbl
+    if not na(lbH)
+        label.set_x(lbH, f_lx(i_lblHPos, startBar, bar_index))
+    if not na(lbL)
+        label.set_x(lbL, f_lx(i_lblLPos, startBar, bar_index))
+
+// ═════════════════════════════════════════════════════════════════════════════
+//  BREAKOUT + STRATEGY ENTRY
+// ═════════════════════════════════════════════════════════════════════════════
+// Only consume the ORB (set stopped, compute levels, enter) when the breakout
+// happens during the allowed trade session.  Breakouts outside the session are
+// silently ignored so a later in-session breakout can still trigger a trade.
+
+// ── Diagnostic shapes ──────────────────────────────────────────────────────
+plotshape(drawn and not stopped and barstate.isconfirmed and close > orbH,
+     title="Break Up", style=shape.triangleup, location=location.belowbar,
+     color=color.green, size=size.small)
+plotshape(drawn and not stopped and barstate.isconfirmed and close < orbL,
+     title="Break Down", style=shape.triangledown, location=location.abovebar,
+     color=color.red, size=size.small)
+plotshape(drawn and not stopped and barstate.isconfirmed and inTradeSession,
+     title="In Session", style=shape.circle, location=location.absolute,
+     color=color.new(color.yellow, 80), size=size.tiny)
+
+// ── Breakout detection ── session-qualified ────────────────────────────────
+if drawn and not stopped and barstate.isconfirmed
+    bool breakoutUp   = close > orbH
+    bool breakoutDown = close < orbL
+
+    if (breakoutUp or breakoutDown) and inTradeSession
+        stopped := true
+
+        // ── Compute trade levels (same formulas as the ORB+FVG indicator) ──
+        if breakoutUp
+            candleCover := low - 0.25
+            candleEntry := close
+            orbBreakDir := 1
+        else if breakoutDown
+            candleCover := high + 0.25
+            candleEntry := close
+            orbBreakDir := -1
+
+        // ── 2:1 Risk-to-Reward ──
+        if orbBreakDir == 1
+            candleTP := candleEntry + 2 * (candleEntry - candleCover)
+        else
+            candleTP := candleEntry - 2 * (candleCover - candleEntry)
+
+        // ── Position size based on fixed risk ──
+        float riskDistance    = math.abs(candleEntry - candleCover)
+        float riskDollars     = i_accountSize * i_riskPercent
+        float pointVal        = na(syminfo.pointvalue) or syminfo.pointvalue == 0 ? 2.0 : syminfo.pointvalue
+        float riskPerContract = riskDistance * pointVal
+        int   contracts       = riskPerContract > 0 ? math.max(1, int(math.floor(riskDollars / riskPerContract))) : 1
+
+        // ── Cap contracts by affordability (5 % margin ≈ 5 % of notional per contract) ──
+        float notionalPerContract = close * pointVal
+        float marginPerContract   = notionalPerContract * 0.05
+        if marginPerContract > 0
+            int maxAffordable = int(math.floor(strategy.equity / marginPerContract))
+            contracts := math.min(contracts, math.max(1, maxAffordable))
+
+        // ── Freeze ORB lines at breakout bar ──
+        line.set_extend(lnH, extend.none)
+        line.set_extend(lnL, extend.none)
+        line.set_x2    (lnH, bar_index)
+        line.set_x2    (lnL, bar_index)
+        if i_showLbl
+            if not na(lbH)
+                label.set_x(lbH, f_lx(i_lblHPos, startBar, bar_index))
+            if not na(lbL)
+                label.set_x(lbL, f_lx(i_lblLPos, startBar, bar_index))
+
+        // ── Strategy entry + bracket exit ──
+        if orbBreakDir == 1
+            strategy.entry("Long", strategy.long, qty=contracts)
+            strategy.exit("ExitLong", "Long", limit=candleTP, stop=candleCover)
+        else if orbBreakDir == -1
+            strategy.entry("Short", strategy.short, qty=contracts)
+            strategy.exit("ExitShort", "Short", limit=candleTP, stop=candleCover)
+
+// ── Temporary diagnostics (remove after verifying trades appear) ───────────
+plotchar(drawn,           "debug_drawn",   "D", location.top,    color.new(color.green,  0), size=size.tiny)
+plotchar(stopped,          "debug_stopped", "S", location.top,    color.new(color.red,    0), size=size.tiny)
+plotchar(inTradeSession,   "debug_session", "T", location.bottom, color.new(color.yellow, 0), size=size.tiny)

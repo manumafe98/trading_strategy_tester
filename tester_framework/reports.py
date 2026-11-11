@@ -57,7 +57,7 @@ def reset_output_dirs() -> None:
 
 
 def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType) -> Path | None:
-    # ponytail: keep plotly lazy so tests avoid chart dependencies.
+    # Keep plotly lazy so tests avoid chart dependencies.
     import plotly.graph_objects as go
 
     TRADES_DIR.mkdir(exist_ok=True)
@@ -81,7 +81,7 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     )
     plot_indicators = getattr(strategy, "plot_indicators", None)
     if callable(plot_indicators):
-        # ponytail: strategies own their overlays; the framework only gives them the chart.
+        # Strategies own their overlays; the framework only gives them the chart.
         plot_indicators(
             fig,
             data=data,
