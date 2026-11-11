@@ -383,11 +383,12 @@ def run_backtest(
             discarded_signals += 1
             continue
 
-        # Fill flat equity for the period before this potential trade.
-        if last_bar_idx < entry_i:
-            bar_gross_equity[last_bar_idx:entry_i] = current_gross
-            bar_net_equity[last_bar_idx:entry_i] = current_net
-            last_bar_idx = entry_i
+        # Fill flat equity up to the first simulated bar; a close entry's fill bar has no P&L yet.
+        start_i = entry_i + int(close_entry)
+        if last_bar_idx < start_i:
+            bar_gross_equity[last_bar_idx:start_i] = current_gross
+            bar_net_equity[last_bar_idx:start_i] = current_net
+            last_bar_idx = start_i
 
         trade = _prepare_trade(
             signal, opens[entry_i], data.index[entry_i], asset_cfg, current_net, risk_pct, risk_reward_ratio, exit_mode,
@@ -407,7 +408,6 @@ def run_backtest(
         next_target = 0
         exits = []
         targets = trade["targets"]
-        start_i = entry_i + int(close_entry)
 
         resolved = False
         for i in range(start_i, bar_count):

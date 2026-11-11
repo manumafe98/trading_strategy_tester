@@ -764,3 +764,72 @@ def test_max_trades_rejects_nonpositive_values(base_data, test_asset_cfg, max_tr
             asset_cfg=test_asset_cfg,
             max_trades=max_trades,
         )
+
+
+def _two_winning_close_entries(cfg):
+    idx = pd.date_range("2025-01-01", periods=5, freq="h")
+    data = pd.DataFrame(
+        {
+            "open": [100, 100, 101, 101, 102],
+            "high": [100, 101.5, 101, 102.5, 102],
+            "low": [100, 100, 101, 101, 102],
+            "close": [100, 101, 101, 102, 102],
+            "volume": [0] * 5,
+        },
+        index=idx,
+        dtype=float,
+    )
+    signals = pd.DataFrame(
+        [
+            {"time": idx[0], "side": "long", "entry": 100.0, "stop": 99.0},
+            {"time": idx[2], "side": "long", "entry": 101.0, "stop": 100.0},
+        ]
+    )
+    return run_backtest(
+        data, signals, strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
+    )
+
+
+def test_close_entry_winning_trades_have_no_drawdown(test_asset_cfg):
+    metrics, trades = _two_winning_close_entries(test_asset_cfg)
+
+    assert [(trade["entry_i"], trade["exit_i"], trade["exit_reason"]) for trade in trades] == [
+        (0, 1, ExitReason.TARGET),
+        (2, 3, ExitReason.TARGET),
+    ]
+    assert metrics["Max DD"] == 0
+    assert metrics["Return"] == 2.01
+
+
+def test_close_entry_sharpe_has_no_return_on_entry_bars(test_asset_cfg):
+    metrics, _ = _two_winning_close_entries(test_asset_cfg)
+
+    # Curve 10000, 10000, 10100, 10100, 10201, 10201: bar returns 0, 1%, 0, 1%, 0.
+    # mean 0.004, sample std sqrt(3e-5), so Sharpe = sqrt(1716) * 0.004 / sqrt(3e-5) = 30.25.
+    assert metrics["Sharpe Ratio"] == 30.25
+
+
+def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
+    idx = pd.date_range("2025-01-01", periods=3, freq="h")
+    data = pd.DataFrame(
+        {
+            "open": [100, 100, 99.5],
+            "high": [100, 100, 101.5],
+            "low": [100, 99.5, 99.5],
+            "close": [100, 99.5, 101],
+            "volume": [0] * 3,
+        },
+        index=idx,
+        dtype=float,
+    )
+    signals = pd.DataFrame([{"time": idx[0], "side": "long", "entry": 100.0, "stop": 99.0}])
+    metrics, trades = run_backtest(
+        data, signals, strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
+    )
+
+    # 100 contracts close bar 1 at 99.5 (equity 9950) before the 101 target fills on bar 2.
+    assert (trades[0]["exit_i"], trades[0]["exit_reason"]) == (2, ExitReason.TARGET)
+    assert metrics["Max DD"] == 0.5
+    assert metrics["Return"] == 1
