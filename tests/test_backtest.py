@@ -53,24 +53,35 @@ def test_normalize_signals_rejects_invalid_side():
         normalize_signals(pd.DataFrame([{"time": pd.Timestamp("2025-01-01"), "side": "buy", "stop": 99}]))
 
 
-def test_long_target_trade(base_data, hourly_index, test_asset_cfg):
-    signals = pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}])
-    metrics, trades = run_backtest(
-        base_data,
-        signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
+def _run(data, signals, cfg, **overrides):
+    kwargs = dict(
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
+        risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
     )
-    assert trades[0]["exit_reason"] == ExitReason.TARGET
-    assert metrics["Return"] > 0
+    kwargs.update(overrides)
+    return run_backtest(data, pd.DataFrame(signals), **kwargs)
+
+
+def _bars(*bars):
+    idx = pd.date_range("2025-01-01", periods=len(bars), freq="h")
+    return pd.DataFrame(bars, index=idx, columns=["open", "high", "low", "close"], dtype=float)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "move_bar", "target"),
+    [
+        ("long", 99.0, [100.0, 102.5, 99.5, 102.0], 102.0),
+        ("short", 101.0, [100.0, 100.5, 97.5, 98.0], 98.0),
+    ],
+)
+def test_target_hit_exits_at_target_price(test_asset_cfg, side, stop, move_bar, target):
+    data = _bars([100.0, 100.0, 100.0, 100.0], move_bar)
+    metrics, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg, risk_reward_ratio=2)
+    trade = trades[0]
+    # 1% of 10000 over R = 1 point sizes 100 contracts; 2R banks 200.
+    assert (trade["exit_reason"], trade["target"], trade["exit"], trade["qty"]) == (ExitReason.TARGET, target, target, 100.0)
+    assert trade["gross_pnl"] == 200.0
+    assert metrics["Return"] == 2.0
 
 
 def test_stop_trade(base_data, hourly_index, test_asset_cfg):
@@ -95,48 +106,20 @@ def test_stop_trade(base_data, hourly_index, test_asset_cfg):
     assert metrics["Return"] < 0
 
 
-def test_same_bar_stop_priority(base_data, hourly_index, test_asset_cfg):
-    both_data = base_data.copy()
-    both_data.loc[hourly_index[1], ["high", "low"]] = [102, 98]
-    signals = pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}])
-    _, trades = run_backtest(
-        both_data,
-        signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
-    )
-    assert trades[0]["exit_reason"] == ExitReason.STOP
+@pytest.mark.parametrize(("side", "stop"), [("long", 99.0), ("short", 101.0)])
+def test_equal_distance_tie_reaches_stop_before_target(test_asset_cfg, side, stop):
+    # High and low are both 1 point from the open: the engine assumes the adverse extreme comes first.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.0, 100.0])
+    _, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg)
+    assert (trades[0]["exit_reason"], trades[0]["exit"]) == (ExitReason.STOP, stop)
 
 
-def test_close_entry_signal(base_data, hourly_index, test_asset_cfg):
-    close_entry_data = base_data.copy()
-    close_entry_data.loc[hourly_index[1], ["open", "high", "low", "close"]] = [101.0, 102.0, 100.5, 101.5]
-    close_entry = pd.DataFrame([{"time": hourly_index[0], "side": "long", "entry": 101.0, "stop": 100.0}])
-    _, trades = run_backtest(
-        close_entry_data,
-        close_entry,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
-    )
-    assert trades[0]["entry_i"] == 0
-    assert trades[0]["entry"] == 101.0
-    assert trades[0]["exit_reason"] == ExitReason.TARGET
+def test_close_entry_signal_fills_at_signal_price_on_its_own_bar(test_asset_cfg):
+    data = _bars([100.0, 101.0, 100.0, 101.0], [101.0, 102.5, 100.5, 102.0])
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "entry": 101.0, "stop": 100.0}], test_asset_cfg)
+    trade = trades[0]
+    assert (trade["entry_i"], trade["entry"], trade["exit_i"], trade["exit"]) == (0, 101.0, 1, 102.0)
+    assert trade["gross_pnl"] == 100.0
 
 
 def test_trailing_stop(base_data, hourly_index, test_asset_cfg):
@@ -165,22 +148,27 @@ def test_trailing_stop(base_data, hourly_index, test_asset_cfg):
     assert abs(trades[0]["giveback_r"] - 0.5) < 1e-6
 
 
-def test_trailing_target_completion(base_data, hourly_index, test_asset_cfg):
-    _, trades = run_backtest(
-        base_data,
-        pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}]),
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="trailing",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
-    )
-    assert trades[0]["exit_reason"] == ExitReason.TARGET
+def test_trailing_stop_updates_at_bar_open(test_asset_cfg):
+    # Entry 100, stop 99, 3R target 103 never reached. Bar 2 opens at 101.5 (1.5R), so the trail moves to
+    # 101.0 before the low-first path dips to 100.8. Without the open update the stop stays at 99 until 102.5.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], [101.5, 102.5, 100.8, 102.0])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+    _, trailing = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
+    fixed_metrics, fixed = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="fixed")
+    assert [(t["exit_reason"], t["exit_i"], t["exit"], t["realized_r"]) for t in trailing] == [(ExitReason.STOP, 2, 101.0, 1.0)]
+    assert fixed == []
+    assert fixed_metrics["Unresolved"] == 1
+
+
+def test_short_trailing_stop_follows_low_and_never_loosens(test_asset_cfg):
+    # Short entry 100, stop 101. Bar 1 reaches 98.8 (1.2R), so the trail ceils to 99.3. Bar 2's low of 98.9
+    # would put it at 99.45; it must stay at 99.3, where the rally to 99.5 exits.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.2, 98.8, 99.0], [99.0, 99.5, 98.9, 99.4])
+    _, trades = _run(data, [{"time": data.index[0], "side": "short", "stop": 101.0}], test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
+    trade = trades[0]
+    assert (trade["exit_reason"], trade["exit_i"], trade["exit"]) == (ExitReason.STOP, 2, 99.3)
+    assert trade["realized_r"] == pytest.approx(0.7)
+    assert trade["mfe_r"] == pytest.approx(1.2)
 
 
 def test_partial_targets_quantity_distribution():
@@ -257,60 +245,49 @@ def test_partial_stop_aggregation(test_asset_cfg):
     assert [fill["qty"] for fill in partial_stop["exits"]] == [33.0, 67.0]
 
 
-def test_cost_accounting_preserves_raw_execution(base_data, hourly_index, cost_asset_cfg):
-    cost_idx = pd.date_range("2025-02-01", periods=6, freq="h")
-    cost_data = pd.DataFrame(
-        {
-            "open": [100.0] * 6,
-            "high": [100.0, 101.1, 100.0, 100.0, 101.1, 100.0],
-            "low": [100.0, 99.5, 100.0, 100.0, 99.5, 100.0],
-            "close": [100.0] * 6,
-            "volume": [0] * 6,
-        },
-        index=cost_idx,
+def test_costs_keep_raw_execution_and_size_from_net_equity(cost_asset_cfg):
+    # Costs per side: half spread 0.1 + slippage 0.1 on price, commission 0.1 per contract.
+    data = _bars(
+        [100.0, 100.0, 100.0, 100.0], [100.0, 101.1, 99.5, 100.0], [100.0, 100.0, 100.0, 100.0],
+        [100.0, 100.0, 100.0, 100.0], [100.0, 101.1, 99.5, 100.0], [100.0, 100.0, 100.0, 100.0],
     )
-    cost_signals = pd.DataFrame(
-        [
-            {"time": cost_idx[0], "side": "long", "entry": 100.0, "stop": 99.0},
-            {"time": cost_idx[3], "side": "long", "entry": 100.0, "stop": 99.0},
-        ]
-    )
-    gross_metrics, gross_trades = run_backtest(
-        cost_data,
-        cost_signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=cost_asset_cfg,
-    )
-    net_metrics, net_trades = run_backtest(
-        cost_data,
-        cost_signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=True,
-        asset_cfg=cost_asset_cfg,
-    )
-    assert gross_trades[0]["target"] == net_trades[0]["target"] == 101.0
-    assert gross_trades[0]["raw_exit"] == net_trades[0]["raw_exit"]
-    assert gross_trades[0]["realized_r"] == net_trades[0]["realized_r"] == 1.0
-    assert net_trades[0]["outcome"] == "win"
-    assert gross_trades[0]["qty"] == net_trades[0]["qty"]
-    assert net_trades[1]["qty"] < gross_trades[1]["qty"]
-    assert net_metrics["Gross"]["Return"] > net_metrics["Net"]["Return"]
-    assert gross_metrics["Return"] > net_metrics["Return"]
+    signals = [
+        {"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.0},
+        {"time": data.index[3], "side": "long", "entry": 100.0, "stop": 99.0},
+    ]
+    gross_metrics, gross_trades = _run(data, signals, cost_asset_cfg)
+    net_metrics, net_trades = _run(data, signals, cost_asset_cfg, with_costs=True)
+
+    assert [(t["raw_exit"], t["realized_r"], t["qty"]) for t in gross_trades] == [(101.0, 1.0, 100.0), (101.0, 1.0, 101.0)]
+    # The second trade sizes from net equity 10040, not gross 10100.
+    assert [(t["raw_exit"], t["realized_r"], t["qty"]) for t in net_trades] == [(101.0, 1.0, 100.0), (101.0, 1.0, 100.0)]
+    assert [t["gross_pnl"] for t in net_trades] == [100.0, 100.0]
+    assert [t["net_pnl"] for t in net_trades] == pytest.approx([40.0, 40.0])
+    assert gross_metrics["Return"] == 2.01
+    assert (net_metrics["Gross"]["Return"], net_metrics["Net"]["Return"], net_metrics["Return"]) == (2.0, 0.8, 0.8)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "move_bar", "net_entry", "net_exit"),
+    [
+        ("long", 99.0, [100.0, 101.5, 99.5, 101.0], 100.2, 100.8),
+        ("short", 101.0, [100.0, 100.5, 98.5, 99.0], 99.8, 99.2),
+    ],
+)
+def test_cost_amounts_are_half_spread_plus_slippage_per_side_and_commission_both_sides(
+    cost_asset_cfg, side, stop, move_bar, net_entry, net_exit
+):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], move_bar)
+    metrics, trades = _run(data, [{"time": data.index[0], "side": side, "entry": 100.0, "stop": stop}], cost_asset_cfg, with_costs=True)
+    trade = trades[0]
+    assert (trade["net_entry"], trade["net_exit"]) == pytest.approx((net_entry, net_exit))
+    # 100 contracts: gross 1 point each = 100; net 0.6 point each = 60, minus 0.1 x 100 x 2 commission = 40.
+    assert trade["gross_pnl"] == 100.0
+    assert trade["net_pnl"] == pytest.approx(40.0)
+    assert trade["net_realized_r"] == pytest.approx(0.4)
+    # Bar 1 closes flat with the trade open: net mark-to-market is -0.4 x 100 - 20 commission = 9940.
+    assert (metrics["Gross"]["Return"], metrics["Gross"]["Max DD"]) == (1.0, 0.0)
+    assert (metrics["Net"]["Return"], metrics["Net"]["Max DD"]) == (0.4, 0.6)
 
 
 def test_partial_cost_accounting(test_asset_cfg, cost_asset_cfg):
@@ -355,7 +332,10 @@ def test_partial_cost_accounting(test_asset_cfg, cost_asset_cfg):
         asset_cfg=cost_asset_cfg,
     )
     assert net_partial_trades[0]["realized_r"] == gross_partial_trades[0]["realized_r"]
-    assert net_partial_trades[0]["gross_pnl"] > net_partial_trades[0]["net_pnl"]
+    # Each fill nets (target - 0.2) - 100.2 per contract, minus 0.2 commission: 33 x 0.4 + 33 x 1.4 + 34 x 2.4.
+    assert [fill["net_pnl"] for fill in net_partial_trades[0]["exits"]] == pytest.approx([13.2, 46.2, 81.6])
+    assert net_partial_trades[0]["gross_pnl"] == 201.0
+    assert net_partial_trades[0]["net_pnl"] == pytest.approx(141.0)
 
 
 def test_empty_signals(base_data, test_asset_cfg):
@@ -623,6 +603,9 @@ def test_cost_outcomes_are_paired(cost_asset_cfg):
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=True, asset_cfg=cost_asset_cfg,
     )
+    # 1000 contracts on a 0.1 R: net (99.9 - 100.2) x 1000 - 0.1 x 1000 x 2 commission = -500, or -5R.
+    assert trades[0]["net_pnl"] == pytest.approx(-500.0)
+    assert trades[0]["net_realized_r"] == pytest.approx(-5.0)
     row = add_trade_counts(metrics, trades, "all", with_costs=True)
     assert row["W"] == (1, 0)
     assert row["L"] == (0, 1)
@@ -708,25 +691,103 @@ def test_result_columns_include_long_for_all():
     assert "Unresolved" in result_columns("all")
 
 
-def test_add_trade_counts_splits_sides(base_data, hourly_index, test_asset_cfg):
-    signals = pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}])
-    metrics, trades = run_backtest(
-        base_data,
-        signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
+def _long_then_short():
+    # Long from bar 1 open 100 hits 101 on bar 1; short from bar 3 open 101 hits 100 on bar 3.
+    data = _bars(
+        [100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 99.8, 101.0], [101.0, 101.0, 101.0, 101.0], [101.0, 101.2, 99.5, 100.0],
     )
+    signals = [
+        {"time": data.index[0], "side": "long", "stop": 99.0},
+        {"time": data.index[2], "side": "short", "stop": 102.0},
+    ]
+    return data, signals
+
+
+@pytest.mark.parametrize(
+    ("operation", "sides"),
+    [("all", [Side.LONG, Side.SHORT]), ("long_only", [Side.LONG]), ("short_only", [Side.SHORT])],
+)
+def test_operation_filters_signal_sides(test_asset_cfg, operation, sides):
+    data, signals = _long_then_short()
+    metrics, trades = _run(data, signals, test_asset_cfg, operation=operation)
+    assert [(t["side"], t["exit_reason"]) for t in trades] == [(side, ExitReason.TARGET) for side in sides]
+    assert metrics["Discarded"] == 0
+
+
+def test_add_trade_counts_splits_sides(test_asset_cfg):
+    data, signals = _long_then_short()
+    metrics, trades = _run(data, signals, test_asset_cfg)
     row = add_trade_counts(metrics, trades, "all")
-    assert row["Long"] == 1
-    assert row["Short"] == 0
+    assert (row["Trades"], row["Long"], row["Short"]) == (2, 1, 1)
+
+
+@pytest.mark.parametrize(("side", "stop"), [("long", 101.0), ("long", 100.0), ("short", 99.0), ("short", 100.0)])
+def test_stop_on_wrong_side_of_entry_is_discarded(test_asset_cfg, side, stop):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 102.5, 97.5, 100.0])
+    metrics, trades = _run(data, [{"time": data.index[0], "side": side, "entry": 100.0, "stop": stop}], test_asset_cfg)
+    assert trades == []
+    assert metrics["Discarded"] == 1
+
+
+def test_quantity_below_minimum_is_discarded(test_asset_cfg):
+    # 1% of 10000 over R = 1 point sizes 100 contracts, below a 101-contract minimum.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 99.5, 101.0])
+    signals = [{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.0}]
+    at_min, traded = _run(data, signals, replace(test_asset_cfg, min_qty=100.0))
+    below, trades = _run(data, signals, replace(test_asset_cfg, min_qty=101.0))
+    assert ([t["qty"] for t in traded], at_min["Discarded"]) == ([100.0], 0)
+    assert (trades, below["Discarded"]) == ([], 1)
+
+
+def test_signal_while_trade_is_open_is_discarded(test_asset_cfg):
+    # The first trade enters bar 1 and exits on bar 2; the second signal would enter on bar 2.
+    data = _bars(
+        [100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], [100.0, 101.5, 99.5, 101.0], [101.0, 102.5, 100.5, 102.0],
+    )
+    signals = [
+        {"time": data.index[0], "side": "long", "stop": 99.0},
+        {"time": data.index[1], "side": "long", "stop": 99.0},
+    ]
+    metrics, trades = _run(data, signals, test_asset_cfg)
+    assert [(t["entry_i"], t["exit_i"]) for t in trades] == [(1, 2)]
+    assert metrics["Discarded"] == 1
+
+
+def test_close_entry_time_not_on_a_bar_is_discarded(test_asset_cfg):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 99.5, 101.0], [101.0, 102.5, 100.5, 102.0])
+    signals = [{"time": data.index[0] + pd.Timedelta(minutes=30), "side": "long", "entry": 100.0, "stop": 99.0}]
+    metrics, trades = _run(data, signals, test_asset_cfg)
+    assert trades == []
+    assert metrics["Discarded"] == 1
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "move_bar", "rounded_stop", "rounded_target"),
+    [
+        # Long: stop 99.1 floors to 99.0 (R = 1.0); target 100 + 1.1 = 101.1 ceils to 101.25.
+        ("long", 99.1, [100.0, 101.5, 99.5, 101.0], 99.0, 101.25),
+        # Short: stop 100.9 ceils to 101.0 (R = 1.0); target 100 - 1.1 = 98.9 floors to 98.75.
+        ("short", 100.9, [100.0, 100.5, 98.5, 99.0], 101.0, 98.75),
+    ],
+)
+def test_off_tick_stop_and_target_round_away_from_entry(test_asset_cfg, side, stop, move_bar, rounded_stop, rounded_target):
+    cfg = replace(test_asset_cfg, tick_size=0.25)
+    data = _bars([100.0, 100.0, 100.0, 100.0], move_bar)
+    _, trades = _run(data, [{"time": data.index[0], "side": side, "entry": 100.0, "stop": stop}], cfg, risk_reward_ratio=1.1)
+    trade = trades[0]
+    assert (trade["stop"], trade["initial_risk"], trade["target"]) == (rounded_stop, 1.0, rounded_target)
+    assert (trade["exit_reason"], trade["exit"]) == (ExitReason.TARGET, rounded_target)
+
+
+def test_risk_sizing_uses_point_value_and_floors_to_qty_step(test_asset_cfg):
+    # 1% of 10000 over R = 3 points x 5 per point is 6.67 contracts, floored to the 0.1 step: 6.6.
+    cfg = replace(test_asset_cfg, point_value=5.0, qty_step=0.1, min_qty=0.1)
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 103.5, 99.5, 103.0])
+    metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 97.0}], cfg)
+    trade = trades[0]
+    assert trade["qty"] == 6.6
+    assert trade["gross_pnl"] == pytest.approx(99.0)
+    assert metrics["Return"] == 0.99
 
 
 def test_max_trades_caps_closed_trades(test_asset_cfg):
