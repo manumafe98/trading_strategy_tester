@@ -74,7 +74,13 @@ python -m tester_framework --strategies ema50 --asset MGC,MNQ --risk MGC=1,MNQ=0
 
 Sizing is fixed-fractional: the risk percentage is applied to current net equity, so wins and losses compound. It measures entry-to-stop price risk; costs are reported separately and can make the net loss exceed the configured percentage. Only one position can be open per asset/timeframe, so overlapping signals are discarded.
 
+Every asset in `config/assets.json` must define `min_risk_ticks` (4 for MNQ, MES and MGC; 1 for EURUSD, GBPUSD and BTCUSD); a missing value fails at config load. For every strategy, a signal whose entry-to-stop distance, after the stop is rounded to the tick, is below `min_risk_ticks` × tick size is discarded and counted in `Discarded`. A distance exactly at the minimum is traded. This stops one-tick stops from producing huge positions and absurd R.
+
 `--sessions` filters entries by market-local session windows for any strategy. Use presets like `asia`, `london`, `ny`, expand `all`, or pass subranges such as `ny=09:30-12:00` and `london=08:00-10:00`. Omit it, or use `--sessions none`, to keep the unfiltered framework behavior. ORB strategies override this and require a real session value.
+
+The `ny_bank` preset is America/New_York 08:00-17:00, for a true New York bank close. Subranges such as `ny_bank=09:30-17:00` must stay inside it, like every preset. `all` expands to `asia`, `london` and `ny` only; `ny_bank` overlaps `ny` and must be named.
+
+`--session_exit` (off by default) closes a trade still open at the end of its variant's session window at the close of the last execution bar that starts inside the window, with exit reason `session`. It applies to every exit mode and closes whatever position remains after partial targets. The window end is exclusive, matching the session filter, and DST follows the window's timezone. If bars are missing at the window end, the exit happens on the last in-window bar present. Costs apply as for any exit. With the flag on, a signal whose fill would land outside the window, or a close entry on the window's last bar, is discarded, and a trade still open when the data ends inside a window stays unresolved. The flag requires `--sessions` with a session window and is rejected without it or with `--sessions none`. For example: `--sessions ny_bank=09:30-17:00 --session_exit`.
 
 `--days` and `--months` filter actual filled entries by the normalized data timestamp. Values are case-insensitive full names or three-letter abbreviations, for example `--days monday,wed --months january,sep`. Omit either flag to allow every weekday or month; when both are present, an entry must match both.
 
@@ -102,7 +108,7 @@ Local futures CSVs containing multiple expiries are converted to an unadjusted c
 
 Undefined Sharpe and Return/DD values display as `N/A`. With `--with_costs`, outcome and financial columns show Gross / Net pairs.
 
-Only fully resolved trades are counted. Setups still open at the end of the downloaded data—including any completed partial fills—are fully discarded and reported in `Unresolved`. Signals skipped due to invalid stops, bad entries, overlap, or minimum-quantity filters are reported in `Discarded`.
+Only fully resolved trades are counted. Setups still open at the end of the downloaded data—including any completed partial fills—are fully discarded and reported in `Unresolved`. Signals skipped due to invalid stops, bad entries, minimum risk, overlap, or minimum-quantity filters are reported in `Discarded`.
 
 ## Strategy API
 
@@ -134,6 +140,8 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
+Any extra signal column beyond `time`, `side`, `stop`, and `entry` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
+
 Strategies can also add scalar metrics to each expanded result variant:
 
 ```python
@@ -156,3 +164,13 @@ All three use 1-minute execution data (`EXECUTION_TIMEFRAME = "1m"`). For these 
 ```bash
 python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
 ```
+
+### Differences From Pine
+
+The Pine references in `pine_scripts_examples/` differ from these strategies on purpose. Each difference is pinned by a test in `tests/test_pine_differences.py`.
+
+- **Day boundary.** Pine calls `strategy.close_all` on the first bar of a new New York calendar date and fills at that bar's close, so on 24-hour futures data an open trade is held through the evening session until the 00:00 New York bar. By default we hold a trade until its stop, its target, or the end of the data; only with `--session_exit` do we never hold past the session window. The closest equivalent is `--sessions ny_bank=09:30-17:00 --session_exit`, which exits at the close of the last bar starting before 17:00 New York, not at the date change.
+- **Sizing.** Pine trades at least one contract, `max(1, floor(risk / R))`, and caps the size at what equity can margin at 5% of notional. We discard a trade whose risk-based quantity is below the asset's `min_qty` and apply no margin cap.
+- **FVG bars.** Pine checks `high[2] < low` on every bar in its FVG window, so on the window's first two bars an FVG can use bars from before the window. We only use bars inside the session window, so the first two window bars cannot complete an FVG.
+- **FVG cap.** Pine keeps at most `Max Tracked FVGs` (default 100) and drops the oldest. We keep every active FVG.
+- **FVG window.** Pine detects FVGs in a separate `FVG Session` input that defaults to 09:30-12:00 New York, and its trade window is hardcoded to 09:30-11:59. Both of ours follow the `--sessions` window, so a wider window detects and trades FVGs outside 09:30-12:00.

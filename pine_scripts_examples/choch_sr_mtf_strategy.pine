@@ -1,0 +1,605 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// Market Structure logic © Leviathan; swing point generation inspired by @BacktestRookies.
+// Support Resistance Channels logic © LonesomeTheBlue.
+// Combined strategy implementation; S/R zone rules are shared with the reference indicator.
+
+//@version=6
+strategy("CHoCH 1m + S/R Channels 15m", overlay = true, initial_capital = 10000, currency = currency.USD, pyramiding = 0, process_orders_on_close = true, margin_long = 5, margin_short = 5, commission_type = strategy.commission.percent, commission_value = 0, slippage = 0, max_labels_count = 500, max_lines_count = 500, max_boxes_count = 20, max_bars_back = 501)
+
+// The strategy uses confirmed one-minute bars to assemble the developing 15-minute range.
+if timeframe.in_seconds() != 60
+    runtime.error("Use this strategy on a 1-minute chart.")
+
+// ── Market Structure inputs ──────────────────────────────────────────────────
+swingSize = input.int(20, "Swing Length", minval = 1, group = "Market Structure", tooltip = "Bars to the left and right required to confirm a swing point.")
+bosConfType = input.string("Candle Close", "BOS Confirmation", options = ["Candle Close", "Wicks"], group = "Market Structure")
+tradeChoch = input.bool(true, "Trade CHoCH", group = "Market Structure", tooltip = "Trade only the first countertrend break, as marked by the source indicator.")
+showSwing = input.bool(true, "Show Swing Points", group = "Market Structure")
+showHalf = input.bool(false, "Show 0.5 Retracement Level", group = "0.5 Retracement Level")
+halfColor = input.color(color.rgb(41, 39, 176), "Color", group = "0.5 Retracement Level")
+halfStyle = input.string("Solid", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = "0.5 Retracement Level")
+halfWidth = input.int(1, "Width", minval = 1, group = "0.5 Retracement Level")
+bosColor = input.color(color.rgb(112, 114, 119), "Color", group = "BOS Settings")
+bosStyle = input.string("Dashed", "Line Style", options = ["Solid", "Dashed", "Dotted"], group = "BOS Settings")
+bosWidth = input.int(1, "Width", minval = 1, group = "BOS Settings")
+
+// ── Support/resistance inputs ────────────────────────────────────────────────
+srPivotPeriod = input.int(10, "Pivot Period", minval = 4, maxval = 30, group = "S/R Settings", tooltip = "Calculated entirely from 15-minute bars.")
+srSource = input.string("High/Low", "Source", options = ["High/Low", "Close/Open"], group = "S/R Settings")
+srMinimumZoneWidth = input.float(0.1, "Minimum Zone Width", minval = 0, step = 0.05, inline = "sr_zone_width", group = "S/R Settings", tooltip = "Minimum accepted width. In %, measured from the completed candidate zone's low. In Pips, converted using 10 minimum ticks for 3/5-decimal Forex symbols and 1 tick otherwise. Set to 0 to disable this filter; single-pivot or zero-width zones may pass.")
+srMaximumZoneWidth = input.float(0.4, "Maximum Zone Width", minval = 0, step = 0.05, inline = "sr_zone_width", group = "S/R Settings", tooltip = "Maximum width during pivot clustering. In %, measured from the lower of the current zone low and candidate pivot. In Pips, converted using 10 minimum ticks for 3/5-decimal Forex symbols and 1 tick otherwise.")
+srZoneWidthUnit = input.string("%", "Unit", options = ["%", "Pips"], inline = "sr_zone_width", group = "S/R Settings", tooltip = "Applies to both width values. Switching units leaves the numbers unchanged; for example, 0.1 / 0.4 becomes 0.1 / 0.4 pips.")
+srMinStrength = input.int(1, "Minimum Strength", minval = 1, group = "S/R Settings", tooltip = "The source algorithm requires at least two pivot points at the default value.")
+srMaxChannels = input.int(6, "Maximum Number of S/R Channels", minval = 1, maxval = 10, group = "S/R Settings")
+srLoopback = input.int(290, "Loopback Period", minval = 100, maxval = 400, group = "S/R Settings")
+resistanceColor = input.color(color.new(color.red, 75), "Resistance Color", group = "S/R Colors")
+supportColor = input.color(color.new(color.lime, 75), "Support Color", group = "S/R Colors")
+insideColor = input.color(color.new(color.gray, 75), "Color When Price in Channel", group = "S/R Colors")
+showSRPivots = input.bool(false, "Show 15m Pivot Points", group = "S/R Extras")
+showSRBroken = input.bool(false, "Show Broken Support/Resistance", group = "S/R Extras")
+showMA1 = input.bool(false, "MA 1", inline = "ma1", group = "S/R Extras")
+ma1Length = input.int(50, "Length", inline = "ma1", minval = 1, group = "S/R Extras")
+ma1Type = input.string("SMA", "Type", options = ["SMA", "EMA"], inline = "ma1", group = "S/R Extras")
+showMA2 = input.bool(false, "MA 2", inline = "ma2", group = "S/R Extras")
+ma2Length = input.int(200, "Length", inline = "ma2", minval = 1, group = "S/R Extras")
+ma2Type = input.string("SMA", "Type", options = ["SMA", "EMA"], inline = "ma2", group = "S/R Extras")
+
+// ── Risk inputs ─────────────────────────────────────────────────────────────
+riskPercent = input.float(1.0, "Risk per Trade (% of equity)", minval = 0.01, step = 0.1, group = "Risk and Exits")
+rewardRisk = input.float(2.0, "Take Profit (R)", minval = 0.1, step = 0.1, group = "Risk and Exits")
+forexBufferPips = input.float(0.25, "Forex Stop Buffer (pips)", minval = 0, step = 0.05, group = "Risk and Exits")
+futuresBufferPoints = input.float(0.25, "Futures Stop Buffer (price points)", minval = 0, step = 0.05, group = "Risk and Exits")
+
+showStatusTable = input.bool(true, "Show Status Table", group = "Status Table")
+statusTablePosition = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = "Status Table")
+statusTableTextSize = input.string("Small", "Table Text Size", options = ["Tiny", "Small", "Normal"], group = "Status Table")
+
+if srMinimumZoneWidth < 0 or srMaximumZoneWidth < 0
+    runtime.error("Minimum and maximum S/R zone widths cannot be negative.")
+if srMaximumZoneWidth == 0
+    runtime.error("Maximum S/R zone width must be greater than zero.")
+if srMinimumZoneWidth > srMaximumZoneWidth
+    runtime.error("Minimum S/R zone width cannot be greater than the maximum.")
+
+f_line_style(string style) =>
+    switch style
+        "Solid" => line.style_solid
+        "Dashed" => line.style_dashed
+        "Dotted" => line.style_dotted
+
+f_get_sr_values(array<float> pivots, int index, float maxWidth, string widthUnit, float pipSize) =>
+    float lo = array.get(pivots, index)
+    float hi = lo
+    int strength = 0
+    for y = 0 to array.size(pivots) - 1
+        float pivot = array.get(pivots, y)
+        float width = pivot <= hi ? hi - pivot : pivot - lo
+        float referencePrice = math.min(lo, pivot)
+        float allowedWidth = widthUnit == "%" ? referencePrice * maxWidth / 100 : maxWidth * pipSize
+        if width <= allowedWidth
+            if pivot <= hi
+                lo := math.min(lo, pivot)
+            else
+                hi := math.max(hi, pivot)
+            strength += 20
+    [hi, lo, strength]
+
+f_swap_channels(array<float> levels, int first, int secondIndex) =>
+    float temporary = array.get(levels, secondIndex * 2)
+    array.set(levels, secondIndex * 2, array.get(levels, first * 2))
+    array.set(levels, first * 2, temporary)
+    temporary := array.get(levels, secondIndex * 2 + 1)
+    array.set(levels, secondIndex * 2 + 1, array.get(levels, first * 2 + 1))
+    array.set(levels, first * 2 + 1, temporary)
+
+// Stateful S/R calculation. It runs in request.security's 15-minute context.
+// Every returned series is shifted by one 15m bar before lookahead_on is applied.
+f_sr_state(int pivotPeriod, string sourceMode, float minimumZoneWidth, float maximumZoneWidth, string widthUnit, int minimumStrength, int loopback, bool ma1Enabled, int ma1Len, string ma1Mode, bool ma2Enabled, int ma2Len, string ma2Mode) =>
+    float ma1Sma = ta.sma(close, ma1Len)
+    float ma1Ema = ta.ema(close, ma1Len)
+    float ma2Sma = ta.sma(close, ma2Len)
+    float ma2Ema = ta.ema(close, ma2Len)
+    float ma1Value = ma1Enabled ? (ma1Mode == "SMA" ? ma1Sma : ma1Ema) : na
+    float ma2Value = ma2Enabled ? (ma2Mode == "SMA" ? ma2Sma : ma2Ema) : na
+
+    float pivotHighSource = sourceMode == "High/Low" ? high : math.max(close, open)
+    float pivotLowSource = sourceMode == "High/Low" ? low : math.min(close, open)
+    float pivotHigh = ta.pivothigh(pivotHighSource, pivotPeriod, pivotPeriod)
+    float pivotLow = ta.pivotlow(pivotLowSource, pivotPeriod, pivotPeriod)
+    bool hasPivot = not na(pivotHigh) or not na(pivotLow)
+
+    float pipSize = syminfo.mintick * (syminfo.type == "forex" and (syminfo.pricescale == 1000 or syminfo.pricescale == 100000) ? 10 : 1)
+
+    var array<float> pivotValues = array.new_float()
+    var array<int> pivotLocations = array.new_int()
+    var array<float> channels = array.new_float(20, 0.0)
+
+    if hasPivot
+        array.unshift(pivotValues, not na(pivotHigh) ? pivotHigh : pivotLow)
+        array.unshift(pivotLocations, bar_index)
+        for x = array.size(pivotValues) - 1 to 0
+            if bar_index - array.get(pivotLocations, x) > loopback
+                array.pop(pivotValues)
+                array.pop(pivotLocations)
+            else
+                break
+
+        int pivotCount = array.size(pivotValues)
+        array<float> candidateChannels = array.new_float()
+        array<float> strengths = array.new_float(10, 0.0)
+        for x = 0 to pivotCount - 1
+            [channelHigh, channelLow, rawStrength] = f_get_sr_values(pivotValues, x, maximumZoneWidth, widthUnit, pipSize)
+            array.push(candidateChannels, rawStrength)
+            array.push(candidateChannels, channelHigh)
+            array.push(candidateChannels, channelLow)
+
+        for x = 0 to pivotCount - 1
+            float candidateHigh = array.get(candidateChannels, x * 3 + 1)
+            float candidateLow = array.get(candidateChannels, x * 3 + 2)
+            int touches = 0
+            for y = 0 to loopback
+                if (high[y] <= candidateHigh and high[y] >= candidateLow) or (low[y] <= candidateHigh and low[y] >= candidateLow)
+                    touches += 1
+            float candidateWidth = candidateHigh - candidateLow
+            float minimumAllowedWidth = widthUnit == "%" ? candidateLow * minimumZoneWidth / 100 : minimumZoneWidth * pipSize
+            if minimumZoneWidth > 0 and candidateWidth < minimumAllowedWidth
+                array.set(candidateChannels, x * 3, -1)
+            else
+                array.set(candidateChannels, x * 3, array.get(candidateChannels, x * 3) + touches)
+
+        array.fill(channels, 0.0)
+        int channelCount = 0
+        for x = 0 to pivotCount - 1
+            float strongest = -1
+            int strongestIndex = -1
+            for y = 0 to pivotCount - 1
+                float strength = array.get(candidateChannels, y * 3)
+                if strength > strongest and strength >= minimumStrength * 20
+                    strongest := strength
+                    strongestIndex := y
+            if strongestIndex >= 0
+                float channelHigh = array.get(candidateChannels, strongestIndex * 3 + 1)
+                float channelLow = array.get(candidateChannels, strongestIndex * 3 + 2)
+                array.set(channels, channelCount * 2, channelHigh)
+                array.set(channels, channelCount * 2 + 1, channelLow)
+                array.set(strengths, channelCount, strongest)
+                for y = 0 to pivotCount - 1
+                    float candidateHigh = array.get(candidateChannels, y * 3 + 1)
+                    float candidateLow = array.get(candidateChannels, y * 3 + 2)
+                    if (candidateHigh <= channelHigh and candidateHigh >= channelLow) or (candidateLow <= channelHigh and candidateLow >= channelLow)
+                        array.set(candidateChannels, y * 3, -1)
+                channelCount += 1
+                if channelCount >= 10
+                    break
+
+        for x = 0 to 8
+            for y = x + 1 to 9
+                if array.get(strengths, y) > array.get(strengths, x)
+                    float temporaryStrength = array.get(strengths, y)
+                    array.set(strengths, y, array.get(strengths, x))
+                    array.set(strengths, x, temporaryStrength)
+                    f_swap_channels(channels, x, y)
+
+    bool notInChannel = true
+    for x = 0 to 9
+        float channelHigh = array.get(channels, x * 2)
+        float channelLow = array.get(channels, x * 2 + 1)
+        if close <= channelHigh and close >= channelLow
+            notInChannel := false
+
+    bool resistanceBroken = false
+    bool supportBroken = false
+    if notInChannel
+        for x = 0 to 9
+            float channelHigh = array.get(channels, x * 2)
+            float channelLow = array.get(channels, x * 2 + 1)
+            if close[1] <= channelHigh and close > channelHigh
+                resistanceBroken := true
+            if close[1] >= channelLow and close < channelLow
+                supportBroken := true
+
+    float level0 = array.get(channels, 0)
+    float level1 = array.get(channels, 1)
+    float level2 = array.get(channels, 2)
+    float level3 = array.get(channels, 3)
+    float level4 = array.get(channels, 4)
+    float level5 = array.get(channels, 5)
+    float level6 = array.get(channels, 6)
+    float level7 = array.get(channels, 7)
+    float level8 = array.get(channels, 8)
+    float level9 = array.get(channels, 9)
+    float level10 = array.get(channels, 10)
+    float level11 = array.get(channels, 11)
+    float level12 = array.get(channels, 12)
+    float level13 = array.get(channels, 13)
+    float level14 = array.get(channels, 14)
+    float level15 = array.get(channels, 15)
+    float level16 = array.get(channels, 16)
+    float level17 = array.get(channels, 17)
+    float level18 = array.get(channels, 18)
+    float level19 = array.get(channels, 19)
+    bool pivotHighEvent = not na(pivotHigh)
+    bool pivotLowEvent = not na(pivotLow)
+    int pivotHighTime = time[pivotPeriod]
+    int pivotLowTime = time[pivotPeriod]
+
+    [level0[1], level1[1], level2[1], level3[1], level4[1], level5[1], level6[1], level7[1], level8[1], level9[1], level10[1], level11[1], level12[1], level13[1], level14[1], level15[1], level16[1], level17[1], level18[1], level19[1], ma1Value[1], ma2Value[1], pivotHighEvent[1], pivotLowEvent[1], pivotHigh[1], pivotLow[1], pivotHighTime[1], pivotLowTime[1], resistanceBroken[1], supportBroken[1], close[1]]
+
+f_channel_role(float top, float bottom, float referencePrice) =>
+    int role = 0
+    if not na(top) and not na(bottom) and top != 0 and bottom != 0
+        role := referencePrice > top ? 1 : referencePrice < bottom ? -1 : 0
+    role
+
+f_floor_to_tick(float price) =>
+    math.floor(price / syminfo.mintick + 0.00000001) * syminfo.mintick
+
+f_ceil_to_tick(float price) =>
+    math.ceil(price / syminfo.mintick - 0.00000001) * syminfo.mintick
+
+f_status_table_position() =>
+    switch statusTablePosition
+        "Top Left" => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left" => position.bottom_left
+        => position.top_right
+
+f_status_table_size() =>
+    switch statusTableTextSize
+        "Tiny" => size.tiny
+        "Normal" => size.normal
+        => size.small
+
+f_price(float price) =>
+    na(price) ? "-" : str.tostring(price, format.mintick)
+
+[sr0, sr1, sr2, sr3, sr4, sr5, sr6, sr7, sr8, sr9, sr10, sr11, sr12, sr13, sr14, sr15, sr16, sr17, sr18, sr19, requestedMA1, requestedMA2, srPivotHighEvent, srPivotLowEvent, srPivotHigh, srPivotLow, srPivotHighTime, srPivotLowTime, srResistanceBroken, srSupportBroken, srReferenceClose] = request.security(syminfo.tickerid, "15", f_sr_state(srPivotPeriod, srSource, srMinimumZoneWidth, srMaximumZoneWidth, srZoneWidthUnit, srMinStrength, srLoopback, showMA1, ma1Length, ma1Type, showMA2, ma2Length, ma2Type), gaps = barmerge.gaps_off, lookahead = barmerge.lookahead_on)
+
+array<float> srLevels = array.from(sr0, sr1, sr2, sr3, sr4, sr5, sr6, sr7, sr8, sr9, sr10, sr11, sr12, sr13, sr14, sr15, sr16, sr17, sr18, sr19)
+
+plot(showMA1 ? requestedMA1 : na, "15m MA 1", color = color.blue)
+plot(showMA2 ? requestedMA2 : na, "15m MA 2", color = color.red)
+
+bool new15Minute = ta.change(time("15")) != 0
+if new15Minute and showSRPivots and srPivotHighEvent and not na(srPivotHighTime)
+    label.new(srPivotHighTime, srPivotHigh, "H", xloc = xloc.bar_time, color = color.new(color.red, 100), textcolor = color.new(color.red, 0), style = label.style_label_down, size = size.tiny)
+if new15Minute and showSRPivots and srPivotLowEvent and not na(srPivotLowTime)
+    label.new(srPivotLowTime, srPivotLow, "L", xloc = xloc.bar_time, color = color.new(color.lime, 100), textcolor = color.new(color.lime, 0), style = label.style_label_up, size = size.tiny)
+plotshape(showSRBroken and new15Minute and srResistanceBroken, title = "Resistance Broken", style = shape.triangleup, location = location.belowbar, color = color.lime, size = size.tiny)
+plotshape(showSRBroken and new15Minute and srSupportBroken, title = "Support Broken", style = shape.triangledown, location = location.abovebar, color = color.red, size = size.tiny)
+if new15Minute and srResistanceBroken
+    alert("Resistance Broken", alert.freq_once_per_bar)
+if new15Minute and srSupportBroken
+    alert("Support Broken", alert.freq_once_per_bar)
+
+// ── One-minute Market Structure ──────────────────────────────────────────────
+float pivotHigh1m = ta.pivothigh(high, swingSize, swingSize)
+float pivotLow1m = ta.pivotlow(low, swingSize, swingSize)
+var float previousHigh = na
+var float previousLow = na
+var int previousHighIndex = na
+var int previousLowIndex = na
+var bool highActive = false
+var bool lowActive = false
+var int previousSwing = 0
+var int previousBreakoutDirection = 0
+var float lastMarkedLL = na
+var float lastMarkedHH = na
+var int lastMarkedLLBar = na
+var int lastMarkedHHBar = na
+
+bool hh = false
+bool lh = false
+bool hl = false
+bool ll = false
+if not na(pivotHigh1m)
+    if pivotHigh1m >= previousHigh
+        hh := true
+        previousSwing := 2
+    else
+        lh := true
+        previousSwing := 1
+    previousHigh := pivotHigh1m
+    highActive := true
+    previousHighIndex := bar_index - swingSize
+if not na(pivotLow1m)
+    if pivotLow1m >= previousLow
+        hl := true
+        previousSwing := -1
+    else
+        ll := true
+        previousSwing := -2
+    previousLow := pivotLow1m
+    lowActive := true
+    previousLowIndex := bar_index - swingSize
+if ll
+    lastMarkedLL := pivotLow1m
+    lastMarkedLLBar := bar_index
+if hh
+    lastMarkedHH := pivotHigh1m
+    lastMarkedHHBar := bar_index
+
+float highSource = bosConfType == "Candle Close" ? close : high
+float lowSource = bosConfType == "Candle Close" ? close : low
+bool highBroken = false
+bool lowBroken = false
+if highSource > previousHigh and highActive
+    highBroken := true
+    highActive := false
+if lowSource < previousLow and lowActive
+    lowBroken := true
+    lowActive := false
+
+bool highIsChoch = false
+bool lowIsChoch = false
+if hh and showSwing
+    label.new(bar_index - swingSize, pivotHigh1m, "HH", color = color.new(color.black, 100), style = label.style_label_down, textcolor = chart.fg_color)
+    if previousSwing[1] == -1 and showHalf
+        line.new(previousLowIndex, (previousLow + pivotHigh1m) / 2, bar_index - swingSize, (previousLow + pivotHigh1m) / 2, color = halfColor, style = f_line_style(halfStyle), width = halfWidth)
+if lh and showSwing
+    label.new(bar_index - swingSize, pivotHigh1m, "LH", color = color.new(color.black, 100), style = label.style_label_down, textcolor = chart.fg_color)
+if hl and showSwing
+    label.new(bar_index - swingSize, pivotLow1m, "HL", color = color.new(color.black, 100), style = label.style_label_up, textcolor = chart.fg_color)
+if ll and showSwing
+    label.new(bar_index - swingSize, pivotLow1m, "LL", color = color.new(color.black, 100), style = label.style_label_up, textcolor = chart.fg_color)
+    if previousSwing[1] == 1 and showHalf
+        line.new(previousHighIndex, (previousHigh + pivotLow1m) / 2, bar_index - swingSize, (previousHigh + pivotLow1m) / 2, color = halfColor, style = f_line_style(halfStyle), width = halfWidth)
+
+if highBroken
+    highIsChoch := previousBreakoutDirection == -1 and tradeChoch
+    line.new(previousHighIndex, previousHigh, bar_index, previousHigh, color = bosColor, style = f_line_style(bosStyle), width = bosWidth)
+    label.new(math.floor(bar_index - (bar_index - previousHighIndex) / 2), previousHigh, highIsChoch ? "CHoCH" : "BOS", color = color.new(color.black, 100), textcolor = bosColor, size = size.tiny)
+    previousBreakoutDirection := 1
+if lowBroken
+    lowIsChoch := previousBreakoutDirection == 1 and tradeChoch
+    line.new(previousLowIndex, previousLow, bar_index, previousLow, color = bosColor, style = f_line_style(bosStyle), width = bosWidth)
+    label.new(math.floor(bar_index - (bar_index - previousLowIndex) / 2), previousLow, lowIsChoch ? "CHoCH" : "BOS", color = color.new(color.black, 100), textcolor = bosColor, style = label.style_label_up, size = size.tiny)
+    previousBreakoutDirection := -1
+
+// ── Confirmed-minute aggregation and pending touches ─────────────────────────
+var float current15High = na
+var float current15Low = na
+bool flatForSignals = strategy.position_size == 0 and nz(strategy.position_size[1]) == 0
+if not flatForSignals
+    current15High := na
+    current15Low := na
+else if new15Minute or na(current15High)
+    current15High := high
+    current15Low := low
+else
+    current15High := math.max(current15High, high)
+    current15Low := math.min(current15Low, low)
+
+var array<float> pendingMidpoints = array.new_float()
+var array<float> pendingTops = array.new_float()
+var array<float> pendingBottoms = array.new_float()
+var array<int> pendingRoles = array.new_int()
+var array<int> pendingBars = array.new_int()
+var int lastTrade15Open = na
+var float activeStop = na
+var float activeTarget = na
+var float lastTradeEntry = na
+var float lastTradeSL = na
+var float lastTradeTP = na
+var float lastTradeMaxZone = na
+var float lastTradeMinZone = na
+var string lastTradeZoneType = "-"
+// Keep the order's zone separate until a fill is confirmed.
+var float submittedTradeZoneTop = na
+var float submittedTradeZoneBottom = na
+var int submittedTradeZoneRole = na
+var int submittedTradeZoneTouchBar = na
+var box latestFilledTradeZone = na
+var int knownClosedTrades = 0
+var int knownOpenTrades = 0
+var int touchCount = 0
+var int chochCount = 0
+var int orderCount = 0
+bool newOpenTrade = strategy.opentrades > knownOpenTrades
+bool newClosedTrade = strategy.closedtrades > knownClosedTrades
+// Promote the submitted zone only after the strategy reports a filled trade.
+if newOpenTrade or newClosedTrade
+    if not na(submittedTradeZoneTop) and not na(submittedTradeZoneBottom) and not na(submittedTradeZoneTouchBar)
+        color tradeZoneColor = submittedTradeZoneRole == 1 ? supportColor : submittedTradeZoneRole == -1 ? resistanceColor : insideColor
+        if not na(latestFilledTradeZone)
+            box.delete(latestFilledTradeZone)
+        latestFilledTradeZone := box.new(left = submittedTradeZoneTouchBar, top = submittedTradeZoneTop, right = submittedTradeZoneTouchBar + 1, bottom = submittedTradeZoneBottom, border_color = tradeZoneColor, border_width = 1, extend = extend.right, bgcolor = tradeZoneColor)
+        submittedTradeZoneTop := na
+        submittedTradeZoneBottom := na
+        submittedTradeZoneRole := na
+        submittedTradeZoneTouchBar := na
+if newClosedTrade
+    knownClosedTrades := strategy.closedtrades
+    activeStop := na
+    activeTarget := na
+knownOpenTrades := strategy.opentrades
+
+if flatForSignals
+    // Follow an existing touched channel by its midpoint, allowing its width or slot to change.
+    int pendingIndex = array.size(pendingMidpoints) - 1
+    while pendingIndex >= 0
+        float oldMidpoint = array.get(pendingMidpoints, pendingIndex)
+        float oldTop = array.get(pendingTops, pendingIndex)
+        float oldBottom = array.get(pendingBottoms, pendingIndex)
+        int oldRole = array.get(pendingRoles, pendingIndex)
+        float bestDistance = na
+        int bestChannel = -1
+        for channelIndex = 0 to srMaxChannels - 1
+            float top = array.get(srLevels, channelIndex * 2)
+            float bottom = array.get(srLevels, channelIndex * 2 + 1)
+            if not na(top) and not na(bottom) and top != 0 and bottom != 0
+                float midpoint = (top + bottom) / 2
+                float allowedDistance = ((oldTop - oldBottom) + (top - bottom)) / 2 + syminfo.mintick
+                float distance = math.abs(midpoint - oldMidpoint)
+                if distance <= allowedDistance and (na(bestDistance) or distance < bestDistance)
+                    bestDistance := distance
+                    bestChannel := channelIndex
+        bool removePending = bestChannel < 0
+        if not removePending
+            float newTop = array.get(srLevels, bestChannel * 2)
+            float newBottom = array.get(srLevels, bestChannel * 2 + 1)
+            int newRole = f_channel_role(newTop, newBottom, srReferenceClose)
+            removePending := newRole != 0 and newRole != oldRole
+            if not removePending
+                array.set(pendingMidpoints, pendingIndex, (newTop + newBottom) / 2)
+                array.set(pendingTops, pendingIndex, newTop)
+                array.set(pendingBottoms, pendingIndex, newBottom)
+        if removePending
+            array.remove(pendingMidpoints, pendingIndex)
+            array.remove(pendingTops, pendingIndex)
+            array.remove(pendingBottoms, pendingIndex)
+            array.remove(pendingRoles, pendingIndex)
+            array.remove(pendingBars, pendingIndex)
+        pendingIndex -= 1
+
+    // A range assembled from closed one-minute bars detects contact inside this 15m candle.
+    // After a trade, require at least one new 15m candle before accepting any fresh touch.
+    bool freshTouchPeriod = na(lastTrade15Open) or time("15") > lastTrade15Open
+    if freshTouchPeriod
+        for channelIndex = 0 to srMaxChannels - 1
+            float top = array.get(srLevels, channelIndex * 2)
+            float bottom = array.get(srLevels, channelIndex * 2 + 1)
+            int role = f_channel_role(top, bottom, srReferenceClose)
+            bool rangeTouchesChannel = not na(top) and not na(bottom) and current15High >= bottom and current15Low <= top
+            if role != 0 and rangeTouchesChannel
+                float midpoint = (top + bottom) / 2
+                bool alreadyPending = false
+                if array.size(pendingMidpoints) > 0
+                    for pending = 0 to array.size(pendingMidpoints) - 1
+                        float pendingMid = array.get(pendingMidpoints, pending)
+                        float pendingTop = array.get(pendingTops, pending)
+                        float pendingBottom = array.get(pendingBottoms, pending)
+                        float matchDistance = ((pendingTop - pendingBottom) + (top - bottom)) / 2 + syminfo.mintick
+                        if math.abs(midpoint - pendingMid) <= matchDistance
+                            alreadyPending := true
+                if not alreadyPending
+                    array.push(pendingMidpoints, midpoint)
+                    array.push(pendingTops, top)
+                    array.push(pendingBottoms, bottom)
+                    array.push(pendingRoles, role)
+                    array.push(pendingBars, bar_index)
+                    touchCount += 1
+
+int longTouchIndex = -1
+int shortTouchIndex = -1
+if flatForSignals
+    if array.size(pendingMidpoints) > 0
+        for pending = 0 to array.size(pendingMidpoints) - 1
+            int role = array.get(pendingRoles, pending)
+            int touchBar = array.get(pendingBars, pending)
+            if touchBar < bar_index
+                if role == 1 and longTouchIndex < 0
+                    longTouchIndex := pending
+                if role == -1 and shortTouchIndex < 0
+                    shortTouchIndex := pending
+
+bool ambiguousWickBreak = bosConfType == "Wicks" and highBroken and lowBroken
+bool canOpenLong = tradeChoch and highIsChoch and not ambiguousWickBreak and longTouchIndex >= 0
+bool canOpenShort = tradeChoch and lowIsChoch and not ambiguousWickBreak and shortTouchIndex >= 0
+if highIsChoch or lowIsChoch
+    chochCount += 1
+
+float bufferSize = syminfo.type == "forex" ? forexBufferPips * syminfo.mintick * ((syminfo.pricescale == 1000 or syminfo.pricescale == 100000) ? 10 : 1) : futuresBufferPoints
+float minimumQuantity = na(syminfo.mincontract) or syminfo.mincontract <= 0 ? 1.0 : syminfo.mincontract
+float riskBudget = strategy.equity * riskPercent / 100
+
+if canOpenLong and not na(lastMarkedLL) and lastMarkedLLBar <= bar_index
+    float entryPrice = close
+    float stopPrice = f_floor_to_tick(lastMarkedLL - bufferSize)
+    float riskPerUnit = strategy.convert_to_account(math.abs(entryPrice - stopPrice) * syminfo.pointvalue)
+    if stopPrice < entryPrice and not na(riskPerUnit) and riskPerUnit > 0 and riskBudget > 0
+        float quantity = math.floor((riskBudget / riskPerUnit) / minimumQuantity + 0.00000001) * minimumQuantity
+        float estimatedRisk = strategy.convert_to_account(math.abs(entryPrice - stopPrice) * syminfo.pointvalue * quantity)
+        if quantity >= minimumQuantity and estimatedRisk <= riskBudget + 0.000001
+            float targetPrice = entryPrice + (entryPrice - stopPrice) * rewardRisk
+            float tradeZoneTop = array.get(pendingTops, longTouchIndex)
+            float tradeZoneBottom = array.get(pendingBottoms, longTouchIndex)
+            int tradeZoneRole = f_channel_role(tradeZoneTop, tradeZoneBottom, srReferenceClose)
+            submittedTradeZoneTop := tradeZoneTop
+            submittedTradeZoneBottom := tradeZoneBottom
+            submittedTradeZoneRole := tradeZoneRole
+            submittedTradeZoneTouchBar := array.get(pendingBars, longTouchIndex)
+            strategy.entry("Long", strategy.long, qty = quantity)
+            strategy.exit("Long exit", from_entry = "Long", stop = stopPrice, limit = targetPrice)
+            orderCount += 1
+            activeStop := stopPrice
+            activeTarget := targetPrice
+            lastTradeEntry := entryPrice
+            lastTradeSL := stopPrice
+            lastTradeTP := targetPrice
+            lastTradeMaxZone := tradeZoneTop
+            lastTradeMinZone := tradeZoneBottom
+            lastTradeZoneType := tradeZoneRole == 1 ? "SUPPORT" : tradeZoneRole == -1 ? "RESISTANCE" : "NEITHER"
+            lastTrade15Open := time("15")
+            array.clear(pendingMidpoints)
+            array.clear(pendingTops)
+            array.clear(pendingBottoms)
+            array.clear(pendingRoles)
+            array.clear(pendingBars)
+
+if canOpenShort and not na(lastMarkedHH) and lastMarkedHHBar <= bar_index
+    float entryPrice = close
+    float stopPrice = f_ceil_to_tick(lastMarkedHH + bufferSize)
+    float riskPerUnit = strategy.convert_to_account(math.abs(entryPrice - stopPrice) * syminfo.pointvalue)
+    if stopPrice > entryPrice and not na(riskPerUnit) and riskPerUnit > 0 and riskBudget > 0
+        float quantity = math.floor((riskBudget / riskPerUnit) / minimumQuantity + 0.00000001) * minimumQuantity
+        float estimatedRisk = strategy.convert_to_account(math.abs(entryPrice - stopPrice) * syminfo.pointvalue * quantity)
+        if quantity >= minimumQuantity and estimatedRisk <= riskBudget + 0.000001
+            float targetPrice = entryPrice - (stopPrice - entryPrice) * rewardRisk
+            float tradeZoneTop = array.get(pendingTops, shortTouchIndex)
+            float tradeZoneBottom = array.get(pendingBottoms, shortTouchIndex)
+            int tradeZoneRole = f_channel_role(tradeZoneTop, tradeZoneBottom, srReferenceClose)
+            submittedTradeZoneTop := tradeZoneTop
+            submittedTradeZoneBottom := tradeZoneBottom
+            submittedTradeZoneRole := tradeZoneRole
+            submittedTradeZoneTouchBar := array.get(pendingBars, shortTouchIndex)
+            strategy.entry("Short", strategy.short, qty = quantity)
+            strategy.exit("Short exit", from_entry = "Short", stop = stopPrice, limit = targetPrice)
+            orderCount += 1
+            activeStop := stopPrice
+            activeTarget := targetPrice
+            lastTradeEntry := entryPrice
+            lastTradeSL := stopPrice
+            lastTradeTP := targetPrice
+            lastTradeMaxZone := tradeZoneTop
+            lastTradeMinZone := tradeZoneBottom
+            lastTradeZoneType := tradeZoneRole == 1 ? "SUPPORT" : tradeZoneRole == -1 ? "RESISTANCE" : "NEITHER"
+            lastTrade15Open := time("15")
+            array.clear(pendingMidpoints)
+            array.clear(pendingTops)
+            array.clear(pendingBottoms)
+            array.clear(pendingRoles)
+            array.clear(pendingBars)
+
+if not na(activeStop) and not na(activeTarget)
+    if strategy.position_size > 0
+        strategy.exit("Long exit", from_entry = "Long", stop = activeStop, limit = activeTarget)
+    if strategy.position_size < 0
+        strategy.exit("Short exit", from_entry = "Short", stop = activeStop, limit = activeTarget)
+
+// The Strategy Report is empty until an order fills. Keep the latest trade details visible.
+var table statusTable = table.new(f_status_table_position(), 2, 7, border_width = 1)
+f_status_cell(int column, int row, string cellText, color textColor, color backgroundColor) =>
+    table.cell(statusTable, column, row, cellText, text_color = textColor, bgcolor = backgroundColor, text_size = f_status_table_size())
+
+if barstate.isconfirmed
+    if showStatusTable
+        int filledCount = strategy.opentrades + strategy.closedtrades
+        string status = not tradeChoch ? "CHoCH disabled" : strategy.position_size != 0 ? "In position" : filledCount > 0 ? "Waiting for setup" : orderCount > 0 ? "Orders sent; check margin" : chochCount == 0 ? "No CHoCH yet" : touchCount == 0 ? "No S/R touch yet" : "No qualifying setup yet"
+        color zoneTypeColor = lastTradeZoneType == "SUPPORT" ? color.lime : lastTradeZoneType == "RESISTANCE" ? color.red : color.white
+        f_status_cell(0, 0, "CHoCH + S/R", color.white, color.new(color.black, 20))
+        f_status_cell(1, 0, status, color.white, color.new(color.black, 20))
+        f_status_cell(0, 1, "Entry", color.white, color.new(color.black, 50))
+        f_status_cell(1, 1, f_price(lastTradeEntry), color.white, color.new(color.black, 50))
+        f_status_cell(0, 2, "SL", color.white, color.new(color.black, 50))
+        f_status_cell(1, 2, f_price(lastTradeSL), color.red, color.new(color.black, 50))
+        f_status_cell(0, 3, "TP", color.white, color.new(color.black, 50))
+        f_status_cell(1, 3, f_price(lastTradeTP), color.lime, color.new(color.black, 50))
+        f_status_cell(0, 4, "Max Zone", color.white, color.new(color.black, 50))
+        f_status_cell(1, 4, f_price(lastTradeMaxZone), color.white, color.new(color.black, 50))
+        f_status_cell(0, 5, "Min Zone", color.white, color.new(color.black, 50))
+        f_status_cell(1, 5, f_price(lastTradeMinZone), color.white, color.new(color.black, 50))
+        f_status_cell(0, 6, "Zone Type", color.white, color.new(color.black, 50))
+        f_status_cell(1, 6, lastTradeZoneType, zoneTypeColor, color.new(color.black, 50))
+    else
+        table.clear(statusTable, 0, 0, 1, 6)

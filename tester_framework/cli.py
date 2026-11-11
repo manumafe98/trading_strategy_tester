@@ -50,3 +50,4 @@ class RunConfig:
     trade_html: int | None = None
     days: tuple[int, ...] = ()
     months: tuple[int, ...] = ()
+    session_exit: bool = False

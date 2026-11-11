@@ -1,0 +1,703 @@
+//@version=6
+strategy("ORB Strategies [NY]", overlay=true,
+         pyramiding=0,
+         process_orders_on_close=true,
+         default_qty_type=strategy.fixed,
+         default_qty_value=1,
+         initial_capital=10000,
+         currency=currency.USD,
+         margin_long=5,
+         margin_short=5,
+         max_lines_count=500,
+         max_labels_count=500,
+         max_boxes_count=500)
+
+// ============================================================================
+// INPUTS
+// ============================================================================
+var string G0 = "Strategy"
+var string G1 = "ORB Period - All times: America/New_York"
+var string G2 = "Lines"
+var string G3 = "Labels"
+var string G4 = "Zone"
+var string G5 = "FVG"
+var string G6 = "Position"
+var string G7 = "Status Table"
+
+i_strategy = input.string(
+     "candle",
+     "Strategy",
+     options = ["candle", "fvg", "combined"],
+     tooltip = "Selects which ORB strategy logic is tested.",
+     group   = G0)
+
+i_orbPeriod = input.string(
+     "5",
+     "ORB Period (minutes)",
+     options = ["5", "10", "15", "30"],
+     tooltip = "Captures the high/low from 9:30 NY through the selected ORB close. Breakouts require a confirmed 1-minute candle close after the ORB window.",
+     group   = G1)
+
+i_highColor = input.color(color.new(#26a69a, 0), "High Line Color", group=G2)
+i_lowColor  = input.color(color.new(#ef5350, 0), "Low Line Color",  group=G2)
+i_lWidth    = input.int(2, "Line Width", minval=1, maxval=4,         group=G2)
+i_lStyle    = input.string("Solid", "Line Style",
+     options = ["Solid", "Dashed", "Dotted"],                        group=G2)
+
+i_showLbl   = input.bool(true, "Show Labels",                        group=G3)
+i_lblHText  = input.string("ORBH", "High Label Text",                group=G3)
+i_lblLText  = input.string("ORBL", "Low Label Text",                 group=G3)
+i_lblHPos   = input.string("Right", "High Label H-Position",
+     options = ["Left", "Center", "Right"],                          group=G3)
+i_lblLPos   = input.string("Right", "Low Label H-Position",
+     options = ["Left", "Center", "Right"],                          group=G3)
+i_lblVAlign = input.string("Middle", "Label Vertical Alignment",
+     options = ["Top", "Middle", "Bottom"],                          group=G3)
+i_lblSize   = input.string("Small", "Label Size",
+     options = ["Tiny", "Small", "Normal", "Large"],                 group=G3)
+
+i_showZone  = input.bool(true, "Show ORB Zone",                      group=G4)
+i_zoneAlpha = input.int(90, "Zone Transparency", minval=50, maxval=99, group=G4)
+
+i_fvgBoxLen   = input.int(22, "Box Length", minval=1,                group=G5)
+i_fvgBullCol  = input.color(color.new(color.green, 90), "Bull Color", group=G5)
+i_fvgBearCol  = input.color(color.new(color.red, 90), "Bear Color",   group=G5)
+i_fvgSession  = input.session("0930-1200", "FVG Session (NY)",
+     tooltip = "New York session when FVG detection is active. FVGs are tracked from session start until the ORB breaks.",
+     group   = G5)
+i_maxFvgs     = input.int(100, "Max Tracked FVGs", minval=1, maxval=500, group=G5)
+i_extEnabled  = input.bool(true, "FVG Ext Enabled",                  group=G5)
+i_extLen      = input.int(22, "FVG Ext Length", minval=1,            group=G5)
+i_extWidth    = input.int(1, "FVG Ext Width", minval=1, maxval=4,    group=G5)
+i_extStyle    = input.string("Solid", "FVG Ext Style",
+     options = ["Solid", "Dashed", "Dotted"],                        group=G5)
+
+i_accountSize = input.float(10000, "Account Size ($)",
+     minval=1000, step=1000,
+     tooltip = "Starting account size for fixed-fractional position sizing.",
+     group   = G6)
+
+i_riskPercent = input.float(1.0, "Risk per Trade (%)",
+     minval=0.1, maxval=100, step=0.1,
+     tooltip = "% of account size risked per trade. Determines position size from SL distance.",
+     group   = G6) / 100
+
+i_rrRatio = input.string(
+     "2",
+     "Risk/Reward",
+     options = ["1", "1.5", "2", "2.5", "3", "3.5", "4", "4.5", "5"],
+     tooltip = "Take-profit multiple based on the configured stop distance. Example: 3 means 3:1 RR.",
+     group   = G6)
+
+i_showTable = input.bool(true, "Show Status Table", group=G7)
+i_tablePos  = input.string("Top Right", "Table Position",
+     options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"],
+     group   = G7)
+i_tableSize = input.string("Small", "Table Text Size",
+     options = ["Tiny", "Small", "Normal"],
+     group   = G7)
+
+// ============================================================================
+// DERIVED CONSTANTS
+// ============================================================================
+NY = "America/New_York"
+float TICK_OFFSET = 0.25
+int ORB_START_TOTAL = 9 * 60 + 30
+int TRADE_END_TOTAL = 12 * 60
+
+orbMinutes = switch i_orbPeriod
+    "10" => 10
+    "15" => 15
+    "30" => 30
+    =>       5
+
+orbEndTotal = ORB_START_TOTAL + orbMinutes
+usesFvg = i_strategy != "candle"
+
+rrMultiple = switch i_rrRatio
+    "1"   => 1.0
+    "1.5" => 1.5
+    "2.5" => 2.5
+    "3"   => 3.0
+    "3.5" => 3.5
+    "4"   => 4.0
+    "4.5" => 4.5
+    "5"   => 5.0
+    =>        2.0
+
+// ============================================================================
+// HELPER FUNCTIONS
+// ============================================================================
+f_ls() =>
+    i_lStyle == "Dashed" ? line.style_dashed :
+     i_lStyle == "Dotted" ? line.style_dotted : line.style_solid
+
+f_extStyle() =>
+    i_extStyle == "Dashed" ? line.style_dashed :
+     i_extStyle == "Dotted" ? line.style_dotted : line.style_solid
+
+f_sz() =>
+    i_lblSize == "Tiny" ? size.tiny :
+     i_lblSize == "Normal" ? size.normal :
+     i_lblSize == "Large" ? size.large : size.small
+
+f_vStyle() =>
+    switch i_lblVAlign
+        "Top"    => label.style_label_down
+        "Bottom" => label.style_label_up
+        =>          label.style_label_center
+
+f_lx(pos, s, e) =>
+    switch pos
+        "Left"   => s
+        "Center" => math.round((s + e) / 2)
+        =>          e
+
+f_tablePos() =>
+    switch i_tablePos
+        "Top Left"     => position.top_left
+        "Bottom Right" => position.bottom_right
+        "Bottom Left"  => position.bottom_left
+        =>                position.top_right
+
+f_tableSize() =>
+    i_tableSize == "Tiny" ? size.tiny :
+     i_tableSize == "Normal" ? size.normal : size.small
+
+f_price(v) =>
+    na(v) ? "-" : str.tostring(v, format.mintick)
+
+f_qty(v) =>
+    na(v) ? "-" : str.tostring(v)
+
+f_contracts(entryPrice, stopPrice) =>
+    float riskDistance    = math.abs(entryPrice - stopPrice)
+    float riskDollars     = i_accountSize * i_riskPercent
+    float pointVal        = na(syminfo.pointvalue) or syminfo.pointvalue == 0 ? 2.0 : syminfo.pointvalue
+    float riskPerContract = riskDistance * pointVal
+    int contracts         = riskPerContract > 0 ? math.max(1, int(math.floor(riskDollars / riskPerContract))) : 1
+    float marginPerContract = entryPrice * pointVal * 0.05
+    if marginPerContract > 0
+        int maxAffordable = int(math.floor(strategy.equity / marginPerContract))
+        contracts := math.min(contracts, math.max(1, maxAffordable))
+    contracts
+
+// ============================================================================
+// CURRENT-BAR TIME (1-minute chart required)
+// ============================================================================
+nyH = hour(time, NY)
+nyM = minute(time, NY)
+nyD = dayofmonth(time, NY)
+nyTotalMins = nyH * 60 + nyM
+
+inORBWindow = nyTotalMins >= ORB_START_TOTAL and nyTotalMins < orbEndTotal
+pastORB     = nyTotalMins >= orbEndTotal
+
+// Eligible: 9:30 AM through 11:59 AM New York time.
+inTradeSession = nyTotalMins >= ORB_START_TOTAL and nyTotalMins < TRADE_END_TOTAL
+
+// FVG window uses input.session() for FVG detection time range.
+inFVGWindow = not na(time(timeframe.period, i_fvgSession, NY))
+
+if timeframe.period != "1"
+    runtime.error("ORB Strategies [NY] requires a 1-minute chart.\nCurrent timeframe: " + timeframe.period)
+
+// ============================================================================
+// PERSISTENT STATE
+// ============================================================================
+var float    orbH            = na
+var float    orbL            = na
+var bool     drawn           = false
+var bool     stopped         = false
+var int      startBar        = na
+var int      sessionStartBar = na
+var line     lnH             = na
+var line     lnL             = na
+var label    lbH             = na
+var label    lbL             = na
+var linefill zFill           = na
+
+var array<box>   fvgBoxes    = array.new<box>()
+var array<label> fvgLabels   = array.new<label>()
+var array<float> fvgTops     = array.new<float>()
+var array<float> fvgBots     = array.new<float>()
+var array<bool>  fvgIsBulls  = array.new<bool>()
+var array<line>  fvgExtLines = array.new<line>()
+var bool         fvgWasActive = false
+
+var box   pendingBox   = na
+var label pendingLabel = na
+var line  pendingExt   = na
+var float pendingTop   = na
+var float pendingBot   = na
+
+var float candleCover = na
+var float candleEntry = na
+var float candleTP    = na
+var int   orbBreakDir = 0
+
+var float tradeSL       = na
+var float tradeTP       = na
+var int   tradeQty      = na
+var bool  tradeQualified = false
+var string stateText     = "Waiting for ORB"
+var string qualifierText = "-"
+
+var table statusTable = table.new(
+     f_tablePos(), 2, 10,
+     bgcolor      = color.new(color.black, 70),
+     border_color = color.new(color.gray, 45),
+     border_width = 1)
+
+f_tableRow(row, labelText, valueText, valueColor) =>
+    table.cell(
+         statusTable, 0, row, labelText,
+         text_color = color.new(color.white, 0),
+         bgcolor    = color.new(color.black, 35),
+         text_size  = f_tableSize(),
+         text_halign = text.align_left)
+    table.cell(
+         statusTable, 1, row, valueText,
+         text_color = valueColor,
+         bgcolor    = color.new(color.black, 70),
+         text_size  = f_tableSize(),
+         text_halign = text.align_right)
+
+// ============================================================================
+// RESET - new trading day
+// ============================================================================
+if na(nyD[1]) or nyD != nyD[1]
+    strategy.close_all(comment="EOD")
+
+    if not na(lnH)
+        line.delete(lnH)
+    if not na(lnL)
+        line.delete(lnL)
+    if not na(lbH)
+        label.delete(lbH)
+    if not na(lbL)
+        label.delete(lbL)
+    if not na(zFill)
+        linefill.delete(zFill)
+
+    orbH            := na
+    orbL            := na
+    drawn           := false
+    stopped         := false
+    startBar        := na
+    sessionStartBar := na
+    lnH             := na
+    lnL             := na
+    lbH             := na
+    lbL             := na
+    zFill           := na
+
+    candleCover     := na
+    candleEntry     := na
+    candleTP        := na
+    orbBreakDir     := 0
+    tradeSL         := na
+    tradeTP         := na
+    tradeQty        := na
+    tradeQualified  := false
+    stateText       := "Waiting for ORB"
+    qualifierText   := "-"
+
+    pendingBox      := na
+    pendingLabel    := na
+    pendingExt      := na
+    pendingTop      := na
+    pendingBot      := na
+
+    if array.size(fvgBoxes) > 0
+        for i = 0 to array.size(fvgBoxes) - 1
+            box.delete(array.get(fvgBoxes, i))
+            label.delete(array.get(fvgLabels, i))
+            if not na(array.get(fvgExtLines, i))
+                line.delete(array.get(fvgExtLines, i))
+    array.clear(fvgBoxes)
+    array.clear(fvgLabels)
+    array.clear(fvgTops)
+    array.clear(fvgBots)
+    array.clear(fvgIsBulls)
+    array.clear(fvgExtLines)
+    fvgWasActive := false
+
+// ============================================================================
+// ORB - Opening Range Breakout levels
+// ============================================================================
+if nyTotalMins == ORB_START_TOTAL and na(sessionStartBar)
+    sessionStartBar := bar_index
+
+if inORBWindow and not drawn
+    orbH := na(orbH) ? high : math.max(orbH, high)
+    orbL := na(orbL) ? low  : math.min(orbL, low)
+    if not stopped
+        stateText := "Building ORB"
+
+if pastORB and not drawn and not na(orbH) and not na(orbL)
+    drawn    := true
+    startBar := not na(sessionStartBar) ? sessionStartBar : bar_index
+    stateText := "Waiting for breakout"
+
+    lnH := line.new(startBar, orbH, bar_index + 1, orbH,
+         color=i_highColor, width=i_lWidth, style=f_ls(), extend=extend.right)
+    lnL := line.new(startBar, orbL, bar_index + 1, orbL,
+         color=i_lowColor, width=i_lWidth, style=f_ls(), extend=extend.right)
+
+    if i_showZone
+        zFill := linefill.new(lnH, lnL, color.new(color.gray, i_zoneAlpha))
+
+    if i_showLbl
+        lbH := label.new(
+             x         = startBar,
+             y         = orbH,
+             text      = i_lblHText,
+             color     = chart.bg_color,
+             textcolor = i_highColor,
+             style     = f_vStyle(),
+             size      = f_sz())
+        lbL := label.new(
+             x         = startBar,
+             y         = orbL,
+             text      = i_lblLText,
+             color     = chart.bg_color,
+             textcolor = i_lowColor,
+             style     = f_vStyle(),
+             size      = f_sz())
+
+if drawn and not stopped and i_showLbl
+    if not na(lbH)
+        label.set_x(lbH, f_lx(i_lblHPos, startBar, bar_index))
+    if not na(lbL)
+        label.set_x(lbL, f_lx(i_lblLPos, startBar, bar_index))
+
+if drawn and not stopped
+    stateText := inTradeSession ? "Waiting for breakout" : "Trade session ended"
+
+// ============================================================================
+// FVG PENDING - draw on bar open, confirm/adjust/delete on bar close
+// ============================================================================
+if usesFvg and barstate.isnew and bar_index >= 2
+    if inFVGWindow and not stopped[1]
+        isBullOpen = high[2] < low
+        isBearOpen = low[2] > high
+
+        if isBullOpen or isBearOpen
+            pendingTop := isBullOpen ? low : low[2]
+            pendingBot := isBullOpen ? high[2] : high
+
+            pendingBox := box.new(
+                 left         = bar_index[2],
+                 right        = bar_index[2] + i_fvgBoxLen,
+                 top          = pendingTop,
+                 bottom       = pendingBot,
+                 bgcolor      = isBullOpen ? i_fvgBullCol : i_fvgBearCol,
+                 border_color = isBullOpen ? i_fvgBullCol : i_fvgBearCol)
+
+            pendingLabel := label.new(
+                 x         = bar_index[2] + math.max(1, i_fvgBoxLen - 3),
+                 y         = (pendingTop + pendingBot) / 2,
+                 text      = "FVG",
+                 color     = color.new(color.white, 100),
+                 style     = label.style_label_center,
+                 textcolor = isBullOpen ? color.green : color.red,
+                 size      = size.small,
+                 textalign = text.align_right)
+
+            if i_extEnabled
+                extLevel = isBullOpen ? low[1] : high[1]
+                if extLevel < pendingBot or extLevel > pendingTop
+                    pendingExt := line.new(
+                         bar_index[1], extLevel,
+                         bar_index[1] + i_extLen, extLevel,
+                         color = isBullOpen ? i_fvgBullCol : i_fvgBearCol,
+                         width = i_extWidth,
+                         style = f_extStyle())
+
+// ============================================================================
+// FVG - multi-track, ORB-break gated
+// ============================================================================
+if usesFvg and bar_index >= 2 and barstate.isconfirmed
+    if inFVGWindow
+        fvgWasActive := true
+
+    if fvgWasActive and not inFVGWindow and array.size(fvgBoxes) > 0
+        for i = 0 to array.size(fvgBoxes) - 1
+            box.delete(array.get(fvgBoxes, i))
+            label.delete(array.get(fvgLabels, i))
+            if not na(array.get(fvgExtLines, i))
+                line.delete(array.get(fvgExtLines, i))
+        array.clear(fvgBoxes)
+        array.clear(fvgLabels)
+        array.clear(fvgTops)
+        array.clear(fvgBots)
+        array.clear(fvgIsBulls)
+        array.clear(fvgExtLines)
+
+    if array.size(fvgBoxes) > 0
+        i = array.size(fvgBoxes) - 1
+        while i >= 0
+            top  = array.get(fvgTops, i)
+            bot  = array.get(fvgBots, i)
+            bull = array.get(fvgIsBulls, i)
+
+            mitigated = (bull and close < bot) or (not bull and close > top)
+
+            if mitigated
+                box.delete(array.get(fvgBoxes, i))
+                label.delete(array.get(fvgLabels, i))
+                if not na(array.get(fvgExtLines, i))
+                    line.delete(array.get(fvgExtLines, i))
+                array.remove(fvgBoxes, i)
+                array.remove(fvgLabels, i)
+                array.remove(fvgTops, i)
+                array.remove(fvgBots, i)
+                array.remove(fvgIsBulls, i)
+                array.remove(fvgExtLines, i)
+            i -= 1
+
+    if not na(pendingBox)
+        isBullClose = high[2] < low
+        isBearClose = low[2] > high
+
+        if isBullClose or isBearClose
+            finalTop = isBullClose ? low : low[2]
+            finalBot = isBullClose ? high[2] : high
+
+            box.set_top(pendingBox, finalTop)
+            box.set_bottom(pendingBox, finalBot)
+            box.set_bgcolor(pendingBox, isBullClose ? i_fvgBullCol : i_fvgBearCol)
+            box.set_border_color(pendingBox, isBullClose ? i_fvgBullCol : i_fvgBearCol)
+            label.set_y(pendingLabel, (finalTop + finalBot) / 2)
+            label.set_textcolor(pendingLabel, isBullClose ? color.green : color.red)
+
+            if not na(pendingExt)
+                line.delete(pendingExt)
+            line newExtLine = na
+            if i_extEnabled
+                extLevel = isBullClose ? low[1] : high[1]
+                if extLevel < finalBot or extLevel > finalTop
+                    newExtLine := line.new(
+                         bar_index[1], extLevel,
+                         bar_index[1] + i_extLen, extLevel,
+                         color = isBullClose ? i_fvgBullCol : i_fvgBearCol,
+                         width = i_extWidth,
+                         style = f_extStyle())
+
+            if array.size(fvgBoxes) >= i_maxFvgs
+                box.delete(array.get(fvgBoxes, 0))
+                label.delete(array.get(fvgLabels, 0))
+                if not na(array.get(fvgExtLines, 0))
+                    line.delete(array.get(fvgExtLines, 0))
+                array.remove(fvgBoxes, 0)
+                array.remove(fvgLabels, 0)
+                array.remove(fvgTops, 0)
+                array.remove(fvgBots, 0)
+                array.remove(fvgIsBulls, 0)
+                array.remove(fvgExtLines, 0)
+
+            array.push(fvgBoxes, pendingBox)
+            array.push(fvgLabels, pendingLabel)
+            array.push(fvgTops, finalTop)
+            array.push(fvgBots, finalBot)
+            array.push(fvgIsBulls, isBullClose)
+            array.push(fvgExtLines, newExtLine)
+        else
+            box.delete(pendingBox)
+            label.delete(pendingLabel)
+            if not na(pendingExt)
+                line.delete(pendingExt)
+
+        pendingBox   := na
+        pendingLabel := na
+        pendingExt   := na
+        pendingTop   := na
+        pendingBot   := na
+
+    else if inFVGWindow and not stopped[1]
+        isBull = high[2] < low
+        isBear = low[2] > high
+
+        if isBull or isBear
+            if array.size(fvgBoxes) >= i_maxFvgs
+                box.delete(array.get(fvgBoxes, 0))
+                label.delete(array.get(fvgLabels, 0))
+                if not na(array.get(fvgExtLines, 0))
+                    line.delete(array.get(fvgExtLines, 0))
+                array.remove(fvgBoxes, 0)
+                array.remove(fvgLabels, 0)
+                array.remove(fvgTops, 0)
+                array.remove(fvgBots, 0)
+                array.remove(fvgIsBulls, 0)
+                array.remove(fvgExtLines, 0)
+
+            top = isBull ? low : low[2]
+            bot = isBull ? high[2] : high
+
+            newBox = box.new(
+                 left         = bar_index[2],
+                 right        = bar_index[2] + i_fvgBoxLen,
+                 top          = top,
+                 bottom       = bot,
+                 bgcolor      = isBull ? i_fvgBullCol : i_fvgBearCol,
+                 border_color = isBull ? i_fvgBullCol : i_fvgBearCol)
+
+            newLabel = label.new(
+                 x         = bar_index[2] + math.max(1, i_fvgBoxLen - 3),
+                 y         = (top + bot) / 2,
+                 text      = "FVG",
+                 color     = color.new(color.white, 100),
+                 style     = label.style_label_center,
+                 textcolor = isBull ? color.green : color.red,
+                 size      = size.small,
+                 textalign = text.align_right)
+
+            line newExtLine = na
+            if i_extEnabled
+                extLevel = isBull ? low[1] : high[1]
+                if extLevel < bot or extLevel > top
+                    newExtLine := line.new(
+                         bar_index[1], extLevel,
+                         bar_index[1] + i_extLen, extLevel,
+                         color = isBull ? i_fvgBullCol : i_fvgBearCol,
+                         width = i_extWidth,
+                         style = f_extStyle())
+
+            array.push(fvgBoxes, newBox)
+            array.push(fvgLabels, newLabel)
+            array.push(fvgTops, top)
+            array.push(fvgBots, bot)
+            array.push(fvgIsBulls, isBull)
+            array.push(fvgExtLines, newExtLine)
+
+// ============================================================================
+// BREAKOUT + STRATEGY ENTRY
+// ============================================================================
+plotshape(drawn and not stopped and barstate.isconfirmed and close > orbH,
+     title="Break Up", style=shape.triangleup, location=location.belowbar,
+     color=color.green, size=size.small)
+plotshape(drawn and not stopped and barstate.isconfirmed and close < orbL,
+     title="Break Down", style=shape.triangledown, location=location.abovebar,
+     color=color.red, size=size.small)
+plotshape(drawn and not stopped and barstate.isconfirmed and inTradeSession,
+     title="In Session", style=shape.circle, location=location.absolute,
+     color=color.new(color.yellow, 80), size=size.tiny)
+
+if drawn and not stopped and barstate.isconfirmed
+    bool breakoutUp   = close > orbH
+    bool breakoutDown = close < orbL
+
+    if (breakoutUp or breakoutDown) and inTradeSession
+        stopped := true
+        orbBreakDir := breakoutUp ? 1 : -1
+
+        candleEntry := close
+        candleCover := orbBreakDir == 1 ? low - TICK_OFFSET : high + TICK_OFFSET
+        candleTP    := orbBreakDir == 1 ? candleEntry + rrMultiple * (candleEntry - candleCover) : candleEntry - rrMultiple * (candleCover - candleEntry)
+
+        float selectedSL = na
+        float selectedTP = na
+        bool qualified = false
+        bool foundDirectionalFvg = false
+        string qualifier = "-"
+        string failReason = ""
+
+        if i_strategy == "candle"
+            selectedSL := candleCover
+            selectedTP := candleTP
+            qualified  := true
+            qualifier  := "candle"
+        else
+            int fvgCount = array.size(fvgBoxes)
+            if fvgCount > 0
+                for i = fvgCount - 1 to 0
+                    bool isBull = array.get(fvgIsBulls, i)
+                    bool dirMatch = (orbBreakDir == 1 and isBull) or (orbBreakDir == -1 and not isBull)
+                    if dirMatch
+                        foundDirectionalFvg := true
+                        if i_strategy == "fvg"
+                            float top = array.get(fvgTops, i)
+                            float bot = array.get(fvgBots, i)
+                            selectedSL := isBull ? bot - TICK_OFFSET : top + TICK_OFFSET
+                            selectedTP := orbBreakDir == 1 ? candleEntry + rrMultiple * (candleEntry - selectedSL) : candleEntry - rrMultiple * (selectedSL - candleEntry)
+                            qualified  := true
+                            qualifier  := isBull ? "bull FVG" : "bear FVG"
+                            break
+                        else
+                            line extLine = array.get(fvgExtLines, i)
+                            if not na(extLine)
+                                float extPrice = line.get_y1(extLine)
+                                selectedSL := isBull ? extPrice - TICK_OFFSET : extPrice + TICK_OFFSET
+                                selectedTP := orbBreakDir == 1 ? candleEntry + rrMultiple * (candleEntry - selectedSL) : candleEntry - rrMultiple * (selectedSL - candleEntry)
+                                qualified  := true
+                                qualifier  := isBull ? "bull FVG extension" : "bear FVG extension"
+                                break
+
+            failReason := foundDirectionalFvg ? "missing FVG extension" : "missing directional FVG"
+
+        tradeQualified := qualified
+        tradeSL        := selectedSL
+        tradeTP        := selectedTP
+        qualifierText  := qualifier
+
+        if not na(lnH)
+            line.set_extend(lnH, extend.none)
+            line.set_x2(lnH, bar_index)
+        if not na(lnL)
+            line.set_extend(lnL, extend.none)
+            line.set_x2(lnL, bar_index)
+
+        if i_showLbl
+            if not na(lbH)
+                label.set_x(lbH, f_lx(i_lblHPos, startBar, bar_index))
+            if not na(lbL)
+                label.set_x(lbL, f_lx(i_lblLPos, startBar, bar_index))
+
+        if qualified
+            tradeQty  := f_contracts(candleEntry, tradeSL)
+            stateText := "Trade placed"
+
+            if orbBreakDir == 1
+                strategy.entry("Long", strategy.long, qty=tradeQty)
+                strategy.exit("ExitLong", "Long", limit=tradeTP, stop=tradeSL)
+            else
+                strategy.entry("Short", strategy.short, qty=tradeQty)
+                strategy.exit("ExitShort", "Short", limit=tradeTP, stop=tradeSL)
+        else
+            tradeQty      := na
+            tradeSL       := na
+            tradeTP       := na
+            qualifierText := "-"
+            stateText     := "No trade: " + failReason
+
+// ============================================================================
+// STATUS TABLE
+// ============================================================================
+displayDir = orbBreakDir == 1 ? "Long" : orbBreakDir == -1 ? "Short" : "-"
+displayState = stateText
+if tradeQualified
+    displayState := strategy.position_size != 0 ? "In position" : stateText
+
+stateColor = stopped and not tradeQualified ? color.new(color.red, 0) :
+     displayState == "In position" or displayState == "Trade placed" ? color.new(color.green, 0) :
+     color.new(color.white, 0)
+
+if barstate.islast
+    if i_showTable
+        f_tableRow(0, "Strategy", i_strategy, color.new(color.aqua, 0))
+        f_tableRow(1, "ORB / RR", i_orbPeriod + " min / " + i_rrRatio + ":1", color.new(color.white, 0))
+        f_tableRow(2, "ORB H / L", f_price(orbH) + " / " + f_price(orbL), color.new(color.white, 0))
+        f_tableRow(3, "State", displayState, stateColor)
+        f_tableRow(4, "Direction", displayDir, orbBreakDir == 1 ? color.new(color.green, 0) : orbBreakDir == -1 ? color.new(color.red, 0) : color.new(color.white, 0))
+        f_tableRow(5, "Entry", f_price(candleEntry), color.new(color.white, 0))
+        f_tableRow(6, "SL", f_price(tradeSL), color.new(color.red, 0))
+        f_tableRow(7, "TP", f_price(tradeTP), color.new(color.green, 0))
+        f_tableRow(8, "Qty", f_qty(tradeQty), color.new(color.white, 0))
+        f_tableRow(9, "Qualifier", qualifierText, color.new(color.yellow, 0))
+    else
+        table.clear(statusTable, 0, 0, 1, 9)
+
+plotchar(drawn, "debug_drawn", "D", location.top, color.new(color.green, 0), size=size.tiny)
+plotchar(stopped, "debug_stopped", "S", location.top, color.new(color.red, 0), size=size.tiny)
+plotchar(inTradeSession, "debug_session", "T", location.bottom, color.new(color.yellow, 0), size=size.tiny)

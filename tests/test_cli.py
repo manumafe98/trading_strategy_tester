@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import math
 import sys
+from dataclasses import replace
 from types import SimpleNamespace
 
 import pandas as pd
 import pytest
 
 import tester_framework.__main__ as cli
+import tester_framework.reports as reports
 from tester_framework.__main__ import EXIT_MODES, exit_mode_variants, status_lines, worker_count
 from tester_framework.cli import RunConfig
 
@@ -168,19 +171,15 @@ def test_run_rejects_invalid_calendar_filters(monkeypatch, test_asset_cfg, field
         cli.run(config)
 
 
-def test_run_reuses_data_for_strategies_with_same_execution_timeframe(
+def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
     monkeypatch, tmp_path, test_asset_cfg, base_data
 ):
     load_calls = []
-    data_ids = []
     submitted = []
+    test_asset_cfg = replace(test_asset_cfg, bars_per_year={"1h": 1716, "15m": 6864, "5m": 20592})
 
     def load_strategy(_name):
-        def generate_signals(data, **_kwargs):
-            data_ids.append(id(data))
-            return pd.DataFrame()
-
-        return SimpleNamespace(EXECUTION_TIMEFRAME="1h", generate_signals=generate_signals)
+        return SimpleNamespace(EXECUTION_TIMEFRAME="5m", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
 
     def load_data(asset, _asset_cfg, timeframe, _period, _source):
         load_calls.append((asset, timeframe))
@@ -232,7 +231,7 @@ def test_run_reuses_data_for_strategies_with_same_execution_timeframe(
         RunConfig(
             strategies=("one", "two"),
             asset="TEST",
-            timeframe="1h",
+            timeframe="1h,15m",
             sessions=None,
             time_period="1d",
             data_source="local",
@@ -246,9 +245,14 @@ def test_run_reuses_data_for_strategies_with_same_execution_timeframe(
         )
     )
 
-    assert load_calls == [("TEST", "1h")]
-    assert data_ids == []
-    assert len(submitted) == 2
+    assert load_calls == [("TEST", "5m")]
+    assert [(task["strategy"], task["timeframe"], task["execution_timeframe"]) for task in submitted] == [
+        ("one", "1h", "5m"),
+        ("one", "15m", "5m"),
+        ("two", "1h", "5m"),
+        ("two", "15m", "5m"),
+    ]
+    assert len({task["data_cache"] for task in submitted}) == 1
     assert all(task["variants"] == ((1.0, "fixed"),) for task in submitted)
 
 
@@ -369,3 +373,147 @@ def test_run_rejects_unknown_required_flag(monkeypatch, test_asset_cfg):
                 workers=1,
             )
         )
+
+
+def _config(**overrides) -> RunConfig:
+    values = dict(
+        strategies=("test",),
+        asset="TEST",
+        timeframe="1h",
+        sessions=None,
+        time_period="1d",
+        data_source="local",
+        operation="all",
+        risk_reward_ratio="1",
+        exit_mode="fixed",
+        risk="1",
+        capital=10_000,
+        with_costs=False,
+        workers=1,
+    )
+    values.update(overrides)
+    return RunConfig(**values)
+
+
+def test_run_rejects_risk_override_for_asset_not_in_run(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--risk override for unknown asset: MCG"):
+        cli.run(_config(risk="MCG=2"))
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"asset": "NOPE"}, "Unknown asset NOPE"),
+        ({"timeframe": "7h"}, "Unknown timeframe 7h"),
+        ({"capital": 0}, "--capital"),
+        ({"capital": -1}, "--capital"),
+        ({"capital": math.nan}, "--capital"),
+        ({"max_trades": 0}, "--max_trades"),
+        ({"exit_mode": "partial", "risk_reward_ratio": "1"}, "No exit modes are compatible"),
+    ],
+)
+def test_run_rejects_invalid_config_before_loading_data(monkeypatch, test_asset_cfg, overrides, message):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match=message):
+        cli.run(_config(**overrides))
+
+
+def test_run_rejects_invalid_operation_before_clearing_outputs(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--operation"):
+        cli.run(_config(operation="longs"))
+
+
+def test_run_keeps_previous_results_when_first_data_load_fails(monkeypatch, tmp_path, test_asset_cfg):
+    results_dir = tmp_path / "results"
+    previous = results_dir / "previous_bundle" / "index.html"
+    previous.parent.mkdir(parents=True)
+    previous.write_text("previous run")
+    monkeypatch.setattr(reports, "ROOT", tmp_path)
+    monkeypatch.setattr(reports, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+
+    def failing_load(*_args):
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(cli, "load_data", failing_load)
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        cli.run(_config())
+
+    assert previous.read_text() == "previous run"
+
+
+def test_run_clears_outputs_once_after_first_data_load(monkeypatch, tmp_path, test_asset_cfg, base_data):
+    events = []
+
+    class Future:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self):
+            return self.value
+
+    class Executor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def submit(self, function, task):
+            return Future(function(task))
+
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg, "OTHER": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "load_data", lambda asset, *_args: events.append(f"load {asset}") or base_data)
+    monkeypatch.setattr(cli, "cache_data", lambda *_args: ("values", "index", ()))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: events.append("reset"))
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", Executor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "run_variants", lambda _task: [])
+    monkeypatch.setattr(cli, "write_results_html", lambda *_args: tmp_path / "results.html")
+
+    cli.run(_config(asset="TEST,OTHER"))
+
+    assert events == ["load TEST", "reset", "load OTHER"]
+
+
+@pytest.mark.parametrize("sessions", [None, "none"])
+def test_run_rejects_session_exit_without_session_window(monkeypatch, test_asset_cfg, sessions):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--session_exit requires --sessions"):
+        cli.run(_config(sessions=sessions, session_exit=True))
+
+
+def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
+    assert cli.parser().parse_args([]).session_exit is False
+    configs = []
+    argv = ["tester_framework", "--strategies", "orb_candle", "--sessions", "ny_bank", "--session_exit"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert configs[0].session_exit is True

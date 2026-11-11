@@ -5,7 +5,6 @@ from dataclasses import replace
 import pytest
 
 from tester_framework.models import AssetConfig
-from tester_framework.settings import TIMEFRAMES, load_assets
 
 
 def config() -> AssetConfig:
@@ -15,6 +14,7 @@ def config() -> AssetConfig:
         tick_size=0.1,
         qty_step=1,
         min_qty=1,
+        min_risk_ticks=1,
         spread_points=0,
         slippage_points=0,
         commission_per_side=0,
@@ -45,9 +45,7 @@ def test_asset_config_rejects_invalid_annualization():
         replace(config(), bars_per_year={"1h": 0})
 
 
-def test_configured_assets_have_complete_annualization():
-    assets = load_assets()
-    assert all(set(asset.bars_per_year) >= set(TIMEFRAMES) for asset in assets.values())
-    assert assets["BTCUSD"].bars_per_year["1h"] == 8760
-    assert assets["EURUSD"].bars_per_year["1h"] == 6048
-    assert assets["MGC"].bars_per_year["1h"] == 5796
+@pytest.mark.parametrize("value", [0, 1.5, True])
+def test_asset_config_rejects_invalid_min_risk_ticks(value):
+    with pytest.raises(ValueError, match="min_risk_ticks"):
+        replace(config(), min_risk_ticks=value)

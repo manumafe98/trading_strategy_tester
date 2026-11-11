@@ -15,6 +15,7 @@ from .analytics import format_duration
 from .backtest import result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
+from .models import OPERATIONS
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
@@ -76,7 +77,7 @@ class StatusDisplay:
         self.total = 0
         self.workers: list[WorkerState] = [None] * workers
         self._stream = sys.stderr
-        # ponytail: redraw only in a real terminal; pipes keep the old final-only output.
+        # Redraw only in a real terminal; pipes keep the old final-only output.
         self._enabled = self._stream.isatty()
         self._line_count = 0
         self._lock = Lock()
@@ -231,9 +232,13 @@ def run(config: RunConfig) -> None:
     if not config.strategies:
         raise ValueError("--strategies is required")
     time_period_args(config.time_period, config.data_source)
+    if config.operation not in OPERATIONS:
+        raise ValueError(f"--operation must be one of {', '.join(OPERATIONS)}; got: {config.operation}")
     validate_calendar_filters(config.days, config.months)
     strategies = {name: load_strategy(name) for name in config.strategies}
     session_specs = parse_sessions(config.sessions)
+    if config.session_exit and not session_specs:
+        raise ValueError("--session_exit requires --sessions with a session window")
     session_variants = session_specs or [None]
     validate_required_flags(strategies, session_specs)
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
@@ -275,9 +280,9 @@ def run(config: RunConfig) -> None:
     )
     batch_count = len(strategies) * len(assets) * len(timeframes) * len(session_variants)
     workers = worker_count(config.workers, batch_count)
-    risks = {asset: risk_for(asset, config.risk) for asset in assets}
+    risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     rows = []
-    reset_output_dirs()
+    outputs_reset = False
     status = StatusDisplay(workers, started)
     strategy_label = ", ".join(strategies)
     status.update(phase="Preparing", detail=f"{strategy_label} | {task_count} variants", completed=0, total=task_count)
@@ -300,6 +305,10 @@ def run(config: RunConfig) -> None:
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
                     data = load_data(asset, asset_cfg, data_timeframe, config.time_period, config.data_source)
+                    # Clear the previous bundle only once fresh data exists, so a failed load keeps it.
+                    if not outputs_reset:
+                        reset_output_dirs()
+                        outputs_reset = True
                     data_cache = cache_data(data, cache_dir, cache_id)
                     cache_id += 1
                     for strategy_name, _strategy, timeframe in strategy_timeframes:
@@ -324,6 +333,7 @@ def run(config: RunConfig) -> None:
                                     session=session,
                                     days=config.days,
                                     months=config.months,
+                                    session_exit=config.session_exit,
                                 )
                             )
                     del data
@@ -345,7 +355,7 @@ def run(config: RunConfig) -> None:
                     active[future] = slot
                     status.set_worker(slot, variant_label(task), started_at)
 
-                # ponytail: keep one task per slot so the dashboard shows real work, not queued futures.
+                # Keep one task per slot so the dashboard shows real work, not queued futures.
                 for slot in range(workers):
                     submit(slot)
                 try:
@@ -391,7 +401,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
-    p.add_argument("--sessions", help="comma list of asia, london, ny, all, none, or custom ranges like ny=09:30-12:00")
+    p.add_argument("--sessions", help="comma list of asia, london, ny, ny_bank, all, none, or custom ranges like ny=09:30-12:00")
     p.add_argument(
         "--time_period",
         type=time_period_value,
@@ -401,12 +411,17 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
     p.add_argument("--days", type=days_arg, default=(), help="comma list of weekdays, e.g. monday,wed")
     p.add_argument("--months", type=months_arg, default=(), help="comma list of months, e.g. january,sep")
-    p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
+    p.add_argument("--operation", default="all", choices=OPERATIONS)
     p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
     p.add_argument("--exit_mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
+    p.add_argument(
+        "--session_exit",
+        action="store_true",
+        help="close open trades at the close of the last bar inside their session window; requires --sessions",
+    )
     p.add_argument("--workers", type=int, help="parallel variant workers, capped at logical CPU count")
     p.add_argument("--max_trades", type=int, default=None, help="diagnostic cap on first N closed trades per variant")
     p.add_argument(
@@ -442,6 +457,7 @@ def main() -> None:
             trade_html=args.trade_html,
             days=args.days,
             months=args.months,
+            session_exit=args.session_exit,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

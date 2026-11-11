@@ -12,9 +12,13 @@ class Side(StrEnum):
     SHORT = "short"
 
 
+OPERATIONS = ("all", "long_only", "short_only")
+
+
 class ExitReason(StrEnum):
     STOP = "stop"
     TARGET = "target"
+    SESSION = "session"
 
 
 @dataclass(frozen=True)
@@ -24,6 +28,7 @@ class AssetConfig:
     tick_size: float
     qty_step: float
     min_qty: float
+    min_risk_ticks: int
     spread_points: float
     slippage_points: float
     commission_per_side: float
@@ -44,6 +49,8 @@ class AssetConfig:
             value = float(raw)
             if isinstance(raw, bool) or not math.isfinite(value) or value < 0:
                 raise ValueError(f"{name} must be finite and non-negative")
+        if isinstance(self.min_risk_ticks, bool) or not isinstance(self.min_risk_ticks, int) or self.min_risk_ticks < 1:
+            raise ValueError("min_risk_ticks must be a positive integer")
         if not self.bars_per_year or any(
             isinstance(value, bool) or not isinstance(value, int) or value <= 0
             for value in self.bars_per_year.values()
@@ -59,4 +66,4 @@ class AssetConfig:
             raise ValueError(f"Invalid session_start: {self.session_start}") from None
 
 
-__all__ = ["AssetConfig", "ExitReason", "Side"]
+__all__ = ["OPERATIONS", "AssetConfig", "ExitReason", "Side"]

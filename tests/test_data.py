@@ -6,11 +6,11 @@ from tempfile import TemporaryDirectory
 import pandas as pd
 import pytest
 
-from tester_framework.data import load_local_data, load_yfinance_data
+from tester_framework.data import load_local_data, load_yfinance_data, normalize_data
 from tester_framework.models import AssetConfig
 
 
-def test_timestamp_local_resample():
+def test_local_timestamp_csv_resamples_within_period_as_naive_utc():
     with TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         forex_dir = data_dir / "forex" / "TEST"
@@ -36,7 +36,7 @@ def test_timestamp_local_resample():
         assert getattr(local.index, "tz", None) is None
 
 
-def test_ts_event_local_parsing():
+def test_continuous_futures_use_contract_with_most_previous_session_volume():
     with TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         futures_dir = data_dir / "futures" / "FUT"
@@ -86,7 +86,7 @@ def test_daily_resample_uses_session_boundary_across_dst():
             encoding="utf-8",
         )
         cfg = AssetConfig(
-            ticker="TEST", point_value=1, tick_size=0.00001, qty_step=1, min_qty=1,
+            ticker="TEST", point_value=1, tick_size=0.00001, qty_step=1, min_qty=1, min_risk_ticks=1,
             spread_points=0, slippage_points=0, commission_per_side=0,
             session_timezone="America/New_York", session_start="17:00", bars_per_year={"1d": 252},
         )
@@ -153,5 +153,66 @@ def test_unsupported_local_period_rejected():
             "ts_event,open,high,low,close,volume\n2025-01-01T00:00:00Z,1,2,0,1.5,1\n",
             encoding="utf-8",
         )
-        with pytest.raises(ValueError):
+        with pytest.raises(ValueError, match="--time_period for local must use"):
             load_local_data("FUT", "1m", "60x", data_dir=data_dir)
+
+
+def test_local_csv_with_mixed_utc_offsets_across_dst_loads_as_naive_utc():
+    with TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        path = data_dir / "futures" / "FUT"
+        path.mkdir(parents=True)
+        (path / "FUT.csv").write_text(
+            "\n".join(
+                [
+                    "timestamp,open,high,low,close,volume",
+                    "2025-03-07T09:30:00-05:00,1,2,0,1.5,1",
+                    "2025-03-10T09:30:00-04:00,2,3,1,2.5,1",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        local = load_local_data("FUT", "1m", "max", data_dir=data_dir)
+        assert list(local.index) == [pd.Timestamp("2025-03-07 14:30"), pd.Timestamp("2025-03-10 13:30")]
+
+
+def test_local_csv_naive_timestamps_are_treated_as_utc():
+    with TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        path = data_dir / "forex" / "TEST"
+        path.mkdir(parents=True)
+        (path / "TEST.csv").write_text(
+            "timestamp,open,high,low,close,volume\n2025-03-10 13:30:00,1,2,0,1.5,1\n",
+            encoding="utf-8",
+        )
+        local = load_local_data("TEST", "1m", "max", data_dir=data_dir)
+        assert list(local.index) == [pd.Timestamp("2025-03-10 13:30")]
+
+
+def _bars(index, rows):
+    return pd.DataFrame(rows, columns=["Open", "High", "Low", "Close", "Volume"], index=index)
+
+
+def test_normalize_data_converts_tz_aware_index_to_naive_utc():
+    index = pd.DatetimeIndex(["2025-03-10 09:30"]).tz_localize("America/New_York")
+    df = normalize_data(_bars(index, [[1, 2, 0, 1.5, 1]]))
+    assert list(df.index) == [pd.Timestamp("2025-03-10 13:30")]
+    assert df.index.tz is None
+
+
+def test_normalize_data_sorts_unsorted_bars():
+    index = pd.to_datetime(["2025-01-01 00:02", "2025-01-01 00:00", "2025-01-01 00:01"])
+    df = normalize_data(_bars(index, [[3, 4, 2, 3, 1], [1, 2, 0, 1, 1], [2, 3, 1, 2, 1]]))
+    assert list(df["open"]) == [1, 2, 3]
+
+
+def test_normalize_data_drops_rows_with_missing_prices():
+    index = pd.to_datetime(["2025-01-01 00:00", "2025-01-01 00:01"])
+    df = normalize_data(_bars(index, [[1, 2, 0, 1, 1], [2, None, 1, 2, 1]]))
+    assert list(df.index) == [pd.Timestamp("2025-01-01 00:00")]
+
+
+def test_normalize_data_rejects_high_below_close():
+    index = pd.to_datetime(["2025-01-01 00:00"])
+    with pytest.raises(ValueError, match="invalid OHLC"):
+        normalize_data(_bars(index, [[1, 1.5, 0, 2, 1]]))

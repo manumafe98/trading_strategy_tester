@@ -60,9 +60,8 @@ def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
     missing = [c for c in OHLCV if c not in df]
     if missing:
         raise ValueError(f"Data missing columns: {', '.join(missing)}")
-    idx = pd.to_datetime(df.index)
-    if getattr(idx, "tz", None) is not None:
-        idx = idx.tz_convert(None)
+    # Naive stamps are UTC; offset stamps (even mixed across DST) convert to naive UTC.
+    idx = pd.to_datetime(df.index, utc=True).tz_convert(None)
     df = df[OHLCV]
     df.index = idx
     df.index.name = "time"
@@ -116,7 +115,7 @@ def load_data(asset: str, asset_cfg: AssetConfig, timeframe: str, period: str, d
 
 
 def load_yfinance_data(ticker: str, timeframe: str, period: str) -> pd.DataFrame:
-    # ponytail: keep yfinance lazy so tests do not pay import/startup cost.
+    # Keep yfinance lazy so tests do not pay import/startup cost.
     import yfinance as yf
 
     if timeframe not in TIMEFRAMES:
@@ -196,7 +195,7 @@ def _continuous_futures(df: pd.DataFrame, timezone: str, session_start: str) -> 
 
 @lru_cache(maxsize=1)
 def read_local_csv(path: Path, session_timezone: str = "UTC", session_start: str = "00:00") -> pd.DataFrame:
-    # ponytail: asset runs are contiguous, so one cached source avoids reparsing without retaining every asset.
+    # Asset runs are contiguous, so one cached source avoids reparsing without retaining every asset.
     try:
         columns = pd.read_csv(path, nrows=0).columns
     except pd.errors.ParserError as exc:

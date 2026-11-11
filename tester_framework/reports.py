@@ -49,7 +49,7 @@ def reset_output_dirs() -> None:
     root = ROOT.resolve()
     for folder in (RESULTS_DIR, TRADES_DIR):
         resolved = folder.resolve()
-        if root not in (resolved, *resolved.parents):
+        if root not in resolved.parents:
             raise RuntimeError(f"Refusing to clear outside workspace: {resolved}")
         if folder.exists():
             shutil.rmtree(folder)
@@ -57,7 +57,7 @@ def reset_output_dirs() -> None:
 
 
 def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType) -> Path | None:
-    # ponytail: keep plotly lazy so tests avoid chart dependencies.
+    # Keep plotly lazy so tests avoid chart dependencies.
     import plotly.graph_objects as go
 
     TRADES_DIR.mkdir(exist_ok=True)
@@ -81,7 +81,7 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     )
     plot_indicators = getattr(strategy, "plot_indicators", None)
     if callable(plot_indicators):
-        # ponytail: strategies own their overlays; the framework only gives them the chart.
+        # Strategies own their overlays; the framework only gives them the chart.
         plot_indicators(
             fig,
             data=data,
@@ -93,7 +93,8 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     color = "green" if trade["side"] == Side.LONG else "red"
     fig.add_trace(go.Scatter(x=[trade["entry_time"]], y=[trade["entry"]], mode="markers", name="entry", marker={"color": color, "size": 10}))
     for fill in trade["exits"]:
-        name = f'{fill["exit_reason"]} {fill["qty"]:g}'
+        gap = " (gap)" if fill["gap_exit"] else ""
+        name = f'{fill["exit_reason"]} {fill["qty"]:g}{gap}'
         fig.add_trace(go.Scatter(x=[fill["exit_time"]], y=[fill["exit"]], mode="markers", name=name, marker={"color": "black", "size": 10}))
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     for target in trade["targets"]:
@@ -149,12 +150,6 @@ def metric_class(column: str, value: MetricValue) -> str:
         return "good" if float(value) > 0 else "bad" if float(value) < 0 else "neutral"
     if column == "Max DD":
         return "warn"
-    if column == "Expectancy R":
-        return "good" if float(value) > 0 else "bad" if float(value) < 0 else "neutral"
-    if column == "W":
-        return "good"
-    if column == "L":
-        return "bad"
     if column == "Return / DD":
         return "neutral"
     return "plain"
@@ -205,8 +200,9 @@ def _period_table(rows: list[dict]) -> str:
 def _exit_path(trade: dict) -> str:
     parts = []
     for fill in trade["exits"]:
-        label = f'{fill["target_r"]:g}R' if fill["target_r"] is not None else f'{fill["realized_r"]:+.2f}R stop'
-        parts.append(f'{fill["qty"]:g} @ {label}')
+        label = f'{fill["target_r"]:g}R' if fill["target_r"] is not None else f'{fill["realized_r"]:+.2f}R {fill["exit_reason"]}'
+        gap = " (gap)" if fill["gap_exit"] else ""
+        parts.append(f'{fill["qty"]:g} @ {label}{gap}')
     return ", ".join(parts)
 
 
@@ -214,8 +210,8 @@ def _managed_summary(analytics: dict) -> str:
     managed = analytics["managed"]
     mode = str(managed["Mode"]).title()
     summary = _detail_table(
-        ["Target completions", "Stop completions", "Avg realized", "Avg MFE", "Avg giveback"],
-        [[managed["Target Completions"], managed["Stop Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
+        ["Target completions", "Stop completions", "Session completions", "Avg realized", "Avg MFE", "Avg giveback"],
+        [[managed["Target Completions"], managed["Stop Completions"], managed["Session Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
     )
     return f'<section><h2>{mode} summary</h2>{summary}</section>'
 
@@ -270,6 +266,7 @@ def _trade_table(trades: list[dict]) -> str:
 def _variant_sections(row: pd.Series, analytics: dict) -> str:
     sections = [
         f"<section><h2>Outcomes</h2>{_outcome_table(analytics)}</section>",
+        f'<section><h2>Exits</h2>{_detail_table(["Gap exits"], [[analytics["Gap Exits"]]])}</section>',
         f'<div class="detail-grid"><section><h2>Entry weekday (UTC)</h2>{_period_table(analytics["weekday"])}</section><section><h2>Entry month (UTC)</h2>{_period_table(analytics["month"])}</section></div>',
         f'<section><h2>Entry year (UTC)</h2>{_period_table(analytics["year"])}</section>',
     ]
@@ -417,12 +414,6 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(value))}</span></div></td>'
     if col == "TF":
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
-    if col == "Long":
-        return f'<td class="c"><span class="dir long">+ {html_escape(str(value))}</span></td>'
-    if col == "Short":
-        return f'<td class="c"><span class="dir short">- {html_escape(str(value))}</span></td>'
-    if col == "Trades":
-        return f'<td class="c n">{html_escape(str(value))}</td>'
     sort_attr = ""
     if col in FINANCIAL_COLUMNS:
         sort_value = value[-1] if isinstance(value, (tuple, list)) else value
@@ -474,6 +465,8 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
             f"costs {'on' if config.with_costs else 'off'}",
         )
     ]
+    if config.session_exit:
+        tags.append('<span class="tag">session exit on</span>')
     if config.sessions and config.sessions.lower() != "none":
         tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')
     if config.days:

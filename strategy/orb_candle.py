@@ -1,14 +1,13 @@
 from __future__ import annotations
 
-import numpy as np
-import pandas as pd
-
 from strategy.utils.orb import (
-    add_session_columns,
     decimal_places,
+    find_breakouts,
+    OPENING_RANGE_PLOT_KEYS,
+    plot_opening_range,
     REQUIRED_SESSION_MESSAGE,
     session_params,
-    session_start_utc,
+    signals_frame,
 )
 
 
@@ -23,76 +22,20 @@ def generate_signals(df, asset, timeframe, params):
     if tick_size <= 0:
         raise ValueError("orb_candle requires a positive tick_size strategy parameter")
     places = decimal_places(tick_size)
-    if df.empty:
-        return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
-    work = add_session_columns(df, session)
-    minute = work["_session_minute"]
-    work = work[(minute >= start_minute) & (minute < end_minute)]
     rows = []
-
-    for day, day_data in work.groupby("_session_date", sort=True):
-        minute = day_data["_session_minute"]
-        orb = day_data[(minute >= start_minute) & (minute < start_minute + orb_minutes)]
-        if orb.empty:
-            continue
-
-        orb_high = float(orb["high"].max())
-        orb_low = float(orb["low"].min())
-        candidates = day_data[(minute >= start_minute + orb_minutes) & (minute < end_minute)]
-        closes = candidates["close"].to_numpy(dtype=float)
-        breakouts = np.flatnonzero((closes > orb_high) | (closes < orb_low))
-        if not len(breakouts):
-            continue
-        pos = int(breakouts[0])
-        close = float(closes[pos])
-        is_long = close > orb_high
-        rows.append(
-            {
-                "time": candidates.index[pos],
-                "side": "long" if is_long else "short",
-                "stop": round(
-                    float(candidates["low"].to_numpy(dtype=float)[pos]) - tick_size
-                    if is_long
-                    else float(candidates["high"].to_numpy(dtype=float)[pos]) + tick_size,
-                    places,
-                ),
-                "entry": close,
-                "reason": "close_break_above_orb" if is_long else "close_break_below_orb",
-                "plot_start_time": session_start_utc(day, session),
-                "orb_high": orb_high,
-                "orb_low": orb_low,
-            }
-        )
-
-    return pd.DataFrame(rows, columns=OUTPUT_COLUMNS).sort_values("time") if rows else pd.DataFrame(columns=OUTPUT_COLUMNS)
+    for breakout in find_breakouts(df, session, orb_minutes, start_minute, end_minute):
+        if breakout.is_long:
+            stop = round(breakout.bar("low") - tick_size, places)
+            reason = "close_break_above_orb"
+        else:
+            stop = round(breakout.bar("high") + tick_size, places)
+            reason = "close_break_below_orb"
+        rows.append(breakout.row(stop, reason))
+    return signals_frame(rows, OUTPUT_COLUMNS)
 
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
     trade = (params or {}).get("trade") or {}
-    required = ("plot_start_time", "signal_time", "orb_high", "orb_low")
-    if not all(key in trade for key in required):
-        return
-
-    start = pd.Timestamp(trade["plot_start_time"])
-    end = pd.Timestamp(trade["signal_time"])
-    fig.add_trace(
-        {
-            "type": "scatter",
-            "mode": "lines",
-            "x": [start, end],
-            "y": [trade["orb_high"], trade["orb_high"]],
-            "name": "ORB high",
-            "line": {"color": "#26a69a", "width": 2},
-        }
-    )
-    fig.add_trace(
-        {
-            "type": "scatter",
-            "mode": "lines",
-            "x": [start, end],
-            "y": [trade["orb_low"], trade["orb_low"]],
-            "name": "ORB low",
-            "line": {"color": "#ef5350", "width": 2},
-        }
-    )
+    if all(key in trade for key in OPENING_RANGE_PLOT_KEYS):
+        plot_opening_range(fig, trade)

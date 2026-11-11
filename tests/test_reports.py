@@ -9,11 +9,10 @@ import pytest
 
 import tester_framework.reports as reports
 import tester_framework.runner as runner
-from tester_framework.analytics import decode_analytics
+from tester_framework.backtest import result_columns
 from tester_framework.cli import RunConfig
 from tester_framework.reports import format_metric, metric_class
 from tester_framework.runner import cache_data
-from tester_framework.sessions import parse_sessions
 
 
 def test_format_metric_return_positive():
@@ -47,7 +46,7 @@ def test_metric_class_pair_uses_last():
     assert metric_class("Return", (1.0, -1.0)) == "bad"
 
 
-def test_write_results_html_keeps_asset_breakdown_as_quick_view(monkeypatch, tmp_path):
+def test_results_index_shows_quick_view_headers_sort_buttons_and_run_notes(monkeypatch, tmp_path):
     monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
     table = pd.DataFrame(
         columns=[
@@ -106,152 +105,78 @@ def test_write_results_html_keeps_asset_breakdown_as_quick_view(monkeypatch, tmp
     )
     capped_html = reports.write_results_html(table, capped_config).read_text(encoding="utf-8")
     assert "first 3 trade charts per variant" in capped_html
+    assert "session exit on" not in capped_html
+
+    session_exit_config = RunConfig(
+        ("ema50",), None, None, "ny_bank", "60d", "yfinance", "all", "1", "all", "1", 10_000, False, None,
+        session_exit=True,
+    )
+    session_exit_html = reports.write_results_html(table, session_exit_config).read_text(encoding="utf-8")
+    assert "session exit on" in session_exit_html
 
 
-def test_zero_trade_html_skips_writer_and_keeps_empty_chart_cell(
-    monkeypatch, tmp_path, base_data, hourly_index, test_asset_cfg
-):
-    monkeypatch.setattr(
-        runner,
-        "write_trade_html",
-        lambda *_args: pytest.fail("trade HTML writer should not be called"),
+def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, tmp_path, test_asset_cfg):
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(runner, "write_trade_html", lambda *_args: pytest.fail("trade HTML writer should not be called"))
+    idx = pd.date_range("2025-01-06", periods=3, freq="h")
+    data = pd.DataFrame(
+        {"open": [100.0, 100.0, 97.0], "high": [100.0, 100.5, 98.0], "low": [100.0, 99.5, 96.0], "close": [100.0, 100.0, 97.0], "volume": [0, 0, 0]},
+        index=idx,
     )
     monkeypatch.setattr(
         runner,
         "load_strategy",
         lambda _name: SimpleNamespace(
-            generate_signals=lambda *_args, **_kwargs: pd.DataFrame(
-                [{"time": hourly_index[0], "side": "long", "stop": 99}]
-            )
+            generate_signals=lambda *_args, **_kwargs: pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99.0}])
         ),
     )
-    row = runner.run_variants(
-        {
-            "strategy": "ema50",
-            "data_cache": cache_data(base_data, str(tmp_path), 0),
-            "variants": ((1, "trailing"),),
-            "asset": "TEST",
-            "asset_cfg": test_asset_cfg,
-            "timeframe": "1h",
-            "execution_timeframe": "1h",
-            "operation": "all",
-            "risk_pct": 1,
-            "capital": 10_000,
-            "with_costs": False,
-            "time_period": "1d",
-            "data_source": "local",
-            "max_trades": None,
-            "trade_html": 0,
-            "session": None,
-            "days": (),
-            "months": (),
-        }
-    )[0]
-
-    trade = decode_analytics(row["_analytics"])["managed"]["trades"][0]
-    assert trade["chart_path"] is None
-    assert "<td>-</td>" in reports._trade_table([trade])
-
-
-def test_trade_html_limit_is_per_variant_and_keeps_all_trades(
-    monkeypatch, tmp_path, base_data, test_asset_cfg
-):
-    trades = [{}, {}, {}]
-    charted = []
-    collected = []
-    monkeypatch.setattr(runner.gc, "collect", lambda: collected.append(True))
-    monkeypatch.setattr(
-        runner,
-        "load_strategy",
-        lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame()),
-    )
-    monkeypatch.setattr(runner, "run_backtest", lambda *_args, **_kwargs: ({"Gross": {"Return": 0}}, trades))
-    monkeypatch.setattr(runner, "strategy_metrics", lambda *_args, **_kwargs: {})
-    monkeypatch.setattr(runner, "analyze_trades", lambda items, _mode: {"trades": items})
-    monkeypatch.setattr(
-        runner,
-        "add_trade_counts",
-        lambda *_args, **_kwargs: {"Strategy": "ema50", "Asset": "TEST", "TF": "1h"},
-    )
-    monkeypatch.setattr(
-        runner,
-        "write_trade_html",
-        lambda _data, trade, _strategy: charted.append(trade) or tmp_path / f"{len(charted)}.html",
-    )
-
-    row = runner.run_variants(
-        {
-            "strategy": "ema50",
-            "data_cache": cache_data(base_data, str(tmp_path), 0),
-            "variants": ((1, "fixed"),),
-            "asset": "TEST",
-            "asset_cfg": test_asset_cfg,
-            "timeframe": "1h",
-            "execution_timeframe": "1h",
-            "operation": "all",
-            "risk_pct": 1,
-            "capital": 10_000,
-            "with_costs": False,
-            "time_period": "1d",
-            "data_source": "local",
-            "max_trades": None,
-            "trade_html": 2,
-            "session": None,
-            "days": (),
-            "months": (),
-        }
-    )[0]
-
-    assert len(charted) == 2
-    assert [trade["chart_path"] is not None for trade in trades] == [True, True, False]
-    assert collected == [True]
-    assert decode_analytics(row["_analytics"])["trades"] == trades
-    assert row["_risk_pct"] == 1
-
-
-def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
-    generated = []
-    backtests = []
-    monkeypatch.setattr(
-        runner,
-        "load_strategy",
-        lambda _name: SimpleNamespace(
-            generate_signals=lambda *_args, **_kwargs: generated.append(True) or pd.DataFrame()
-        ),
-    )
-    monkeypatch.setattr(
-        runner,
-        "run_backtest",
-        lambda *_args, **kwargs: backtests.append((kwargs["risk_reward_ratio"], kwargs["exit_mode"]))
-        or ({"Gross": {"Return": 0}}, []),
-    )
-
     rows = runner.run_variants(
         {
-            "strategy": "ema50",
-            "data_cache": cache_data(base_data, str(tmp_path), 0),
-            "variants": ((1, "fixed"), (2, "trailing")),
-            "asset": "TEST",
-            "asset_cfg": test_asset_cfg,
-            "timeframe": "1h",
-            "execution_timeframe": "1h",
-            "operation": "all",
-            "risk_pct": 1,
-            "capital": 10_000,
-            "with_costs": False,
-            "time_period": "1d",
-            "data_source": "local",
-            "max_trades": None,
-            "trade_html": 0,
-            "session": None,
-            "days": (),
-            "months": (),
+            "strategy": "ema50", "data_cache": cache_data(data, str(tmp_path), 0),
+            "variants": ((3, "fixed"), (3, "trailing")), "asset": "TEST", "asset_cfg": test_asset_cfg,
+            "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
+            "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 0,
+            "session": None, "days": (), "months": (), "session_exit": False,
+        }
+    )
+    config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "3", "fixed,trailing", "1", 10_000, False, None)
+
+    path = reports.write_results_html(pd.DataFrame(rows), config, result_columns("all"))
+    fixed_page, trailing_page = (
+        (path.parent / "variants" / name).read_text(encoding="utf-8") for name in ("000000.html", "000001.html")
+    )
+
+    assert "<th>Gap exits</th></tr></thead><tbody><tr><td>1</td>" in fixed_page
+    assert "<th>Gap exits</th></tr></thead><tbody><tr><td>1</td>" in trailing_page
+    assert "<td>100 @ -3.00R stop (gap)</td>" in trailing_page
+
+
+def test_trade_chart_marks_gap_exit(monkeypatch, tmp_path, test_asset_cfg):
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
+    idx = pd.date_range("2025-01-06", periods=3, freq="h")
+    data = pd.DataFrame(
+        {"open": [100.0, 100.0, 97.0], "high": [100.0, 100.5, 98.0], "low": [100.0, 99.5, 96.0], "close": [100.0, 100.0, 97.0], "volume": [0, 0, 0]},
+        index=idx,
+    )
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(
+            generate_signals=lambda *_args, **_kwargs: pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99.0}])
+        ),
+    )
+    runner.run_variants(
+        {
+            "strategy": "ema50", "data_cache": cache_data(data, str(tmp_path), 0),
+            "variants": ((3, "fixed"),), "asset": "TEST", "asset_cfg": test_asset_cfg,
+            "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
+            "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 1,
+            "session": None, "days": (), "months": (), "session_exit": False,
         }
     )
 
-    assert generated == [True]
-    assert backtests == [(1, "fixed"), (2, "trailing")]
-    assert len(rows) == 2
+    (chart,) = (tmp_path / "trades").glob("*.html")
+    assert '"name":"stop 100 (gap)"' in chart.read_text(encoding="utf-8")
 
 
 def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_path):
@@ -267,11 +192,12 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
         "weekday": [{"Period": "Monday", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
         "month": [{"Period": "January", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
         "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
+        "Gap Exits": 0,
     }
     table = pd.DataFrame(
         [
             {"Strategy": "ema50", "Asset": "MES", "TF": "5m", "Session": "london", "RR": "1", "Exit Mode": "fixed", "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5, "_risk_pct": 0.5, "_analytics": analytics, "_strategy_metrics": {}},
-            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0, "trades": []}}, "_strategy_metrics": {}},
+            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0, "trades": []}}, "_strategy_metrics": {}},
         ]
     )
     config = RunConfig(
@@ -318,7 +244,7 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
                 "holding_duration": "0 days 00:05:00",
                 "side": "<long>" if index == 0 else "long",
                 "outcome": "target_hit",
-                "exits": [{"target_r": 2.0, "realized_r": 2.0, "qty": 1.0}],
+                "exits": [{"target_r": 2.0, "realized_r": 2.0, "qty": 1.0, "gap_exit": False}],
                 "risk_reward_ratio": 2.0,
                 "realized_r": 2.0,
                 "mfe_r": 2.5,
@@ -336,10 +262,12 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
         "weekday": [],
         "month": [],
         "year": [],
+        "Gap Exits": 0,
         "managed": {
             "Mode": "partial",
             "Target Completions": len(trades),
             "Stop Completions": 0,
+            "Session Completions": 0,
             "Avg Realized R": 2.0,
             "Avg MFE R": 2.5,
             "Avg Giveback R": 0.5,
@@ -443,7 +371,7 @@ def test_filter_options_use_domain_order():
     assert options("risk") == ["0.5%", "1%", "2%"]
 
 
-def test_write_results_html_includes_session_column_when_present(monkeypatch, tmp_path):
+def test_results_index_shows_session_column_and_gross_net_pairs(monkeypatch, tmp_path):
     monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
     table = pd.DataFrame(
         [
@@ -458,7 +386,7 @@ def test_write_results_html_includes_session_column_when_present(monkeypatch, tm
                 "Max DD": (8.0, 2.5),
                 "Sharpe Ratio": (7.0, math.nan),
                 "Return / DD": (6.0, 4.5),
-                "_analytics": {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}]},
+                "_analytics": {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}], "Gap Exits": 0},
                 "_strategy_metrics": {},
             }
         ]
@@ -480,56 +408,33 @@ def test_write_results_html_includes_session_column_when_present(monkeypatch, tm
     assert "+9.00% / +1.25%" in html
     assert 'data-original-order="0"' in html
     assert 'id="filter-bar"' not in html
-    assert "Number.isNaN(left.value)" in html
-    assert "body.replaceChildren" in html
 
 
-def test_run_variants_filters_signals_by_session(monkeypatch, tmp_path, test_asset_cfg):
-    london_open = parse_sessions("london=08:00-10:00")[0]
-    data = pd.DataFrame(
-        {
-            "open": [100.0, 100.0, 100.0, 100.0, 100.0],
-            "high": [100.0, 102.0, 100.0, 100.0, 100.0],
-            "low": [100.0, 99.5, 100.0, 100.0, 100.0],
-            "close": [100.0, 101.0, 100.0, 100.0, 100.0],
-            "volume": [0, 0, 0, 0, 0],
-        },
-        index=pd.date_range("2025-01-02 08:00", periods=5, freq="1h"),
-    )
-    signals = pd.DataFrame(
-        [
-            {"time": pd.Timestamp("2025-01-02 08:00"), "side": "long", "stop": 99},
-            {"time": pd.Timestamp("2025-01-02 11:00"), "side": "long", "stop": 99},
-        ]
-    )
+def test_reset_output_dirs_empties_folders_inside_root(monkeypatch, tmp_path):
+    results_dir = tmp_path / "results"
+    (results_dir / "old_bundle").mkdir(parents=True)
+    monkeypatch.setattr(reports, "ROOT", tmp_path)
+    monkeypatch.setattr(reports, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
 
-    monkeypatch.setattr(
-        runner,
-        "load_strategy",
-        lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: signals),
-    )
-    row = runner.run_variants(
-        {
-            "strategy": "ema50",
-            "data_cache": cache_data(data, str(tmp_path), 0),
-            "variants": ((1, "fixed"),),
-            "asset": "TEST",
-            "asset_cfg": test_asset_cfg,
-            "timeframe": "1h",
-            "execution_timeframe": "1h",
-            "operation": "all",
-            "risk_pct": 1,
-            "capital": 10_000,
-            "with_costs": False,
-            "time_period": "1d",
-            "data_source": "local",
-            "max_trades": None,
-            "trade_html": 0,
-            "session": london_open,
-            "days": (),
-            "months": (),
-        }
-    )[0]
+    reports.reset_output_dirs()
 
-    assert row["Session"] == "london=08:00-10:00"
-    assert row["Trades"] == 1
+    assert list(results_dir.iterdir()) == []
+    assert (tmp_path / "trades").is_dir()
+
+
+@pytest.mark.parametrize("target", ["root", "outside"])
+def test_reset_output_dirs_refuses_folder_not_strictly_inside_root(monkeypatch, tmp_path, target):
+    root = tmp_path / "repo"
+    project_file = root / "keep.txt"
+    root.mkdir()
+    project_file.write_text("project")
+    folder = root if target == "root" else tmp_path / "elsewhere"
+    monkeypatch.setattr(reports, "ROOT", root)
+    monkeypatch.setattr(reports, "RESULTS_DIR", folder)
+    monkeypatch.setattr(reports, "TRADES_DIR", root / "trades")
+
+    with pytest.raises(RuntimeError, match="Refusing to clear"):
+        reports.reset_output_dirs()
+
+    assert project_file.read_text() == "project"

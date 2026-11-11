@@ -2,6 +2,5 @@
 __pycache__/
 *.pyc
 data/
-pine_scripts_examples/
 trades/
 results/

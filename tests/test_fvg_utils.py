@@ -52,7 +52,7 @@ def test_no_fvg_when_overlapping():
     assert len(fvgs) == 0
 
 
-def test_fvg_requires_min_two_bars():
+def test_fvg_requires_three_bars():
     bars = [
         {"open": 100, "high": 100, "low": 99, "close": 100, "volume": 0},
         {"open": 100, "high": 101, "low": 100, "close": 101, "volume": 0},
@@ -184,10 +184,10 @@ def test_find_qualifying_fvg_newest_first():
     assert find_qualifying_fvg([old_fvg, new_fvg], direction=1) is new_fvg
 
 
-def test_find_qualifying_fvg_require_ext():
+def test_find_qualifying_fvg_require_ext_skips_newer_fvg_without_extension():
     no_ext = FVG(bar_index=5, top=102, bottom=100, is_bull=True, ext_price=None)
     with_ext = FVG(bar_index=3, top=104, bottom=102, is_bull=True, ext_price=98)
 
     assert find_qualifying_fvg([no_ext], direction=1, require_ext=True) is None
-    assert find_qualifying_fvg([no_ext, with_ext], direction=1, require_ext=True) is with_ext
+    assert find_qualifying_fvg([with_ext, no_ext], direction=1, require_ext=True) is with_ext
     assert find_qualifying_fvg([no_ext], direction=1, require_ext=False) is no_ext

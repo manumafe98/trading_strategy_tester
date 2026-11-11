@@ -1,6 +1,8 @@
 # AGENTS.md
 
-Use ponytail for this project: keep changes small, boring, and runnable.
+Keep changes small, boring, and runnable.
+
+Domain terms (session window, signal timeframe, R, variant, ...) are defined in `GLOSSARY.md`; use them as written there.
 
 ## Project Shape
 
@@ -8,6 +10,7 @@ Use ponytail for this project: keep changes small, boring, and runnable.
 - `config/` contains JSON runtime config such as asset aliases, point values, and cost assumptions.
 - `strategy/` contains strategy modules loaded by the runner.
 - `strategy/utils/` contains shared logic (ORB session helpers, FVG detection) used by ORB strategies.
+- `pine_scripts_examples/` contains the TradingView Pine reference scripts the strategies are ported from.
 - `trades/` contains per-trade HTML charts.
 - `results/` contains visual HTML result reports.
 - `.venv` is the project virtual environment; do not install dependencies globally.
@@ -15,6 +18,10 @@ Use ponytail for this project: keep changes small, boring, and runnable.
 ## Code Shape
 
 - `tester_framework/__main__.py` parses CLI args and orchestrates runs.
+- `tester_framework/cli.py` holds CLI argument types and the run configuration.
+- `tester_framework/runner.py` runs variants in parallel workers.
+- `tester_framework/sessions.py` parses session windows and filters signals by them.
+- `tester_framework/analytics.py` computes trade analytics and runs strategy metric hooks.
 - `tester_framework/settings.py` loads config and keeps runtime constants.
 - `tester_framework/data.py` downloads and normalizes OHLCV data.
 - `tester_framework/backtest.py` owns fills, exits, risk sizing, and metrics.
@@ -37,6 +44,7 @@ def generate_signals(df, asset, timeframe, params):
 - `params["tick_size"]` contains the configured asset price tick.
 - The input `df` is shared across timeframes; strategies must not mutate it.
 - A strategy can load data at a different execution timeframe by setting `EXECUTION_TIMEFRAME = "5m"`.
+- Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
 
 Optional hooks:
 
@@ -60,6 +68,10 @@ Strategies own indicators and stops. The framework owns data loading, fills, exi
 - Keep unit tests offline and strategy samples small. Run targeted tests first and the full suite for cross-cutting changes.
 - Keep text files LF-only and run `git diff --check` before finishing.
 
+## Review
+
+Use `/ponytail-review` to review a change and `/ponytail-audit` for a whole-repo audit.
+
 ## Checks
 
 Run the smallest useful checks after changes:
@@ -69,3 +81,17 @@ source .venv/Scripts/activate
 python -m pytest -q
 python -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
 ```
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs are tracked in GitHub Issues on `manumafe98/trading_strategy_tester` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Default canonical labels (needs-triage, needs-info, ready-for-agent, ready-for-human, wontfix). See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+Single-context: one root `GLOSSARY.md` plus `docs/adr/` (created lazily). See `docs/agents/domain.md`.

@@ -106,10 +106,12 @@ def analyze_trades(trades: list[dict], exit_mode: str) -> dict:
         "weekday": period_stats(trades, "weekday"),
         "month": period_stats(trades, "month"),
         "year": period_stats(trades, "year"),
+        "Gap Exits": sum(fill["gap_exit"] for trade in trades for fill in trade["exits"]),
         "managed": {
             "Mode": exit_mode,
             "Target Completions": sum(trade["exit_reason"] == ExitReason.TARGET for trade in managed_trades),
             "Stop Completions": sum(trade["exit_reason"] == ExitReason.STOP for trade in managed_trades),
+            "Session Completions": sum(trade["exit_reason"] == ExitReason.SESSION for trade in managed_trades),
             "Avg Realized R": round(mean(float(trade["realized_r"]) for trade in managed_trades), 4) if managed_trades else 0.0,
             "Avg MFE R": round(mean(float(trade["mfe_r"]) for trade in managed_trades), 4) if managed_trades else 0.0,
             "Avg Giveback R": round(mean(float(trade["giveback_r"]) for trade in managed_trades), 4) if managed_trades else 0.0,

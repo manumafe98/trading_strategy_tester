@@ -1,17 +1,20 @@
 from __future__ import annotations
 
 import math
+from dataclasses import dataclass, field
 from decimal import ROUND_CEILING, ROUND_FLOOR, Decimal
 
 import numpy as np
 import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
-from .models import AssetConfig, ExitReason, Side
-from .utils import csv_items
+from .models import OPERATIONS, AssetConfig, ExitReason, Side
+from .sessions import SessionSpec, session_exit_bars
+from .utils import csv_items, decimal_places
 
 
 DEFAULT_RISK = 1.0
+CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
 
 __all__ = ["add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
 
@@ -29,7 +32,7 @@ def risk_reward_ratios(value: str | None) -> list[float]:
     return ratios
 
 
-def risk_for(asset: str, risk: str) -> float:
+def risk_for(asset: str, risk: str, assets: tuple[str, ...] | list[str]) -> float:
     parts = csv_items(risk)
     if not parts:
         return DEFAULT_RISK
@@ -41,6 +44,8 @@ def risk_for(asset: str, risk: str) -> float:
             key = key.strip().upper()
             if not key:
                 raise ValueError("--risk asset override must have a name")
+            if key not in {name.upper() for name in assets}:
+                raise ValueError(f"--risk override for unknown asset: {key}")
         else:
             value = part
             key = None
@@ -76,23 +81,15 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
     signals["stop"] = pd.to_numeric(signals["stop"], errors="coerce")
     if "entry" in signals.columns:
         signals["entry"] = pd.to_numeric(signals["entry"], errors="coerce")
-    for col in ("fvg_top", "fvg_bottom", "fvg_ext"):
-        if col in signals.columns:
-            signals[col] = pd.to_numeric(signals[col], errors="coerce")
-    for col in ("plot_start_time", "fvg_form_time", "fvg_ext_time"):
-        if col in signals.columns:
-            signals[col] = pd.to_datetime(signals[col])
+    if "plot_start_time" in signals.columns:
+        signals["plot_start_time"] = pd.to_datetime(signals["plot_start_time"])
     signals = signals.dropna(subset=["time", "side", "stop"]).copy()
     signals["side"] = signals["side"].map(Side)
     return signals.sort_values("time")
 
 
-def _decimal_places(step: float) -> int:
-    return abs(Decimal(str(step)).as_tuple().exponent)
-
-
 def rounded_qty(qty: float, step: float) -> float:
-    places = _decimal_places(step)
+    places = decimal_places(step)
     return round(math.floor(qty / step) * step, places)
 
 
@@ -129,67 +126,6 @@ def partial_targets(qty: float, risk_reward_ratio: float, step: float, min_qty: 
     return list(zip(target_rs, quantities))
 
 
-def exit_fill(
-    cfg: AssetConfig,
-    trade: dict,
-    qty: float,
-    raw_exit_price: float,
-    exit_i: int,
-    exit_time,
-    reason: ExitReason,
-    with_costs: bool,
-    target_r: float | None = None,
-) -> dict:
-    side = trade["side"]
-    direction = 1 if side == Side.LONG else -1
-    raw_exit = float(raw_exit_price)
-    net_exit = adjusted_exit(raw_exit, side, cfg, with_costs)
-    commission = cfg.commission_per_side * qty * 2 if with_costs else 0.0
-    gross_pnl = (raw_exit - trade["raw_entry"]) * direction * qty * cfg.point_value
-    net_pnl = (net_exit - trade["net_entry"]) * direction * qty * cfg.point_value - commission
-    realized_r = (raw_exit - trade["raw_entry"]) * direction / trade["initial_risk"]
-    return {
-        "exit_i": exit_i,
-        "exit_time": exit_time,
-        "raw_exit": raw_exit,
-        "net_exit": net_exit,
-        "exit": raw_exit,
-        "exit_reason": reason,
-        "qty": qty,
-        "gross_pnl": gross_pnl,
-        "net_pnl": net_pnl,
-        "pnl": net_pnl,
-        "realized_r": realized_r,
-        "target_r": target_r,
-    }
-
-
-def finalize_trade(trade: dict, exits: list[dict]) -> dict:
-    last = exits[-1]
-    realized_r = sum(fill["qty"] / trade["qty"] * fill["realized_r"] for fill in exits)
-    closed = trade.copy()
-    closed.update({key: last[key] for key in ("exit_i", "exit_time", "raw_exit", "net_exit", "exit", "exit_reason")})
-    gross_pnl = sum(fill["gross_pnl"] for fill in exits)
-    net_pnl = sum(fill["net_pnl"] for fill in exits)
-    risk_value = trade["initial_risk"] * trade["qty"] * trade["point_value"]
-    net_realized_r = net_pnl / risk_value
-    closed.update(
-        {
-            "exits": exits,
-            "gross_pnl": gross_pnl,
-            "net_pnl": net_pnl,
-            "pnl": net_pnl,
-            "realized_r": realized_r,
-            "net_realized_r": net_realized_r,
-            "outcome": classify_outcome(realized_r),
-            "net_outcome": classify_outcome(net_realized_r),
-            "giveback_r": max(0.0, float(trade["mfe_r"]) - max(realized_r, 0.0)),
-            "holding_duration": pd.Timestamp(last["exit_time"]) - pd.Timestamp(trade["entry_time"]),
-        }
-    )
-    return closed
-
-
 def _prepare_trade(
     signal: pd.Series,
     entry_open: float,
@@ -217,6 +153,8 @@ def _prepare_trade(
     if (side == Side.LONG and stop >= raw_entry) or (side == Side.SHORT and stop <= raw_entry):
         return None
     risk_points = abs(raw_entry - stop)
+    if round(risk_points / asset_cfg.tick_size, 6) < asset_cfg.min_risk_ticks:
+        return None
     qty = rounded_qty((current_net * risk_pct / 100) / (risk_points * asset_cfg.point_value), asset_cfg.qty_step)
     if qty < asset_cfg.min_qty:
         return None
@@ -255,33 +193,143 @@ def _prepare_trade(
         "qty": qty,
         "mfe_r": 0.0,
     }
-    for column in ("plot_start_time", "orb_high", "orb_low", "fvg_top", "fvg_bottom", "fvg_ext", "fvg_form_time", "fvg_ext_time"):
-        if column in signal and pd.notna(signal[column]):
-            trade[column] = signal[column]
+    # Strategy-owned signal columns pass through for plot_indicators; engine-owned keys win.
+    for column, value in signal.items():
+        if column not in CORE_SIGNAL_COLUMNS and column not in trade and pd.notna(value):
+            trade[column] = value
     return trade
 
 
-def _update_trailing_stop(
-    current_stop: float,
-    favor: float,
-    raw_entry: float,
-    risk_points: float,
-    side: Side,
-    tick_size: float,
-) -> float:
-    """Move the trailing stop to 50% of the favorable excursion once 1R is reached."""
-    direction = 1 if side == Side.LONG else -1
-    if (favor - raw_entry) * direction >= risk_points:
-        next_stop = tick_price(favor - direction * risk_points * 0.5, tick_size, -direction)
-        return max(current_stop, next_stop) if side == Side.LONG else min(current_stop, next_stop)
-    return current_stop
+@dataclass
+class _OpenTrade:
+    """A filled trade while it is open: remaining quantity, next target, current stop, exits and peak R."""
 
+    trade: dict
+    cfg: AssetConfig
+    with_costs: bool
+    stop: float = field(init=False)
+    remaining_qty: float = field(init=False)
+    direction: int = field(init=False)
+    next_target: int = 0
+    exits: list[dict] = field(default_factory=list)
+    peak_r: float = 0.0
 
-def _update_peak_r(trade: dict, exits: list[dict], remaining_qty: float, price: float) -> None:
-    realized = sum(fill["qty"] / trade["qty"] * fill["realized_r"] for fill in exits)
-    direction = 1 if trade["side"] == Side.LONG else -1
-    open_r = (price - trade["raw_entry"]) * direction / trade["initial_risk"]
-    trade["mfe_r"] = max(float(trade["mfe_r"]), realized + remaining_qty / trade["qty"] * open_r)
+    def __post_init__(self) -> None:
+        self.stop = self.trade["stop"]
+        self.remaining_qty = self.trade["qty"]
+        self.direction = 1 if self.trade["side"] == Side.LONG else -1
+
+    @property
+    def closed(self) -> bool:
+        return self.remaining_qty <= 0
+
+    @property
+    def target(self) -> dict | None:
+        targets = self.trade["targets"]
+        return targets[self.next_target] if self.next_target < len(targets) else None
+
+    def stop_gapped(self, opened: float) -> bool:
+        return opened * self.direction <= self.stop * self.direction
+
+    def target_gapped(self, opened: float) -> bool:
+        target = self.target
+        return target is not None and opened * self.direction >= target["price"] * self.direction
+
+    def target_between(self, start: float, end: float) -> bool:
+        target = self.target
+        return target is not None and start * self.direction < target["price"] * self.direction <= end * self.direction
+
+    def stop_between(self, start: float, end: float) -> bool:
+        return end * self.direction <= self.stop * self.direction <= start * self.direction
+
+    def _fill(self, qty: float, raw_exit_price: float, exit_i: int, exit_time, reason: ExitReason, target_r, gap_exit: bool) -> None:
+        trade, cfg = self.trade, self.cfg
+        raw_exit = float(raw_exit_price)
+        net_exit = adjusted_exit(raw_exit, trade["side"], cfg, self.with_costs)
+        commission = cfg.commission_per_side * qty * 2 if self.with_costs else 0.0
+        gross_pnl = (raw_exit - trade["raw_entry"]) * self.direction * qty * cfg.point_value
+        net_pnl = (net_exit - trade["net_entry"]) * self.direction * qty * cfg.point_value - commission
+        realized_r = (raw_exit - trade["raw_entry"]) * self.direction / trade["initial_risk"]
+        self.exits.append(
+            {
+                "exit_i": exit_i,
+                "exit_time": exit_time,
+                "raw_exit": raw_exit,
+                "net_exit": net_exit,
+                "exit": raw_exit,
+                "exit_reason": reason,
+                "qty": qty,
+                "gross_pnl": gross_pnl,
+                "net_pnl": net_pnl,
+                "realized_r": realized_r,
+                "target_r": target_r,
+                "gap_exit": gap_exit,
+            }
+        )
+        self.remaining_qty = max(0.0, round(self.remaining_qty - qty, 8))
+
+    def fill_target(self, price: float, exit_i: int, exit_time, gap_exit: bool = False) -> None:
+        target = self.target
+        self._fill(min(self.remaining_qty, target["qty"]), price, exit_i, exit_time, ExitReason.TARGET, target["r"], gap_exit)
+        self.next_target += 1
+
+    def close(self, price: float, exit_i: int, exit_time, reason: ExitReason, gap_exit: bool = False) -> None:
+        """Exit the whole remaining quantity at one price."""
+        self._fill(self.remaining_qty, price, exit_i, exit_time, reason, None, gap_exit)
+
+    def _realized_r(self) -> float:
+        return sum(fill["qty"] / self.trade["qty"] * fill["realized_r"] for fill in self.exits)
+
+    def update_peak(self, price: float) -> None:
+        trade = self.trade
+        open_r = (price - trade["raw_entry"]) * self.direction / trade["initial_risk"]
+        self.peak_r = max(float(self.peak_r), self._realized_r() + self.remaining_qty / trade["qty"] * open_r)
+
+    def trail(self, favor: float) -> None:
+        """Move the trailing stop to 50% of the favorable excursion once 1R is reached."""
+        trade = self.trade
+        risk_points = trade["initial_risk"]
+        if (favor - trade["raw_entry"]) * self.direction >= risk_points:
+            next_stop = tick_price(favor - self.direction * risk_points * 0.5, self.cfg.tick_size, -self.direction)
+            self.stop = max(self.stop, next_stop) if self.direction > 0 else min(self.stop, next_stop)
+
+    def marked_equity(self, price: float, gross_cash: float, net_cash: float) -> tuple[float, float]:
+        """Gross and net equity with realized fills and the remaining quantity marked at price."""
+        trade, cfg = self.trade, self.cfg
+        realized_gross = sum(fill["gross_pnl"] for fill in self.exits)
+        realized_net = sum(fill["net_pnl"] for fill in self.exits)
+        gross_mtm = (price - trade["raw_entry"]) * self.direction * self.remaining_qty * cfg.point_value
+        net_exit = adjusted_exit(price, trade["side"], cfg, self.with_costs)
+        net_mtm = (net_exit - trade["net_entry"]) * self.direction * self.remaining_qty * cfg.point_value
+        if self.with_costs:
+            net_mtm -= cfg.commission_per_side * self.remaining_qty * 2
+        return gross_cash + realized_gross + gross_mtm, net_cash + realized_net + net_mtm
+
+    def finalize(self) -> dict:
+        trade, exits = self.trade, self.exits
+        last = exits[-1]
+        realized_r = self._realized_r()
+        closed = trade.copy()
+        closed.update({key: last[key] for key in ("exit_i", "exit_time", "raw_exit", "net_exit", "exit", "exit_reason")})
+        gross_pnl = sum(fill["gross_pnl"] for fill in exits)
+        net_pnl = sum(fill["net_pnl"] for fill in exits)
+        risk_value = trade["initial_risk"] * trade["qty"] * trade["point_value"]
+        net_realized_r = net_pnl / risk_value
+        closed.update(
+            {
+                "mfe_r": self.peak_r,
+                "exits": exits,
+                "gross_pnl": gross_pnl,
+                "net_pnl": net_pnl,
+                "realized_r": realized_r,
+                "net_realized_r": net_realized_r,
+                "outcome": classify_outcome(realized_r),
+                "net_outcome": classify_outcome(net_realized_r),
+                "giveback_r": max(0.0, float(self.peak_r) - max(realized_r, 0.0)),
+                "holding_duration": pd.Timestamp(last["exit_time"]) - pd.Timestamp(trade["entry_time"]),
+            }
+        )
+        return closed
 
 
 def _bar_path(opened: float, high: float, low: float, close: float, side: Side) -> tuple[float, float, float, float]:
@@ -310,12 +358,13 @@ def run_backtest(
     max_trades: int | None = None,
     days: tuple[int, ...] = (),
     months: tuple[int, ...] = (),
+    session_exit: SessionSpec | None = None,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
     if exit_mode not in {"fixed", "trailing", "partial"}:
         raise ValueError(f"Unknown exit mode: {exit_mode}")
-    if operation not in {"all", "long_only", "short_only"}:
+    if operation not in OPERATIONS:
         raise ValueError(f"Unknown operation: {operation}")
     if not math.isfinite(risk_pct) or risk_pct <= 0:
         raise ValueError("--risk must be finite and positive")
@@ -354,6 +403,9 @@ def run_backtest(
     discarded_signals = 0
     unresolved_trades = 0
     busy_until = -1
+    # With a session exit, open trades close at the close of their session window's last bar.
+    if session_exit is not None:
+        in_window, window_last_bar = session_exit_bars(data.index, session_exit)
     day_filter = set(days)
     month_filter = set(months)
     try:
@@ -365,7 +417,7 @@ def run_backtest(
     if operation == "short_only":
         signals = signals[signals["side"] == Side.SHORT]
 
-    # ponytail: independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
+    # Independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
     for _, signal in signals.iterrows():
         signal_entry = signal.get("entry")
         close_entry = pd.notna(signal_entry)
@@ -382,12 +434,17 @@ def run_backtest(
         ):
             discarded_signals += 1
             continue
+        # A trade must open inside the window, before the window's last close.
+        if session_exit is not None and (not in_window[entry_i] or (close_entry and window_last_bar[entry_i])):
+            discarded_signals += 1
+            continue
 
-        # Fill flat equity for the period before this potential trade.
-        if last_bar_idx < entry_i:
-            bar_gross_equity[last_bar_idx:entry_i] = current_gross
-            bar_net_equity[last_bar_idx:entry_i] = current_net
-            last_bar_idx = entry_i
+        # Fill flat equity up to the first simulated bar; a close entry's fill bar has no P&L yet.
+        start_i = entry_i + int(close_entry)
+        if last_bar_idx < start_i:
+            bar_gross_equity[last_bar_idx:start_i] = current_gross
+            bar_net_equity[last_bar_idx:start_i] = current_net
+            last_bar_idx = start_i
 
         trade = _prepare_trade(
             signal, opens[entry_i], data.index[entry_i], asset_cfg, current_net, risk_pct, risk_reward_ratio, exit_mode,
@@ -397,114 +454,57 @@ def run_backtest(
             discarded_signals += 1
             continue
 
+        open_trade = _OpenTrade(trade, asset_cfg, with_costs)
         side = trade["side"]
-        direction = 1 if side == Side.LONG else -1
-        raw_entry = trade["raw_entry"]
-        risk_points = trade["initial_risk"]
-        qty = trade["qty"]
-        current_stop = trade["stop"]
-        remaining_qty = qty
-        next_target = 0
-        exits = []
-        targets = trade["targets"]
-        start_i = entry_i + int(close_entry)
-
-        resolved = False
+        trailing = exit_mode == "trailing"
         for i in range(start_i, bar_count):
             path = _bar_path(opens[i], highs[i], lows[i], closes[i], side)
             opened = path[0]
+            bar_time = data.index[i]
 
             # Orders crossed between the previous close and this open fill at the open.
-            if opened * direction <= current_stop * direction:
-                exits.append(exit_fill(asset_cfg, trade, remaining_qty, opened, i, data.index[i], ExitReason.STOP, with_costs))
-                trade = finalize_trade(trade, exits)
-                resolved = True
+            if open_trade.stop_gapped(opened):
+                open_trade.close(opened, i, bar_time, ExitReason.STOP, gap_exit=True)
                 break
-            _update_peak_r(trade, exits, remaining_qty, opened)
-            while next_target < len(targets) and opened * direction >= targets[next_target]["price"] * direction:
-                target = targets[next_target]
-                fill_qty = min(remaining_qty, target["qty"])
-                exits.append(exit_fill(asset_cfg, trade, fill_qty, opened, i, data.index[i], ExitReason.TARGET, with_costs, target["r"]))
-                remaining_qty = max(0.0, round(remaining_qty - fill_qty, 8))
-                next_target += 1
-            if remaining_qty <= 0:
-                trade = finalize_trade(trade, exits)
-                resolved = True
+            open_trade.update_peak(opened)
+            while open_trade.target_gapped(opened):
+                open_trade.fill_target(opened, i, bar_time, gap_exit=True)
+            if open_trade.closed:
                 break
-            if exit_mode == "trailing":
-                current_stop = _update_trailing_stop(current_stop, opened, raw_entry, risk_points, side, asset_cfg.tick_size)
+            if trailing:
+                open_trade.trail(opened)
 
             for start, end in zip(path, path[1:]):
-                if (end - start) * direction > 0:
-                    while (
-                        next_target < len(targets)
-                        and start * direction < targets[next_target]["price"] * direction <= end * direction
-                    ):
-                        target = targets[next_target]
-                        _update_peak_r(trade, exits, remaining_qty, target["price"])
-                        fill_qty = min(remaining_qty, target["qty"])
-                        exits.append(
-                            exit_fill(
-                                asset_cfg,
-                                trade,
-                                fill_qty,
-                                target["price"],
-                                i,
-                                data.index[i],
-                                ExitReason.TARGET,
-                                with_costs,
-                                target["r"],
-                            )
-                        )
-                        remaining_qty = max(0.0, round(remaining_qty - fill_qty, 8))
-                        next_target += 1
-                    if remaining_qty <= 0:
-                        trade = finalize_trade(trade, exits)
-                        resolved = True
+                if (end - start) * open_trade.direction > 0:
+                    while open_trade.target_between(start, end):
+                        target_price = open_trade.target["price"]
+                        open_trade.update_peak(target_price)
+                        open_trade.fill_target(target_price, i, bar_time)
+                    if open_trade.closed:
                         break
-                    _update_peak_r(trade, exits, remaining_qty, end)
-                    if exit_mode == "trailing":
-                        current_stop = _update_trailing_stop(
-                            current_stop, end, raw_entry, risk_points, side, asset_cfg.tick_size
-                        )
-                elif end * direction <= current_stop * direction <= start * direction:
-                    exits.append(
-                        exit_fill(
-                            asset_cfg,
-                            trade,
-                            remaining_qty,
-                            current_stop,
-                            i,
-                            data.index[i],
-                            ExitReason.STOP,
-                            with_costs,
-                        )
-                    )
-                    trade = finalize_trade(trade, exits)
-                    resolved = True
+                    open_trade.update_peak(end)
+                    if trailing:
+                        open_trade.trail(end)
+                elif open_trade.stop_between(start, end):
+                    open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
                     break
 
-            if resolved:
+            if open_trade.closed:
                 break
+            if session_exit is not None and window_last_bar[i]:
+                open_trade.close(path[-1], i, bar_time, ExitReason.SESSION)
+                break
+            bar_gross_equity[i], bar_net_equity[i] = open_trade.marked_equity(path[-1], current_gross, current_net)
 
-            close = path[-1]
-            realized_gross = sum(fill["gross_pnl"] for fill in exits)
-            realized_net = sum(fill["net_pnl"] for fill in exits)
-            gross_mtm = (close - raw_entry) * direction * remaining_qty * asset_cfg.point_value
-            net_exit = adjusted_exit(close, side, asset_cfg, with_costs)
-            net_mtm = (net_exit - trade["net_entry"]) * direction * remaining_qty * asset_cfg.point_value
-            if with_costs:
-                net_mtm -= asset_cfg.commission_per_side * remaining_qty * 2
-            bar_gross_equity[i] = current_gross + realized_gross + gross_mtm
-            bar_net_equity[i] = current_net + realized_net + net_mtm
-
-        if not resolved:
-            # ponytail: incomplete trades are discarded; add partial/open-trade accounting only if research needs it.
+        if not open_trade.closed:
+            # Unresolved trades are left out of the results; add partial/open-trade accounting only if research needs it.
             unresolved_trades += 1
             bar_gross_equity[last_bar_idx:bar_count] = current_gross
             bar_net_equity[last_bar_idx:bar_count] = current_net
             busy_until = bar_count - 1
             continue
+
+        trade = open_trade.finalize()
 
         # Settle the completed trade into the bar-level equity curves.
         current_gross += trade["gross_pnl"]
