@@ -533,3 +533,33 @@ def test_run_variants_filters_signals_by_session(monkeypatch, tmp_path, test_ass
 
     assert row["Session"] == "london=08:00-10:00"
     assert row["Trades"] == 1
+
+
+def test_reset_output_dirs_empties_folders_inside_root(monkeypatch, tmp_path):
+    results_dir = tmp_path / "results"
+    (results_dir / "old_bundle").mkdir(parents=True)
+    monkeypatch.setattr(reports, "ROOT", tmp_path)
+    monkeypatch.setattr(reports, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
+
+    reports.reset_output_dirs()
+
+    assert list(results_dir.iterdir()) == []
+    assert (tmp_path / "trades").is_dir()
+
+
+@pytest.mark.parametrize("target", ["root", "outside"])
+def test_reset_output_dirs_refuses_folder_not_strictly_inside_root(monkeypatch, tmp_path, target):
+    root = tmp_path / "repo"
+    project_file = root / "keep.txt"
+    root.mkdir()
+    project_file.write_text("project")
+    folder = root if target == "root" else tmp_path / "elsewhere"
+    monkeypatch.setattr(reports, "ROOT", root)
+    monkeypatch.setattr(reports, "RESULTS_DIR", folder)
+    monkeypatch.setattr(reports, "TRADES_DIR", root / "trades")
+
+    with pytest.raises(RuntimeError, match="Refusing to clear"):
+        reports.reset_output_dirs()
+
+    assert project_file.read_text() == "project"

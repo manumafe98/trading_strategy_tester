@@ -28,6 +28,7 @@ __all__ = ["main", "parser", "run"]
 
 
 EXIT_MODES = ("fixed", "trailing", "partial")
+OPERATIONS = ("all", "long_only", "short_only")
 WorkerState = tuple[str, float] | None
 
 
@@ -231,6 +232,8 @@ def run(config: RunConfig) -> None:
     if not config.strategies:
         raise ValueError("--strategies is required")
     time_period_args(config.time_period, config.data_source)
+    if config.operation not in OPERATIONS:
+        raise ValueError(f"--operation must be one of {', '.join(OPERATIONS)}; got: {config.operation}")
     validate_calendar_filters(config.days, config.months)
     strategies = {name: load_strategy(name) for name in config.strategies}
     session_specs = parse_sessions(config.sessions)
@@ -275,9 +278,9 @@ def run(config: RunConfig) -> None:
     )
     batch_count = len(strategies) * len(assets) * len(timeframes) * len(session_variants)
     workers = worker_count(config.workers, batch_count)
-    risks = {asset: risk_for(asset, config.risk) for asset in assets}
+    risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     rows = []
-    reset_output_dirs()
+    outputs_reset = False
     status = StatusDisplay(workers, started)
     strategy_label = ", ".join(strategies)
     status.update(phase="Preparing", detail=f"{strategy_label} | {task_count} variants", completed=0, total=task_count)
@@ -300,6 +303,10 @@ def run(config: RunConfig) -> None:
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
                     data = load_data(asset, asset_cfg, data_timeframe, config.time_period, config.data_source)
+                    # Clear the previous bundle only once fresh data exists, so a failed load keeps it.
+                    if not outputs_reset:
+                        reset_output_dirs()
+                        outputs_reset = True
                     data_cache = cache_data(data, cache_dir, cache_id)
                     cache_id += 1
                     for strategy_name, _strategy, timeframe in strategy_timeframes:
@@ -401,7 +408,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--data_source", default="yfinance", choices=["yfinance", "local"])
     p.add_argument("--days", type=days_arg, default=(), help="comma list of weekdays, e.g. monday,wed")
     p.add_argument("--months", type=months_arg, default=(), help="comma list of months, e.g. january,sep")
-    p.add_argument("--operation", default="all", choices=["all", "long_only", "short_only"])
+    p.add_argument("--operation", default="all", choices=OPERATIONS)
     p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
     p.add_argument("--exit_mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")

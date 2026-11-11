@@ -29,7 +29,7 @@ def risk_reward_ratios(value: str | None) -> list[float]:
     return ratios
 
 
-def risk_for(asset: str, risk: str) -> float:
+def risk_for(asset: str, risk: str, assets: tuple[str, ...] | list[str]) -> float:
     parts = csv_items(risk)
     if not parts:
         return DEFAULT_RISK
@@ -41,6 +41,8 @@ def risk_for(asset: str, risk: str) -> float:
             key = key.strip().upper()
             if not key:
                 raise ValueError("--risk asset override must have a name")
+            if key not in {name.upper() for name in assets}:
+                raise ValueError(f"--risk override for unknown asset: {key}")
         else:
             value = part
             key = None

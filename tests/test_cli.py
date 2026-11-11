@@ -7,6 +7,7 @@ import pandas as pd
 import pytest
 
 import tester_framework.__main__ as cli
+import tester_framework.reports as reports
 from tester_framework.__main__ import EXIT_MODES, exit_mode_variants, status_lines, worker_count
 from tester_framework.cli import RunConfig
 
@@ -369,3 +370,103 @@ def test_run_rejects_unknown_required_flag(monkeypatch, test_asset_cfg):
                 workers=1,
             )
         )
+
+
+def _config(**overrides) -> RunConfig:
+    values = dict(
+        strategies=("test",),
+        asset="TEST",
+        timeframe="1h",
+        sessions=None,
+        time_period="1d",
+        data_source="local",
+        operation="all",
+        risk_reward_ratio="1",
+        exit_mode="fixed",
+        risk="1",
+        capital=10_000,
+        with_costs=False,
+        workers=1,
+    )
+    values.update(overrides)
+    return RunConfig(**values)
+
+
+def test_run_rejects_risk_override_for_asset_not_in_run(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--risk override for unknown asset: MCG"):
+        cli.run(_config(risk="MCG=2"))
+
+
+def test_run_rejects_invalid_operation_before_clearing_outputs(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--operation"):
+        cli.run(_config(operation="longs"))
+
+
+def test_run_keeps_previous_results_when_first_data_load_fails(monkeypatch, tmp_path, test_asset_cfg):
+    results_dir = tmp_path / "results"
+    previous = results_dir / "previous_bundle" / "index.html"
+    previous.parent.mkdir(parents=True)
+    previous.write_text("previous run")
+    monkeypatch.setattr(reports, "ROOT", tmp_path)
+    monkeypatch.setattr(reports, "RESULTS_DIR", results_dir)
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+
+    def failing_load(*_args):
+        raise RuntimeError("download failed")
+
+    monkeypatch.setattr(cli, "load_data", failing_load)
+
+    with pytest.raises(RuntimeError, match="download failed"):
+        cli.run(_config())
+
+    assert previous.read_text() == "previous run"
+
+
+def test_run_clears_outputs_once_after_first_data_load(monkeypatch, tmp_path, test_asset_cfg, base_data):
+    events = []
+
+    class Future:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self):
+            return self.value
+
+    class Executor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def submit(self, function, task):
+            return Future(function(task))
+
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg, "OTHER": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "load_data", lambda asset, *_args: events.append(f"load {asset}") or base_data)
+    monkeypatch.setattr(cli, "cache_data", lambda *_args: ("values", "index", ()))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: events.append("reset"))
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", Executor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "run_variants", lambda _task: [])
+    monkeypatch.setattr(cli, "write_results_html", lambda *_args: tmp_path / "results.html")
+
+    cli.run(_config(asset="TEST,OTHER"))
+
+    assert events == ["load TEST", "reset", "load OTHER"]

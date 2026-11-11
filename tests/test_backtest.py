@@ -31,15 +31,21 @@ def test_risk_reward_ratios_accepts_positive_numeric():
 
 
 def test_risk_for_global_and_overrides():
-    assert risk_for("MNQ", "1") == 1.0
-    assert risk_for("MNQ", "MGC=1,MNQ=0.5") == 0.5
-    assert risk_for("MES", "MGC=1,MNQ=0.5") == 1.0
+    assets = ("MGC", "MNQ", "MES")
+    assert risk_for("MNQ", "1", assets) == 1.0
+    assert risk_for("MNQ", "MGC=1,MNQ=0.5", assets) == 0.5
+    assert risk_for("MES", "MGC=1,MNQ=0.5", assets) == 1.0
 
 
 @pytest.mark.parametrize("value", ["abc", "MGC=x", "0", "nan", "inf"])
 def test_risk_for_rejects_invalid_values(value):
     with pytest.raises(ValueError, match="--risk"):
-        risk_for("MGC", value)
+        risk_for("MGC", value, ("MGC",))
+
+
+def test_risk_for_rejects_override_for_asset_not_in_run():
+    with pytest.raises(ValueError, match="--risk override for unknown asset: MCG"):
+        risk_for("MGC", "MCG=2", ("MGC",))
 
 
 def test_normalize_signals_rejects_invalid_side():

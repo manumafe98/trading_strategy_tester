@@ -49,7 +49,7 @@ def reset_output_dirs() -> None:
     root = ROOT.resolve()
     for folder in (RESULTS_DIR, TRADES_DIR):
         resolved = folder.resolve()
-        if root not in (resolved, *resolved.parents):
+        if root not in resolved.parents:
             raise RuntimeError(f"Refusing to clear outside workspace: {resolved}")
         if folder.exists():
             shutil.rmtree(folder)
