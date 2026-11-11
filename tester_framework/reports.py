@@ -199,7 +199,7 @@ def _period_table(rows: list[dict]) -> str:
 def _exit_path(trade: dict) -> str:
     parts = []
     for fill in trade["exits"]:
-        label = f'{fill["target_r"]:g}R' if fill["target_r"] is not None else f'{fill["realized_r"]:+.2f}R stop'
+        label = f'{fill["target_r"]:g}R' if fill["target_r"] is not None else f'{fill["realized_r"]:+.2f}R {fill["exit_reason"]}'
         gap = " (gap)" if fill["gap_exit"] else ""
         parts.append(f'{fill["qty"]:g} @ {label}{gap}')
     return ", ".join(parts)
@@ -209,8 +209,8 @@ def _managed_summary(analytics: dict) -> str:
     managed = analytics["managed"]
     mode = str(managed["Mode"]).title()
     summary = _detail_table(
-        ["Target completions", "Stop completions", "Avg realized", "Avg MFE", "Avg giveback"],
-        [[managed["Target Completions"], managed["Stop Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
+        ["Target completions", "Stop completions", "Session completions", "Avg realized", "Avg MFE", "Avg giveback"],
+        [[managed["Target Completions"], managed["Stop Completions"], managed["Session Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
     )
     return f'<section><h2>{mode} summary</h2>{summary}</section>'
 
@@ -464,6 +464,8 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
             f"costs {'on' if config.with_costs else 'off'}",
         )
     ]
+    if config.session_exit:
+        tags.append('<span class="tag">session exit on</span>')
     if config.sessions and config.sessions.lower() != "none":
         tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')
     if config.days:

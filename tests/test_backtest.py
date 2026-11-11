@@ -19,6 +19,7 @@ from tester_framework.backtest import (
     run_backtest,
 )
 from tester_framework.models import ExitReason, Side
+from tester_framework.sessions import parse_sessions
 
 
 def test_risk_reward_ratios_rejects_non_numeric():
@@ -996,3 +997,136 @@ def test_min_risk_uses_tick_rounded_stop(test_asset_cfg):
     assert at_min["Discarded"] == 0
     assert below["Discarded"] == 1
     assert trades == []
+
+
+def _timed_bars(bars):
+    """Bars keyed by UTC start time: {"2025-01-02 13:00": (open, high, low, close)}."""
+    idx = pd.DatetimeIndex([pd.Timestamp(time) for time in bars])
+    return pd.DataFrame(list(bars.values()), index=idx, columns=["open", "high", "low", "close"], dtype=float)
+
+
+# ny_bank=08:00-11:00 is 13:00-16:00 UTC in January (EST) and 12:00-15:00 UTC in July (EDT).
+NY_MORNING = parse_sessions("ny_bank=08:00-11:00")[0]
+FLAT = (100.0, 100.0, 100.0, 100.0)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "last_bar", "after_window"),
+    [
+        ("long", 99.0, (100.0, 100.8, 99.8, 100.5), (100.5, 102.5, 100.5, 102.0)),
+        ("short", 101.0, (100.0, 100.2, 99.2, 99.5), (99.5, 99.5, 97.5, 98.0)),
+    ],
+)
+def test_session_exit_closes_open_trade_at_last_in_window_bar_close(test_asset_cfg, side, stop, last_bar, after_window):
+    data = _timed_bars({"2025-01-02 13:00": FLAT, "2025-01-02 14:00": FLAT, "2025-01-02 15:00": last_bar, "2025-01-02 16:00": after_window})
+    signals = [{"time": data.index[0], "side": side, "stop": stop}]
+
+    _, held = _run(data, signals, test_asset_cfg, risk_reward_ratio=2)
+    _, exited = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, session_exit=NY_MORNING)
+
+    assert held[0]["exit_reason"] == ExitReason.TARGET
+    trade = exited[0]
+    assert trade["exit_reason"] == ExitReason.SESSION
+    assert (trade["exit_time"], trade["exit"], trade["realized_r"]) == (pd.Timestamp("2025-01-02 15:00"), last_bar[3], 0.5)
+    assert trade["exits"][0]["gap_exit"] is False
+
+
+@pytest.mark.parametrize(
+    ("exit_mode", "exits"),
+    [
+        # Partial: half filled at the 1R target, the remaining half closes at the window's last close.
+        ("partial", [(ExitReason.TARGET, 50.0, 101.0), (ExitReason.SESSION, 50.0, 100.8)]),
+        # Trailing: the 1.2R high trails the stop to 100.7; the close above it exits the whole position.
+        ("trailing", [(ExitReason.SESSION, 100.0, 100.8)]),
+    ],
+)
+def test_session_exit_closes_remaining_position_for_managed_exit_modes(test_asset_cfg, exit_mode, exits):
+    data = _timed_bars(
+        {
+            "2025-01-02 13:00": FLAT,
+            "2025-01-02 14:00": (100.0, 101.2, 100.0, 101.0),
+            "2025-01-02 15:00": (101.0, 101.0, 100.8, 100.8),
+            "2025-01-02 16:00": (100.8, 103.0, 100.8, 103.0),
+        }
+    )
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, trades = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode=exit_mode, session_exit=NY_MORNING)
+
+    assert [(fill["exit_reason"], fill["qty"], fill["exit"]) for fill in trades[0]["exits"]] == exits
+    assert trades[0]["exit_reason"] == ExitReason.SESSION
+
+
+def test_session_exit_uses_last_bar_present_when_window_end_bars_are_missing(test_asset_cfg):
+    # The 15:00 UTC bar is missing; the next bar is the next day's window, so 14:00 is the last in-window bar.
+    data = _timed_bars(
+        {
+            "2025-01-02 13:00": FLAT,
+            "2025-01-02 14:00": (100.0, 100.4, 100.0, 100.3),
+            "2025-01-03 13:00": (100.3, 103.0, 100.3, 103.0),
+        }
+    )
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
+
+    assert (trades[0]["exit_reason"], trades[0]["exit_time"], trades[0]["exit"]) == (
+        ExitReason.SESSION, pd.Timestamp("2025-01-02 14:00"), 100.3,
+    )
+
+
+def test_session_exit_window_end_follows_dst(test_asset_cfg):
+    # In July the window is 12:00-15:00 UTC, so 14:00 is its last bar and 15:00 (11:00 EDT) is outside.
+    data = _timed_bars(
+        {
+            "2025-07-02 12:00": FLAT,
+            "2025-07-02 13:00": FLAT,
+            "2025-07-02 14:00": (100.0, 100.6, 100.0, 100.6),
+            "2025-07-02 15:00": (100.6, 100.6, 100.4, 100.4),
+        }
+    )
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
+
+    assert (trades[0]["exit_reason"], trades[0]["exit_time"], trades[0]["exit"]) == (
+        ExitReason.SESSION, pd.Timestamp("2025-07-02 14:00"), 100.6,
+    )
+
+
+def test_session_exit_applies_costs_like_any_exit(cost_asset_cfg):
+    data = _timed_bars(
+        {"2025-01-02 13:00": FLAT, "2025-01-02 14:00": FLAT, "2025-01-02 15:00": (100.0, 100.5, 100.0, 100.5), "2025-01-02 16:00": FLAT}
+    )
+    _, trades = _run(
+        data, [{"time": data.index[0], "side": "long", "stop": 99.0}], cost_asset_cfg, with_costs=True, session_exit=NY_MORNING,
+    )
+
+    trade = trades[0]
+    # 100 contracts; 0.2 points per side (half spread 0.1 + slippage 0.1); commission 0.1 x 100 x 2.
+    assert trade["exit_reason"] == ExitReason.SESSION
+    assert trade["net_exit"] == pytest.approx(100.3)
+    assert trade["gross_pnl"] == pytest.approx(50.0)
+    assert trade["net_pnl"] == pytest.approx(-10.0)
+
+
+@pytest.mark.parametrize(
+    ("signal", "reason"),
+    [
+        # A next-open entry would fill on 16:00 UTC, the first bar after the window end.
+        ({"time": pd.Timestamp("2025-01-02 15:00"), "side": "long", "stop": 99.0}, "entry outside window"),
+        # A close entry on the window's last bar would exit at its own fill price.
+        ({"time": pd.Timestamp("2025-01-02 15:00"), "side": "long", "stop": 99.0, "entry": 100.0}, "entry at window close"),
+    ],
+)
+def test_session_exit_discards_trades_that_cannot_open_before_window_close(test_asset_cfg, signal, reason):
+    data = _timed_bars({"2025-01-02 14:00": FLAT, "2025-01-02 15:00": FLAT, "2025-01-02 16:00": FLAT, "2025-01-02 17:00": FLAT})
+
+    held, _ = _run(data, [signal], test_asset_cfg)
+    metrics, trades = _run(data, [signal], test_asset_cfg, session_exit=NY_MORNING)
+
+    assert held["Discarded"] == 0, reason
+    assert (metrics["Discarded"], trades) == (1, []), reason
+
+
+def test_session_exit_leaves_trade_unresolved_when_data_ends_inside_window(test_asset_cfg):
+    data = _timed_bars({"2025-01-02 13:00": FLAT, "2025-01-02 14:00": FLAT})
+    metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
+
+    assert (metrics["Unresolved"], trades) == (1, [])

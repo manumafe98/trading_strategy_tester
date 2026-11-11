@@ -32,6 +32,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "session": None,
         "days": (),
         "months": (),
+        "session_exit": False,
     }
     task.update(overrides)
     return task
@@ -136,3 +137,20 @@ def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
     stored = decode_analytics(row["_analytics"])["managed"]["trades"][0]
     assert stored["vwap"] == 100.25
     assert reports._trade_table([stored]).count('<tr class="trade-row">') == 1
+
+
+def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_end(monkeypatch, tmp_path, test_asset_cfg):
+    london_open = parse_sessions("london=08:00-10:00")[0]
+    # Entered at the 09:00 open; the 10:00 bar would reach the target but starts at the window end.
+    data = _target_bars([100.0, 100.0, 102.0])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
+    task = _task(data, tmp_path, test_asset_cfg, variants=((2, "trailing"),), session=london_open)
+
+    held, exited = (runner.run_variants({**task, "session_exit": flag})[0] for flag in (False, True))
+
+    assert decode_analytics(held["_analytics"])["managed"]["trades"][0]["exit_reason"] == "target"
+    analytics = decode_analytics(exited["_analytics"])
+    (trade,) = analytics["managed"]["trades"]
+    assert (trade["exit_reason"], trade["exit_time"]) == ("session", pd.Timestamp("2025-01-02 09:00"))
+    assert analytics["managed"]["Session Completions"] == 1
+    assert "100 @ +0.00R session" in reports._trade_table([trade])

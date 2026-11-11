@@ -237,6 +237,8 @@ def run(config: RunConfig) -> None:
     validate_calendar_filters(config.days, config.months)
     strategies = {name: load_strategy(name) for name in config.strategies}
     session_specs = parse_sessions(config.sessions)
+    if config.session_exit and not session_specs:
+        raise ValueError("--session_exit requires --sessions with a session window")
     session_variants = session_specs or [None]
     validate_required_flags(strategies, session_specs)
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
@@ -331,6 +333,7 @@ def run(config: RunConfig) -> None:
                                     session=session,
                                     days=config.days,
                                     months=config.months,
+                                    session_exit=config.session_exit,
                                 )
                             )
                     del data
@@ -398,7 +401,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
-    p.add_argument("--sessions", help="comma list of asia, london, ny, all, none, or custom ranges like ny=09:30-12:00")
+    p.add_argument("--sessions", help="comma list of asia, london, ny, ny_bank, all, none, or custom ranges like ny=09:30-12:00")
     p.add_argument(
         "--time_period",
         type=time_period_value,
@@ -414,6 +417,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
+    p.add_argument(
+        "--session_exit",
+        action="store_true",
+        help="close open trades at the close of the last bar inside their session window; requires --sessions",
+    )
     p.add_argument("--workers", type=int, help="parallel variant workers, capped at logical CPU count")
     p.add_argument("--max_trades", type=int, default=None, help="diagnostic cap on first N closed trades per variant")
     p.add_argument(
@@ -449,6 +457,7 @@ def main() -> None:
             trade_html=args.trade_html,
             days=args.days,
             months=args.months,
+            session_exit=args.session_exit,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

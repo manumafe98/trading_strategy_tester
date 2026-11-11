@@ -105,6 +105,14 @@ def test_results_index_shows_quick_view_headers_sort_buttons_and_run_notes(monke
     )
     capped_html = reports.write_results_html(table, capped_config).read_text(encoding="utf-8")
     assert "first 3 trade charts per variant" in capped_html
+    assert "session exit on" not in capped_html
+
+    session_exit_config = RunConfig(
+        ("ema50",), None, None, "ny_bank", "60d", "yfinance", "all", "1", "all", "1", 10_000, False, None,
+        session_exit=True,
+    )
+    session_exit_html = reports.write_results_html(table, session_exit_config).read_text(encoding="utf-8")
+    assert "session exit on" in session_exit_html
 
 
 def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, tmp_path, test_asset_cfg):
@@ -128,7 +136,7 @@ def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, 
             "variants": ((3, "fixed"), (3, "trailing")), "asset": "TEST", "asset_cfg": test_asset_cfg,
             "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 0,
-            "session": None, "days": (), "months": (),
+            "session": None, "days": (), "months": (), "session_exit": False,
         }
     )
     config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "3", "fixed,trailing", "1", 10_000, False, None)
@@ -161,7 +169,7 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     table = pd.DataFrame(
         [
             {"Strategy": "ema50", "Asset": "MES", "TF": "5m", "Session": "london", "RR": "1", "Exit Mode": "fixed", "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5, "_risk_pct": 0.5, "_analytics": analytics, "_strategy_metrics": {}},
-            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0, "trades": []}}, "_strategy_metrics": {}},
+            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0, "trades": []}}, "_strategy_metrics": {}},
         ]
     )
     config = RunConfig(
@@ -231,6 +239,7 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
             "Mode": "partial",
             "Target Completions": len(trades),
             "Stop Completions": 0,
+            "Session Completions": 0,
             "Avg Realized R": 2.0,
             "Avg MFE R": 2.5,
             "Avg Giveback R": 0.5,

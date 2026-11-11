@@ -52,6 +52,7 @@ def _run_variant(
         max_trades=task["max_trades"],
         days=task["days"],
         months=task["months"],
+        session_exit=task["session"] if task["session_exit"] else None,
     )
     params = {
         "risk_reward_ratio": risk_reward_ratio,

@@ -495,3 +495,25 @@ def test_run_clears_outputs_once_after_first_data_load(monkeypatch, tmp_path, te
     cli.run(_config(asset="TEST,OTHER"))
 
     assert events == ["load TEST", "reset", "load OTHER"]
+
+
+@pytest.mark.parametrize("sessions", [None, "none"])
+def test_run_rejects_session_exit_without_session_window(monkeypatch, test_asset_cfg, sessions):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--session_exit requires --sessions"):
+        cli.run(_config(sessions=sessions, session_exit=True))
+
+
+def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
+    assert cli.parser().parse_args([]).session_exit is False
+    configs = []
+    argv = ["tester_framework", "--strategies", "orb_candle", "--sessions", "ny_bank", "--session_exit"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert configs[0].session_exit is True

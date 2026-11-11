@@ -25,3 +25,4 @@ class VariantBatchTask(TypedDict):
     session: SessionSpec | None
     days: tuple[int, ...]
     months: tuple[int, ...]
+    session_exit: bool

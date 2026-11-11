@@ -15,6 +15,7 @@ class Side(StrEnum):
 class ExitReason(StrEnum):
     STOP = "stop"
     TARGET = "target"
+    SESSION = "session"
 
 
 @dataclass(frozen=True)

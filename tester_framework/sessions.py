@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
+import numpy as np
 import pandas as pd
 
 from .utils import csv_items
@@ -21,7 +22,10 @@ SESSION_PRESETS = {
     "asia": ("Asia/Tokyo", 9 * 60, 15 * 60),
     "london": ("Europe/London", 8 * 60, 16 * 60 + 30),
     "ny": ("America/New_York", 9 * 60 + 30, 16 * 60),
+    "ny_bank": ("America/New_York", 8 * 60, 17 * 60),
 }
+# `all` expands to the market sessions only; ny_bank overlaps ny and is opt-in.
+ALL_SESSIONS = ("asia", "london", "ny")
 
 
 def _parse_clock(value: str) -> int:
@@ -44,7 +48,7 @@ def _format_clock(minutes: int) -> str:
 
 def _session_spec(name: str, start_minute: int | None = None, end_minute: int | None = None) -> SessionSpec:
     if name not in SESSION_PRESETS:
-        raise ValueError(f"--sessions supports only asia, london, ny, all, or none; got: {name}")
+        raise ValueError(f"--sessions supports only asia, london, ny, ny_bank, all, or none; got: {name}")
     timezone, preset_start, preset_end = SESSION_PRESETS[name]
     start_minute = preset_start if start_minute is None else start_minute
     end_minute = preset_end if end_minute is None else end_minute
@@ -85,7 +89,7 @@ def parse_sessions(value: str | None) -> list[SessionSpec]:
         if key == "all":
             if has_window:
                 raise ValueError("--sessions all does not accept a custom time range")
-            expanded = [_session_spec(session_name) for session_name in SESSION_PRESETS]
+            expanded = [_session_spec(session_name) for session_name in ALL_SESSIONS]
         else:
             if has_window:
                 start_text, dash, end_text = window.partition("-")
@@ -149,10 +153,31 @@ def filter_signals(signals: pd.DataFrame, session: SessionSpec | None) -> pd.Dat
         return frame
     if "time" not in frame.columns:
         frame = frame.reset_index().rename(columns={frame.index.name or "index": "time"})
-    local = local_index(frame["time"], session["timezone"])
-    minutes = local.hour * 60 + local.minute
-    mask = (minutes >= session["start_minute"]) & (minutes < session["end_minute"])
+    mask = _in_window(local_index(frame["time"], session["timezone"]), session)
     return frame.loc[mask].copy()
+
+
+def _in_window(local: pd.DatetimeIndex, session: SessionSpec) -> np.ndarray:
+    """Bar starts inside the session window; the window end is exclusive."""
+    minutes = local.hour * 60 + local.minute
+    return np.asarray((minutes >= session["start_minute"]) & (minutes < session["end_minute"]))
+
+
+def session_exit_bars(index, session: SessionSpec) -> tuple[np.ndarray, np.ndarray]:
+    """Per bar: whether it starts inside the session window, and whether it is the window's last bar.
+
+    The last bar is the final in-window bar before the next bar leaves the window or starts a new
+    local day, so missing bars at the window end still close on the last bar present. The final
+    data bar is never marked: the data may end before the window does.
+    """
+    local = local_index(index, session["timezone"])
+    in_window = _in_window(local, session)
+    days = local.tz_localize(None).normalize().asi8
+    last = in_window.copy()
+    last[:-1] &= ~(in_window[1:] & (days[1:] == days[:-1]))
+    if len(last):
+        last[-1] = False
+    return in_window, last
 
 
 __all__ = [
@@ -163,6 +188,7 @@ __all__ = [
     "local_index",
     "parse_sessions",
     "session_label",
+    "session_exit_bars",
     "session_start_utc",
     "utc_index",
 ]

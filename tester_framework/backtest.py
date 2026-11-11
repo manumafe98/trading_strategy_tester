@@ -9,6 +9,7 @@ import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
 from .models import AssetConfig, ExitReason, Side
+from .sessions import SessionSpec, session_exit_bars
 from .utils import csv_items, decimal_places
 
 
@@ -357,6 +358,7 @@ def run_backtest(
     max_trades: int | None = None,
     days: tuple[int, ...] = (),
     months: tuple[int, ...] = (),
+    session_exit: SessionSpec | None = None,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -401,6 +403,9 @@ def run_backtest(
     discarded_signals = 0
     unresolved_trades = 0
     busy_until = -1
+    # With a session exit, open trades close at the close of their session window's last bar.
+    if session_exit is not None:
+        in_window, window_last_bar = session_exit_bars(data.index, session_exit)
     day_filter = set(days)
     month_filter = set(months)
     try:
@@ -427,6 +432,10 @@ def run_backtest(
         if (day_filter and entry_time.weekday() not in day_filter) or (
             month_filter and entry_time.month not in month_filter
         ):
+            discarded_signals += 1
+            continue
+        # A trade must open inside the window, before the window's last close.
+        if session_exit is not None and (not in_window[entry_i] or (close_entry and window_last_bar[entry_i])):
             discarded_signals += 1
             continue
 
@@ -481,6 +490,9 @@ def run_backtest(
                     break
 
             if position.closed:
+                break
+            if session_exit is not None and window_last_bar[i]:
+                position.close(path[-1], i, bar_time, ExitReason.SESSION)
                 break
             bar_gross_equity[i], bar_net_equity[i] = position.marked_equity(path[-1], current_gross, current_net)
 
