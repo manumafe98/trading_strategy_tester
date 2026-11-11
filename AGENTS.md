@@ -77,10 +77,11 @@ Use `/ponytail-review` to review a change and `/ponytail-audit` for a whole-repo
 Run the smallest useful checks after changes:
 
 ```bash
-source .venv/Scripts/activate
-python -m pytest -q
-python -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
+.venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/python.exe -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
 ```
+
+The smoke run takes about 20 seconds and prints 138 trades and Return -5.18% / -14.42% (gross / net). A different result signals a behaviour change. It reads the local `data/` folder, which only exists on the machine that holds it; agents elsewhere skip the smoke run.
 
 ## Agent skills
 
