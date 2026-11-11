@@ -29,10 +29,19 @@ jobs:
       - name: Run offline test suite
         run: python -m pytest -q
 
-      - name: Check whitespace against merge base
+      - name: Check whitespace against the change base
         env:
-          BASE_REF: ${{ github.base_ref || 'main' }}
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_REF: ${{ github.base_ref }}
+          BEFORE_SHA: ${{ github.event.before }}
         run: |
-          git fetch --no-tags origin "$BASE_REF"
-          base=$(git merge-base "origin/$BASE_REF" HEAD)
-          git diff --check "$base"
+          if [ "$EVENT_NAME" = "pull_request" ]; then
+            git fetch --no-tags origin "$BASE_REF"
+            base=$(git merge-base "origin/$BASE_REF" HEAD)
+          elif [ -n "$BEFORE_SHA" ] && [ "$BEFORE_SHA" != "0000000000000000000000000000000000000000" ]; then
+            base="$BEFORE_SHA"
+          else
+            git fetch --no-tags origin main
+            base=$(git merge-base origin/main HEAD)
+          fi
+          git diff --check "$base" HEAD

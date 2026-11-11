@@ -6,15 +6,6 @@ Domain terms (session window, signal timeframe, R, variant, ...) are defined in 
 
 Review-time coding standards live in `docs/CODING_STANDARDS.md`.
 
-## Project Shape
-
-- `tester_framework/` is the Python runner.
-- `config/` contains JSON runtime config such as asset aliases, point values, and cost assumptions.
-- `strategy/` contains strategy modules loaded by the runner; `strategy/utils/` holds their shared ORB logic.
-- `pine_scripts_examples/` contains the TradingView Pine reference scripts the strategies are ported from.
-- `trades/` and `results/` hold generated trade charts and result bundles; normal runs clear both first.
-- `.venv` is the project virtual environment; do not install dependencies globally.
-
 ## Strategy Contract
 
 Each strategy is `strategy/<name>.py` and must expose:
@@ -55,11 +46,12 @@ Claims about Pine behaviour are checked against the reference scripts in `pine_s
 Run the smallest useful checks after changes:
 
 ```bash
-.venv/Scripts/python.exe -m pytest -q
-.venv/Scripts/python.exe -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
+PY="$(git rev-parse --path-format=absolute --git-common-dir)/../.venv/Scripts/python.exe"
+"$PY" -m pytest -q
+"$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
 ```
 
-The smoke run takes about 20 seconds and prints 138 trades and Return -5.18% / -14.42% (gross / net). A different result signals a behaviour change. It reads the local `data/` folder, which only exists on the machine that holds it; agents elsewhere skip the smoke run.
+The smoke run takes about 20 seconds and prints 138 trades and Return -5.18% / -14.42% (gross / net). A different result signals a behaviour change. It reads `data/` from the checkout it runs in, and local `data/` only exists on the machine that holds it; agents elsewhere skip the smoke run, and a linked worktree should point at the main checkout's `data/` or run the smoke command there.
 
 ## Agent skills
 
