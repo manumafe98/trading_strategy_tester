@@ -432,6 +432,56 @@ def test_gap_stop_fills_at_open(test_asset_cfg):
     assert trades[0]["exit"] == 97.0
 
 
+def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", next_bar=None):
+    bars = [[100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], gap_bar]
+    if next_bar:
+        bars.append(next_bar)
+    idx = pd.date_range("2025-01-01", periods=len(bars), freq="h")
+    data = pd.DataFrame(bars, index=idx, columns=["open", "high", "low", "close"])
+    _, trades = run_backtest(
+        data,
+        pd.DataFrame([{"time": idx[0], "side": side, "stop": stop}]),
+        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=risk_reward_ratio, exit_mode=exit_mode,
+        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
+    )
+    return trades[0]
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "gap_bar", "reason", "fill"),
+    [
+        ("long", 99.0, [105.0, 106.0, 104.0, 105.0], ExitReason.TARGET, 105.0),
+        ("short", 101.0, [95.0, 96.0, 94.0, 95.0], ExitReason.TARGET, 95.0),
+        ("long", 99.0, [97.0, 98.0, 96.0, 97.0], ExitReason.STOP, 97.0),
+        ("short", 101.0, [103.0, 104.0, 102.0, 103.0], ExitReason.STOP, 103.0),
+    ],
+)
+def test_gap_through_stop_or_target_fills_at_open_as_gap_exit(test_asset_cfg, side, stop, gap_bar, reason, fill):
+    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3)
+    assert [(f["exit_reason"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [(reason, fill, True)]
+    assert trade["exit"] == fill
+
+
+def test_intrabar_stop_and_target_are_not_gap_exits(test_asset_cfg):
+    target = _gap_run(test_asset_cfg, [100.0, 103.5, 99.5, 103.0], "long", 99.0, risk_reward_ratio=3)
+    stop = _gap_run(test_asset_cfg, [100.0, 100.5, 98.0, 98.5], "long", 99.0, risk_reward_ratio=3)
+    assert [(f["raw_exit"], f["gap_exit"]) for f in target["exits"]] == [(103.0, False)]
+    assert [(f["raw_exit"], f["gap_exit"]) for f in stop["exits"]] == [(99.0, False)]
+
+
+def test_gap_through_partial_targets_fills_each_crossed_target_at_open(test_asset_cfg):
+    trade = _gap_run(
+        test_asset_cfg, [102.5, 102.6, 102.4, 102.5], "long", 99.0, risk_reward_ratio=3, exit_mode="partial",
+        next_bar=[102.5, 103.5, 102.4, 103.0],
+    )
+    assert [(f["target_r"], f["qty"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [
+        (1.0, 33.0, 102.5, True),
+        (2.0, 33.0, 102.5, True),
+        (3, 34.0, 103.0, False),
+    ]
+    assert trade["gross_pnl"] == 33 * 2.5 * 2 + 34 * 3.0
+
+
 def test_high_first_path_reaches_target_before_stop(test_asset_cfg):
     idx = pd.date_range("2025-01-01", periods=2, freq="h")
     data = pd.DataFrame(

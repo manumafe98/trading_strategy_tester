@@ -10,6 +10,7 @@ import pytest
 import tester_framework.reports as reports
 import tester_framework.runner as runner
 from tester_framework.analytics import decode_analytics
+from tester_framework.backtest import result_columns
 from tester_framework.cli import RunConfig
 from tester_framework.reports import format_metric, metric_class
 from tester_framework.runner import cache_data
@@ -153,6 +154,42 @@ def test_zero_trade_html_skips_writer_and_keeps_empty_chart_cell(
     assert "<td>-</td>" in reports._trade_table([trade])
 
 
+def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, tmp_path, test_asset_cfg):
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(runner, "write_trade_html", lambda *_args: pytest.fail("trade HTML writer should not be called"))
+    idx = pd.date_range("2025-01-06", periods=3, freq="h")
+    data = pd.DataFrame(
+        {"open": [100.0, 100.0, 97.0], "high": [100.0, 100.5, 98.0], "low": [100.0, 99.5, 96.0], "close": [100.0, 100.0, 97.0], "volume": [0, 0, 0]},
+        index=idx,
+    )
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(
+            generate_signals=lambda *_args, **_kwargs: pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99.0}])
+        ),
+    )
+    rows = runner.run_variants(
+        {
+            "strategy": "ema50", "data_cache": cache_data(data, str(tmp_path), 0),
+            "variants": ((3, "fixed"), (3, "trailing")), "asset": "TEST", "asset_cfg": test_asset_cfg,
+            "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
+            "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 0,
+            "session": None, "days": (), "months": (),
+        }
+    )
+    config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "3", "fixed,trailing", "1", 10_000, False, None)
+
+    path = reports.write_results_html(pd.DataFrame(rows), config, result_columns("all"))
+    fixed_page, trailing_page = (
+        (path.parent / "variants" / name).read_text(encoding="utf-8") for name in ("000000.html", "000001.html")
+    )
+
+    assert "<th>Gap exits</th></tr></thead><tbody><tr><td>1</td>" in fixed_page
+    assert "<th>Gap exits</th></tr></thead><tbody><tr><td>1</td>" in trailing_page
+    assert "<td>100 @ -3.00R stop (gap)</td>" in trailing_page
+
+
 def test_trade_html_limit_is_per_variant_and_keeps_all_trades(
     monkeypatch, tmp_path, base_data, test_asset_cfg
 ):
@@ -267,6 +304,7 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
         "weekday": [{"Period": "Monday", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
         "month": [{"Period": "January", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
         "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
+        "Gap Exits": 0,
     }
     table = pd.DataFrame(
         [
@@ -318,7 +356,7 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
                 "holding_duration": "0 days 00:05:00",
                 "side": "<long>" if index == 0 else "long",
                 "outcome": "target_hit",
-                "exits": [{"target_r": 2.0, "realized_r": 2.0, "qty": 1.0}],
+                "exits": [{"target_r": 2.0, "realized_r": 2.0, "qty": 1.0, "gap_exit": False}],
                 "risk_reward_ratio": 2.0,
                 "realized_r": 2.0,
                 "mfe_r": 2.5,
@@ -336,6 +374,7 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
         "weekday": [],
         "month": [],
         "year": [],
+        "Gap Exits": 0,
         "managed": {
             "Mode": "partial",
             "Target Completions": len(trades),
@@ -458,7 +497,7 @@ def test_write_results_html_includes_session_column_when_present(monkeypatch, tm
                 "Max DD": (8.0, 2.5),
                 "Sharpe Ratio": (7.0, math.nan),
                 "Return / DD": (6.0, 4.5),
-                "_analytics": {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}]},
+                "_analytics": {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}], "Gap Exits": 0},
                 "_strategy_metrics": {},
             }
         ]

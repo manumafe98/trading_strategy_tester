@@ -141,6 +141,7 @@ def exit_fill(
     reason: ExitReason,
     with_costs: bool,
     target_r: float | None = None,
+    gap_exit: bool = False,
 ) -> dict:
     side = trade["side"]
     direction = 1 if side == Side.LONG else -1
@@ -163,6 +164,7 @@ def exit_fill(
         "pnl": net_pnl,
         "realized_r": realized_r,
         "target_r": target_r,
+        "gap_exit": gap_exit,
     }
 
 
@@ -420,7 +422,7 @@ def run_backtest(
 
             # Orders crossed between the previous close and this open fill at the open.
             if opened * direction <= current_stop * direction:
-                exits.append(exit_fill(asset_cfg, trade, remaining_qty, opened, i, data.index[i], ExitReason.STOP, with_costs))
+                exits.append(exit_fill(asset_cfg, trade, remaining_qty, opened, i, data.index[i], ExitReason.STOP, with_costs, gap_exit=True))
                 trade = finalize_trade(trade, exits)
                 resolved = True
                 break
@@ -428,7 +430,11 @@ def run_backtest(
             while next_target < len(targets) and opened * direction >= targets[next_target]["price"] * direction:
                 target = targets[next_target]
                 fill_qty = min(remaining_qty, target["qty"])
-                exits.append(exit_fill(asset_cfg, trade, fill_qty, opened, i, data.index[i], ExitReason.TARGET, with_costs, target["r"]))
+                exits.append(
+                    exit_fill(
+                        asset_cfg, trade, fill_qty, opened, i, data.index[i], ExitReason.TARGET, with_costs, target["r"], gap_exit=True
+                    )
+                )
                 remaining_qty = max(0.0, round(remaining_qty - fill_qty, 8))
                 next_target += 1
             if remaining_qty <= 0:

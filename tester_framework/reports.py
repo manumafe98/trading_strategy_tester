@@ -206,7 +206,8 @@ def _exit_path(trade: dict) -> str:
     parts = []
     for fill in trade["exits"]:
         label = f'{fill["target_r"]:g}R' if fill["target_r"] is not None else f'{fill["realized_r"]:+.2f}R stop'
-        parts.append(f'{fill["qty"]:g} @ {label}')
+        gap = " (gap)" if fill["gap_exit"] else ""
+        parts.append(f'{fill["qty"]:g} @ {label}{gap}')
     return ", ".join(parts)
 
 
@@ -270,6 +271,7 @@ def _trade_table(trades: list[dict]) -> str:
 def _variant_sections(row: pd.Series, analytics: dict) -> str:
     sections = [
         f"<section><h2>Outcomes</h2>{_outcome_table(analytics)}</section>",
+        f'<section><h2>Exits</h2>{_detail_table(["Gap exits"], [[analytics["Gap Exits"]]])}</section>',
         f'<div class="detail-grid"><section><h2>Entry weekday (UTC)</h2>{_period_table(analytics["weekday"])}</section><section><h2>Entry month (UTC)</h2>{_period_table(analytics["month"])}</section></div>',
         f'<section><h2>Entry year (UTC)</h2>{_period_table(analytics["year"])}</section>',
     ]

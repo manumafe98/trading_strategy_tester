@@ -46,10 +46,10 @@ def test_trade_stats_counts_and_expectancy():
 
 def test_analyze_trades_periods_and_outcomes():
     sample_trades = [
-        {"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01 23:30:00-02:00"), "holding_duration": pd.Timedelta(hours=1), "exit_reason": "target", "mfe_r": 1.0, "giveback_r": 0.0},
-        {"side": Side.SHORT, "realized_r": 0.0, "entry_time": pd.Timestamp("2025-01-02 04:00:00"), "holding_duration": pd.Timedelta(hours=2), "exit_reason": "stop", "mfe_r": 0.0, "giveback_r": 0.0},
-        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2025-01-03 04:00:00"), "holding_duration": pd.Timedelta(hours=3), "exit_reason": "stop", "mfe_r": 0.0, "giveback_r": 0.0},
-        {"side": Side.LONG, "realized_r": -0.5, "entry_time": pd.Timestamp("2025-02-01 04:00:00"), "holding_duration": pd.Timedelta(hours=4), "exit_reason": "stop", "mfe_r": 0.0, "giveback_r": 0.0},
+        {"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01 23:30:00-02:00"), "exits": [], "holding_duration": pd.Timedelta(hours=1), "exit_reason": "target", "mfe_r": 1.0, "giveback_r": 0.0},
+        {"side": Side.SHORT, "realized_r": 0.0, "entry_time": pd.Timestamp("2025-01-02 04:00:00"), "exits": [], "holding_duration": pd.Timedelta(hours=2), "exit_reason": "stop", "mfe_r": 0.0, "giveback_r": 0.0},
+        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2025-01-03 04:00:00"), "exits": [], "holding_duration": pd.Timedelta(hours=3), "exit_reason": "stop", "mfe_r": 0.0, "giveback_r": 0.0},
+        {"side": Side.LONG, "realized_r": -0.5, "entry_time": pd.Timestamp("2025-02-01 04:00:00"), "exits": [], "holding_duration": pd.Timedelta(hours=4), "exit_reason": "stop", "mfe_r": 0.0, "giveback_r": 0.0},
     ]
     analytics = analyze_trades(sample_trades, "fixed")
     overall, long_stats, short_stats = analytics["outcomes"]
@@ -63,11 +63,23 @@ def test_analyze_trades_periods_and_outcomes():
     assert analyze_trades([], "trailing")["outcomes"][0]["Trades"] == 0
 
 
+def test_analyze_trades_counts_gap_exit_fills():
+    trades = [
+        {"side": Side.LONG, "realized_r": 2.0, "entry_time": pd.Timestamp("2025-01-01"), "holding_duration": pd.Timedelta(hours=1),
+         "exits": [{"gap_exit": True}, {"gap_exit": True}, {"gap_exit": False}]},
+        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2025-01-02"), "holding_duration": pd.Timedelta(hours=1),
+         "exits": [{"gap_exit": False}]},
+    ]
+
+    assert analyze_trades(trades, "fixed")["Gap Exits"] == 2
+    assert analyze_trades([], "fixed")["Gap Exits"] == 0
+
+
 def test_analyze_trades_groups_entry_years_in_order():
     trades = [
-        {"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01"), "holding_duration": pd.Timedelta(hours=1)},
-        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2024-12-31 23:30:00-02:00"), "holding_duration": pd.Timedelta(hours=1)},
-        {"side": Side.LONG, "realized_r": 0.0, "entry_time": pd.Timestamp("2024-01-01"), "holding_duration": pd.Timedelta(hours=1)},
+        {"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01"), "exits": [], "holding_duration": pd.Timedelta(hours=1)},
+        {"side": Side.SHORT, "realized_r": -1.0, "entry_time": pd.Timestamp("2024-12-31 23:30:00-02:00"), "exits": [], "holding_duration": pd.Timedelta(hours=1)},
+        {"side": Side.LONG, "realized_r": 0.0, "entry_time": pd.Timestamp("2024-01-01"), "exits": [], "holding_duration": pd.Timedelta(hours=1)},
     ]
 
     years = analyze_trades(trades, "fixed")["year"]
