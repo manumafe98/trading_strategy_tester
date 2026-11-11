@@ -4,8 +4,8 @@
 # Vendored Pine references are text and must be normalized like any other source.
 *.pine text eol=lf
 
-# CSV is text data, not binary.
-*.csv text eol=lf
+# CSV is data: never normalize or diff it as text.
+*.csv binary
 
 # Images.
 *.bmp binary

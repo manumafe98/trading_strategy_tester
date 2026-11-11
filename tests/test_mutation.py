@@ -82,7 +82,7 @@ def test_mutation_the_test_does_not_catch_survives(tmp_path):
     assert module.read_bytes() == original
 
 
-def test_search_text_that_does_not_match_once_is_rejected(tmp_path):
+def test_search_text_that_does_not_match_once_is_invalid(tmp_path):
     module, test_file = _write_project(tmp_path)
     original = module.read_bytes()
 
@@ -94,9 +94,34 @@ def test_search_text_that_does_not_match_once_is_rejected(tmp_path):
     )
 
     assert result.returncode != 0
-    assert result.stdout.count("rejected") == 2
+    assert result.stdout.count("invalid") == 2
     assert "matched 0 times" in result.stdout
     assert "matched 2 times" in result.stdout
+    assert "killed" not in result.stdout
+    assert "survived" not in result.stdout
+    assert module.read_bytes() == original
+
+
+INTERRUPTED_TEST_SOURCE = """\
+def test_interrupted():
+    raise KeyboardInterrupt
+"""
+
+
+def test_pytest_exit_2_is_reported_as_error_not_killed(tmp_path):
+    module, _ = _write_project(tmp_path)
+    interrupted_test = tmp_path / "test_interrupted.py"
+    interrupted_test.write_text(
+        INTERRUPTED_TEST_SOURCE, encoding="utf-8", newline="\n"
+    )
+    original = module.read_bytes()
+
+    result = _run(
+        tmp_path, module, interrupted_test, [("return a + b", "return a - b")]
+    )
+
+    assert result.returncode != 0
+    assert "error" in result.stdout
     assert "killed" not in result.stdout
     assert "survived" not in result.stdout
     assert module.read_bytes() == original
