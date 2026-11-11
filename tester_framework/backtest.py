@@ -12,6 +12,7 @@ from .utils import csv_items
 
 
 DEFAULT_RISK = 1.0
+CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
 
 __all__ = ["add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
 
@@ -78,12 +79,8 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
     signals["stop"] = pd.to_numeric(signals["stop"], errors="coerce")
     if "entry" in signals.columns:
         signals["entry"] = pd.to_numeric(signals["entry"], errors="coerce")
-    for col in ("fvg_top", "fvg_bottom", "fvg_ext"):
-        if col in signals.columns:
-            signals[col] = pd.to_numeric(signals[col], errors="coerce")
-    for col in ("plot_start_time", "fvg_form_time", "fvg_ext_time"):
-        if col in signals.columns:
-            signals[col] = pd.to_datetime(signals[col])
+    if "plot_start_time" in signals.columns:
+        signals["plot_start_time"] = pd.to_datetime(signals["plot_start_time"])
     signals = signals.dropna(subset=["time", "side", "stop"]).copy()
     signals["side"] = signals["side"].map(Side)
     return signals.sort_values("time")
@@ -261,9 +258,10 @@ def _prepare_trade(
         "qty": qty,
         "mfe_r": 0.0,
     }
-    for column in ("plot_start_time", "orb_high", "orb_low", "fvg_top", "fvg_bottom", "fvg_ext", "fvg_form_time", "fvg_ext_time"):
-        if column in signal and pd.notna(signal[column]):
-            trade[column] = signal[column]
+    # Strategy-owned signal columns pass through for plot_indicators; engine-owned keys win.
+    for column, value in signal.items():
+        if column not in CORE_SIGNAL_COLUMNS and column not in trade and pd.notna(value):
+            trade[column] = value
     return trade
 
 

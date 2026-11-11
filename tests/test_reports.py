@@ -602,3 +602,50 @@ def test_reset_output_dirs_refuses_folder_not_strictly_inside_root(monkeypatch, 
         reports.reset_output_dirs()
 
     assert project_file.read_text() == "project"
+
+
+def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
+    monkeypatch, tmp_path, base_data, hourly_index, test_asset_cfg
+):
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
+    plotted = []
+    signal = {"time": hourly_index[0], "side": "long", "stop": 99, "vwap": 100.25, "target": 150.0, "note": None}
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(
+            generate_signals=lambda *_args, **_kwargs: pd.DataFrame([signal]),
+            plot_indicators=lambda fig, data, view, asset, timeframe, params: plotted.append(dict(params["trade"])),
+        ),
+    )
+    row = runner.run_variants(
+        {
+            "strategy": "ema50",
+            "data_cache": cache_data(base_data, str(tmp_path), 0),
+            "variants": ((1, "trailing"),),
+            "asset": "TEST",
+            "asset_cfg": test_asset_cfg,
+            "timeframe": "1h",
+            "execution_timeframe": "1h",
+            "operation": "all",
+            "risk_pct": 1,
+            "capital": 10_000,
+            "with_costs": False,
+            "time_period": "1d",
+            "data_source": "local",
+            "max_trades": None,
+            "trade_html": None,
+            "session": None,
+            "days": (),
+            "months": (),
+        }
+    )[0]
+
+    (trade,) = plotted
+    assert trade["vwap"] == 100.25
+    # Engine-owned keys win over same-named signal columns; NA columns are not copied.
+    assert trade["target"] == 101.0
+    assert "note" not in trade
+    stored = decode_analytics(row["_analytics"])["managed"]["trades"][0]
+    assert stored["vwap"] == 100.25
+    assert reports._trade_table([stored]).count('<tr class="trade-row">') == 1

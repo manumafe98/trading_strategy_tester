@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import pandas as pd
+import plotly.graph_objects as go
 import pytest
 
-from strategy.orb_combined import generate_signals
+from strategy.orb_combined import generate_signals, plot_indicators
+from tester_framework.backtest import run_backtest
 from tester_framework.sessions import parse_sessions
 
 
@@ -131,3 +133,24 @@ def test_empty_data():
 def test_requires_positive_tick_size():
     with pytest.raises(ValueError, match="tick_size"):
         generate_signals(make_combined_day(), asset="MNQ", timeframe="5m", params={"tick_size": 0, "session": SESSION})
+
+
+def test_orb_and_fvg_columns_reach_the_trade_chart(test_asset_cfg):
+    df = make_combined_day(bull=True, with_ext=True)
+    df.iloc[12, df.columns.get_loc("high")] = 107.0
+    signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
+    # The fixture's FVG bars sit outside their open; widen ranges so the engine accepts them.
+    prices = df[["open", "high", "low", "close"]]
+    bars = df.assign(high=prices.max(axis=1), low=prices.min(axis=1))
+    _, (trade,) = run_backtest(
+        bars, signals, strategy="orb_combined", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10_000, with_costs=False, asset_cfg=test_asset_cfg,
+    )
+    fig = go.Figure()
+    plot_indicators(fig, df, df, "TEST", "1m", {"trade": trade, "tick_size": 0.1})
+
+    assert [(t.name, list(t.y)) for t in fig.data] == [("ORB high", [102.0, 102.0]), ("ORB low", [98.5, 98.5])]
+    assert [(s.name, s.x0, s.y0, s.y1) for s in fig.layout.shapes] == [
+        ("FVG", pd.Timestamp("2025-01-02 14:38"), 100.5, 102.5),
+        ("FVG ext", pd.Timestamp("2025-01-02 14:39"), 99.5, 99.5),
+    ]

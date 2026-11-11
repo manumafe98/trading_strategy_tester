@@ -136,6 +136,8 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
+Any extra signal column beyond `time`, `side`, `stop`, and `entry` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
+
 Strategies can also add scalar metrics to each expanded result variant:
 
 ```python
