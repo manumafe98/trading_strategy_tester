@@ -66,8 +66,12 @@ How the engine takes profit: fixed (one target), trailing (a stop that follows t
 An exit rule that closes an open trade at the end of its variant's session window.
 _Avoid_: EOD exit, end-of-day exit
 
+**Gap exit**:
+An exit filled at a bar's open because the price gapped through the stop or a target.
+_Avoid_: slippage exit
+
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, an open trade, a calendar filter, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
 
 **Unresolved trade**:
