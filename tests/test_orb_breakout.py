@@ -74,6 +74,20 @@ def test_breakout_at_session_window_end_produces_no_signal(module, stop):
 
 
 @pytest.mark.parametrize(("module", "stop"), STRATEGIES)
+def test_each_day_gets_its_own_opening_range(module, stop):
+    day1 = make_combined_day()
+    day2 = make_combined_day() + 10.0  # day-1 ORB would flag the first day-2 bar as a long breakout
+    day2.index += pd.Timedelta(days=1)
+
+    signals = signals_for(module, pd.concat([day1, day2]))
+
+    assert signals["time"].tolist() == [BREAKOUT_TIME, BREAKOUT_TIME + pd.Timedelta(days=1)]
+    assert signals["side"].tolist() == ["long", "long"]
+    assert signals["stop"].tolist() == [stop, stop + 10.0]
+    assert signals["orb_high"].tolist() == [102.0, 112.0]
+
+
+@pytest.mark.parametrize(("module", "stop"), STRATEGIES)
 def test_orb_strategies_do_not_mutate_input(module, stop):
     df = make_combined_day()
     before = df.copy()
