@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -154,3 +155,113 @@ def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_e
     assert (trade["exit_reason"], trade["exit_time"]) == ("session", pd.Timestamp("2025-01-02 09:00"))
     assert analytics["managed"]["Session Completions"] == 1
     assert "100 @ +0.00R session" in reports._trade_table([trade])
+
+
+def test_run_variants_surfaces_strategy_errors_from_mid_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
+    calls = []
+
+    def calculate_metrics(*_args):
+        calls.append(True)
+        if len(calls) == 2:
+            raise ZeroDivisionError("strategy raised on its second variant")
+        return {}
+
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame(), calculate_metrics=calculate_metrics))
+
+    with pytest.raises(ZeroDivisionError, match="strategy raised on its second variant"):
+        runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "fixed"), (2, "trailing"))))
+
+    assert calls == [True, True]
+
+
+def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester):
+    repo_root = Path(__file__).resolve().parents[1]
+    pytester.makeconftest(f"import sys\nsys.path.insert(0, {str(repo_root)!r})\n")
+    pytester.makepyfile(
+        test_cached_runner_failure="""
+        from types import SimpleNamespace
+
+        import pandas as pd
+
+        import tester_framework.runner as runner
+        from tester_framework.models import AssetConfig
+        from tester_framework.runner import cache_data
+
+
+        def test_inner_failure_keeps_cached_data_alive(tmp_path, monkeypatch):
+            index = pd.date_range("2025-01-02 08:00", periods=4, freq="1h")
+            data = pd.DataFrame(
+                {
+                    "open": [100.0, 100.0, 100.0, 100.0],
+                    "high": [100.0, 102.0, 100.0, 100.0],
+                    "low": [100.0, 99.5, 100.0, 100.0],
+                    "close": [100.0, 101.0, 100.0, 100.0],
+                    "volume": [0, 0, 0, 0],
+                },
+                index=index,
+            )
+            captured = []
+
+            def generate_signals(frame, **_kwargs):
+                captured.append(frame)
+                return pd.DataFrame()
+
+            monkeypatch.setattr(
+                runner,
+                "load_strategy",
+                lambda _name: SimpleNamespace(generate_signals=generate_signals),
+            )
+            asset_cfg = AssetConfig(
+                ticker="TEST",
+                point_value=1.0,
+                tick_size=0.1,
+                qty_step=1.0,
+                min_qty=1.0,
+                min_risk_ticks=1,
+                spread_points=0.0,
+                slippage_points=0.0,
+                commission_per_side=0.0,
+                session_timezone="UTC",
+                session_start="00:00",
+                bars_per_year={"1h": 1716},
+            )
+            task = {
+                "strategy": "ema50",
+                "data_cache": cache_data(data, str(tmp_path), 0),
+                "variants": ((1, "fixed"),),
+                "asset": "TEST",
+                "asset_cfg": asset_cfg,
+                "timeframe": "1h",
+                "execution_timeframe": "1h",
+                "operation": "all",
+                "risk_pct": 1,
+                "capital": 10_000,
+                "with_costs": False,
+                "time_period": "1d",
+                "data_source": "local",
+                "max_trades": None,
+                "trade_html": 0,
+                "session": None,
+                "days": (),
+                "months": (),
+                "session_exit": False,
+            }
+
+            rows = runner.run_variants(task)
+
+            # The failure deliberately keeps `captured` referenced; pytest reads
+            # this frame's locals while reporting the assertion below.
+            assert captured[0].shape == (99, 5), "deliberate inner failure: cached data must stay readable"
+            assert rows
+        """
+    )
+
+    result = pytester.runpytest_subprocess("-q", "-l", "-p", "no:cacheprovider", timeout=60)
+
+    assert result.ret == pytest.ExitCode.TESTS_FAILED, f"inner pytest crashed instead of failing: {result.ret}"
+    result.stdout.fnmatch_lines(
+        [
+            "*AssertionError: deliberate inner failure: cached data must stay readable*",
+            "*1 failed*",
+        ]
+    )

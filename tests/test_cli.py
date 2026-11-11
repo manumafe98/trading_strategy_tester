@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 import sys
 from dataclasses import replace
+from pathlib import Path
 from types import SimpleNamespace
 
 import pandas as pd
@@ -10,6 +11,7 @@ import pytest
 
 import tester_framework.__main__ as cli
 import tester_framework.reports as reports
+import tester_framework.runner as runner
 from tester_framework.__main__ import EXIT_MODES, exit_mode_variants, status_lines, worker_count
 from tester_framework.cli import RunConfig
 
@@ -319,6 +321,74 @@ def test_run_waits_for_executor_before_temp_cleanup_on_failure(monkeypatch, tmp_
         )
 
     assert events == ["executor waited", "temp cleanup"]
+
+
+def test_run_removes_the_temporary_cache_folder_after_a_batch(monkeypatch, tmp_path, test_asset_cfg, base_data):
+    folders = []
+    cache_files = []
+    cache_present_during_batch = []
+    real_temporary_directory = cli.TemporaryDirectory
+    real_cache_data = cli.cache_data
+
+    class RecordingTempDir:
+        def __init__(self, **kwargs):
+            self._inner = real_temporary_directory(**kwargs)
+
+        def __enter__(self):
+            path = self._inner.__enter__()
+            folders.append(Path(path))
+            return path
+
+        def __exit__(self, *args):
+            return self._inner.__exit__(*args)
+
+    def recording_cache_data(data, cache_dir, cache_id):
+        cached = real_cache_data(data, cache_dir, cache_id)
+        cache_files.append(Path(cached[0]))
+        return cached
+
+    def generate_signals(_frame, **_kwargs):
+        cache_present_during_batch.append(cache_files[0].exists())
+        return pd.DataFrame()
+
+    class Future:
+        def __init__(self, value):
+            self.value = value
+
+        def result(self):
+            return self.value
+
+    class Executor:
+        def __init__(self, **_kwargs):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def submit(self, function, task):
+            return Future(function(task))
+
+    strategy = SimpleNamespace(generate_signals=generate_signals)
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
+    monkeypatch.setattr(runner, "load_strategy", lambda _name: strategy)
+    monkeypatch.setattr(cli, "load_data", lambda *_args: base_data)
+    monkeypatch.setattr(cli, "cache_data", recording_cache_data)
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "TemporaryDirectory", RecordingTempDir)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", Executor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "write_results_html", lambda *_args: tmp_path / "results.html")
+
+    cli.run(_config())
+
+    assert len(folders) == 1
+    assert [path.parent for path in cache_files] == [folders[0]]
+    assert cache_present_during_batch == [True]
+    assert not folders[0].exists()
 
 
 def test_run_requires_strategy_owned_sessions(monkeypatch, test_asset_cfg):
