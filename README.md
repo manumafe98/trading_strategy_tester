@@ -15,13 +15,16 @@ python -m pip install -r requirements.txt
 ## Checks
 
 ```bash
-python -m pytest -q
+.venv/Scripts/python.exe -m pytest -q
+.venv/Scripts/python.exe -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
 ```
+
+The smoke run takes about 20 seconds and prints 138 trades and Return -5.18% / -14.42% (gross / net); a different result signals a behaviour change. It reads the local `data/` folder, which only exists on the machine that holds it, so skip it elsewhere.
 
 ## Run
 
 ```bash
-python -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
+.venv/Scripts/python.exe -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
 ```
 
 Each normal run clears `results/` and `trades/` first, then writes a result bundle with `index.html`, paginated variant pages, and trade charts. Move or share the result folder as a unit. Use `--trade_html N` to limit charts per variant, or `--trade_html 0` to disable them. Omitting the flag writes every chart.
