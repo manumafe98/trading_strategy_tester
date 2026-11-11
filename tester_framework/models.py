@@ -12,6 +12,9 @@ class Side(StrEnum):
     SHORT = "short"
 
 
+OPERATIONS = ("all", "long_only", "short_only")
+
+
 class ExitReason(StrEnum):
     STOP = "stop"
     TARGET = "target"
@@ -63,4 +66,4 @@ class AssetConfig:
             raise ValueError(f"Invalid session_start: {self.session_start}") from None
 
 
-__all__ = ["AssetConfig", "ExitReason", "Side"]
+__all__ = ["OPERATIONS", "AssetConfig", "ExitReason", "Side"]

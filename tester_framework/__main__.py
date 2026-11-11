@@ -15,6 +15,7 @@ from .analytics import format_duration
 from .backtest import result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
+from .models import OPERATIONS
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
@@ -28,7 +29,6 @@ __all__ = ["main", "parser", "run"]
 
 
 EXIT_MODES = ("fixed", "trailing", "partial")
-OPERATIONS = ("all", "long_only", "short_only")
 WorkerState = tuple[str, float] | None
 
 

@@ -128,7 +128,7 @@ def add_session_columns(df: pd.DataFrame, session: SessionSpec) -> pd.DataFrame:
     work = df.copy(deep=False)
     local = local_index(work.index, session["timezone"])
     work["_session_date"] = local.tz_localize(None).normalize()
-    work["_session_minute"] = local.hour * 60 + local.minute
+    work["_session_minute"] = _local_minutes(local)
     return work
 
 
@@ -153,13 +153,16 @@ def filter_signals(signals: pd.DataFrame, session: SessionSpec | None) -> pd.Dat
         return frame
     if "time" not in frame.columns:
         frame = frame.reset_index().rename(columns={frame.index.name or "index": "time"})
-    mask = _in_window(local_index(frame["time"], session["timezone"]), session)
+    mask = in_session_window(_local_minutes(local_index(frame["time"], session["timezone"])), session)
     return frame.loc[mask].copy()
 
 
-def _in_window(local: pd.DatetimeIndex, session: SessionSpec) -> np.ndarray:
-    """Bar starts inside the session window; the window end is exclusive."""
-    minutes = local.hour * 60 + local.minute
+def _local_minutes(local: pd.DatetimeIndex) -> pd.Index:
+    return local.hour * 60 + local.minute
+
+
+def in_session_window(minutes, session: SessionSpec) -> np.ndarray:
+    """Bar start minutes inside the session window; the window end is exclusive."""
     return np.asarray((minutes >= session["start_minute"]) & (minutes < session["end_minute"]))
 
 
@@ -171,7 +174,7 @@ def session_exit_bars(index, session: SessionSpec) -> tuple[np.ndarray, np.ndarr
     data bar is never marked: the data may end before the window does.
     """
     local = local_index(index, session["timezone"])
-    in_window = _in_window(local, session)
+    in_window = in_session_window(_local_minutes(local), session)
     days = local.tz_localize(None).normalize().asi8
     last = in_window.copy()
     last[:-1] &= ~(in_window[1:] & (days[1:] == days[:-1]))
@@ -185,6 +188,7 @@ __all__ = [
     "SessionSpec",
     "add_session_columns",
     "filter_signals",
+    "in_session_window",
     "local_index",
     "parse_sessions",
     "session_label",

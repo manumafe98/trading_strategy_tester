@@ -8,7 +8,7 @@ import pytest
 import strategy.orb_candle as orb_candle
 import strategy.orb_combined as orb_combined
 import strategy.orb_fvg as orb_fvg
-from tests.test_orb_combined import make_combined_day
+from tests.orb_days import make_combined_day
 from tester_framework.sessions import parse_sessions
 
 

@@ -5,13 +5,13 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from tester_framework.sessions import SessionSpec, add_session_columns, session_start_utc
+from tester_framework.sessions import SessionSpec, add_session_columns, in_session_window, session_start_utc
 from tester_framework.utils import decimal_places
 
 
 REQUIRED_SESSION_MESSAGE = "ORB strategies require --sessions; none is not supported."
 TIMEFRAME_MINUTES = {"1m": 1, "2m": 2, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60}
-ORB_PLOT_KEYS = ("plot_start_time", "signal_time", "orb_high", "orb_low")
+OPENING_RANGE_PLOT_KEYS = ("plot_start_time", "signal_time", "orb_high", "orb_low")
 
 
 def timeframe_minutes(timeframe: str) -> int:
@@ -38,22 +38,26 @@ def session_params(params: dict | None, timeframe: str, strategy_name: str) -> t
 
 @dataclass(frozen=True)
 class Breakout:
-    """First close outside one day's opening range; `position` indexes the bar inside `day_data`."""
+    """First close outside one day's opening range; `bar_index` indexes the bar inside `day_data`."""
 
     day_data: pd.DataFrame
-    position: int
+    bar_index: int
     is_long: bool
     entry: float
-    orb_high: float
-    orb_low: float
+    range_high: float
+    range_low: float
     plot_start_time: pd.Timestamp
 
     @property
     def time(self) -> pd.Timestamp:
-        return self.day_data.index[self.position]
+        return self.day_data.index[self.bar_index]
+
+    @property
+    def direction(self) -> int:
+        return 1 if self.is_long else -1
 
     def bar(self, column: str) -> float:
-        return float(self.day_data[column].to_numpy(dtype=float)[self.position])
+        return float(self.day_data[column].to_numpy(dtype=float)[self.bar_index])
 
     def row(self, stop: float, reason: str) -> dict:
         return {
@@ -63,8 +67,8 @@ class Breakout:
             "entry": self.entry,
             "reason": reason,
             "plot_start_time": self.plot_start_time,
-            "orb_high": self.orb_high,
-            "orb_low": self.orb_low,
+            "orb_high": self.range_high,
+            "orb_low": self.range_low,
         }
 
 
@@ -73,8 +77,7 @@ def find_breakouts(df: pd.DataFrame, session: SessionSpec, orb_minutes: int, sta
     if df.empty:
         return []
     work = add_session_columns(df, session)
-    minute = work["_session_minute"]
-    work = work[(minute >= start_minute) & (minute < end_minute)]
+    work = work[in_session_window(work["_session_minute"], session)]
     breakouts = []
 
     for day, day_data in work.groupby("_session_date", sort=True):
@@ -82,23 +85,23 @@ def find_breakouts(df: pd.DataFrame, session: SessionSpec, orb_minutes: int, sta
         in_orb = (minute >= start_minute) & (minute < start_minute + orb_minutes)
         if not in_orb.any():
             continue
-        orb_high = float(day_data["high"][in_orb].max())
-        orb_low = float(day_data["low"][in_orb].min())
+        range_high = float(day_data["high"][in_orb].max())
+        range_low = float(day_data["low"][in_orb].min())
         closes = day_data["close"].to_numpy(dtype=float)
         after_orb = (minute >= start_minute + orb_minutes) & (minute < end_minute)
-        hits = np.flatnonzero(after_orb & ((closes > orb_high) | (closes < orb_low)))
+        hits = np.flatnonzero(after_orb & ((closes > range_high) | (closes < range_low)))
         if not len(hits):
             continue
-        position = int(hits[0])
-        entry = float(closes[position])
+        bar_index = int(hits[0])
+        entry = float(closes[bar_index])
         breakouts.append(
             Breakout(
                 day_data=day_data,
-                position=position,
-                is_long=entry > orb_high,
+                bar_index=bar_index,
+                is_long=entry > range_high,
                 entry=entry,
-                orb_high=orb_high,
-                orb_low=orb_low,
+                range_high=range_high,
+                range_low=range_low,
                 plot_start_time=session_start_utc(day, session),
             )
         )
@@ -128,7 +131,7 @@ def plot_opening_range(fig, trade: dict) -> None:
 
 __all__ = [
     "Breakout",
-    "ORB_PLOT_KEYS",
+    "OPENING_RANGE_PLOT_KEYS",
     "REQUIRED_SESSION_MESSAGE",
     "TIMEFRAME_MINUTES",
     "decimal_places",

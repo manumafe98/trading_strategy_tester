@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
-from .models import AssetConfig, ExitReason, Side
+from .models import OPERATIONS, AssetConfig, ExitReason, Side
 from .sessions import SessionSpec, session_exit_bars
 from .utils import csv_items, decimal_places
 
@@ -201,7 +201,7 @@ def _prepare_trade(
 
 
 @dataclass
-class _OpenPosition:
+class _OpenTrade:
     """A filled trade while it is open: remaining quantity, next target, current stop, exits and peak R."""
 
     trade: dict
@@ -364,7 +364,7 @@ def run_backtest(
         raise ValueError("--risk_reward_ratio must be positive")
     if exit_mode not in {"fixed", "trailing", "partial"}:
         raise ValueError(f"Unknown exit mode: {exit_mode}")
-    if operation not in {"all", "long_only", "short_only"}:
+    if operation not in OPERATIONS:
         raise ValueError(f"Unknown operation: {operation}")
     if not math.isfinite(risk_pct) or risk_pct <= 0:
         raise ValueError("--risk must be finite and positive")
@@ -454,7 +454,7 @@ def run_backtest(
             discarded_signals += 1
             continue
 
-        position = _OpenPosition(trade, asset_cfg, with_costs)
+        open_trade = _OpenTrade(trade, asset_cfg, with_costs)
         side = trade["side"]
         trailing = exit_mode == "trailing"
         for i in range(start_i, bar_count):
@@ -463,48 +463,48 @@ def run_backtest(
             bar_time = data.index[i]
 
             # Orders crossed between the previous close and this open fill at the open.
-            if position.stop_gapped(opened):
-                position.close(opened, i, bar_time, ExitReason.STOP, gap_exit=True)
+            if open_trade.stop_gapped(opened):
+                open_trade.close(opened, i, bar_time, ExitReason.STOP, gap_exit=True)
                 break
-            position.update_peak(opened)
-            while position.target_gapped(opened):
-                position.fill_target(opened, i, bar_time, gap_exit=True)
-            if position.closed:
+            open_trade.update_peak(opened)
+            while open_trade.target_gapped(opened):
+                open_trade.fill_target(opened, i, bar_time, gap_exit=True)
+            if open_trade.closed:
                 break
             if trailing:
-                position.trail(opened)
+                open_trade.trail(opened)
 
             for start, end in zip(path, path[1:]):
-                if (end - start) * position.direction > 0:
-                    while position.target_between(start, end):
-                        target_price = position.target["price"]
-                        position.update_peak(target_price)
-                        position.fill_target(target_price, i, bar_time)
-                    if position.closed:
+                if (end - start) * open_trade.direction > 0:
+                    while open_trade.target_between(start, end):
+                        target_price = open_trade.target["price"]
+                        open_trade.update_peak(target_price)
+                        open_trade.fill_target(target_price, i, bar_time)
+                    if open_trade.closed:
                         break
-                    position.update_peak(end)
+                    open_trade.update_peak(end)
                     if trailing:
-                        position.trail(end)
-                elif position.stop_between(start, end):
-                    position.close(position.stop, i, bar_time, ExitReason.STOP)
+                        open_trade.trail(end)
+                elif open_trade.stop_between(start, end):
+                    open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
                     break
 
-            if position.closed:
+            if open_trade.closed:
                 break
             if session_exit is not None and window_last_bar[i]:
-                position.close(path[-1], i, bar_time, ExitReason.SESSION)
+                open_trade.close(path[-1], i, bar_time, ExitReason.SESSION)
                 break
-            bar_gross_equity[i], bar_net_equity[i] = position.marked_equity(path[-1], current_gross, current_net)
+            bar_gross_equity[i], bar_net_equity[i] = open_trade.marked_equity(path[-1], current_gross, current_net)
 
-        if not position.closed:
-            # Incomplete trades are discarded; add partial/open-trade accounting only if research needs it.
+        if not open_trade.closed:
+            # Unresolved trades are left out of the results; add partial/open-trade accounting only if research needs it.
             unresolved_trades += 1
             bar_gross_equity[last_bar_idx:bar_count] = current_gross
             bar_net_equity[last_bar_idx:bar_count] = current_net
             busy_until = bar_count - 1
             continue
 
-        trade = position.finalize()
+        trade = open_trade.finalize()
 
         # Settle the completed trade into the bar-level equity curves.
         current_gross += trade["gross_pnl"]

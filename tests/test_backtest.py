@@ -1036,7 +1036,7 @@ def test_session_exit_closes_open_trade_at_last_in_window_bar_close(test_asset_c
     [
         # Partial: half filled at the 1R target, the remaining half closes at the window's last close.
         ("partial", [(ExitReason.TARGET, 50.0, 101.0), (ExitReason.SESSION, 50.0, 100.8)]),
-        # Trailing: the 1.2R high trails the stop to 100.7; the close above it exits the whole position.
+        # Trailing: the 1.2R high trails the stop to 100.7; the close above it exits the whole trade.
         ("trailing", [(ExitReason.SESSION, 100.0, 100.8)]),
     ],
 )

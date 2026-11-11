@@ -3,7 +3,7 @@ from __future__ import annotations
 from strategy.utils.orb import (
     decimal_places,
     find_breakouts,
-    ORB_PLOT_KEYS,
+    OPENING_RANGE_PLOT_KEYS,
     plot_opening_range,
     REQUIRED_SESSION_MESSAGE,
     session_params,
@@ -37,5 +37,5 @@ def generate_signals(df, asset, timeframe, params):
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
     trade = (params or {}).get("trade") or {}
-    if all(key in trade for key in ORB_PLOT_KEYS):
+    if all(key in trade for key in OPENING_RANGE_PLOT_KEYS):
         plot_opening_range(fig, trade)

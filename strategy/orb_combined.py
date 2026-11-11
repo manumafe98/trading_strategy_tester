@@ -6,7 +6,7 @@ from strategy.utils.fvg import find_qualifying_fvg, track_fvgs_to_bar
 from strategy.utils.orb import (
     decimal_places,
     find_breakouts,
-    ORB_PLOT_KEYS,
+    OPENING_RANGE_PLOT_KEYS,
     plot_opening_range,
     REQUIRED_SESSION_MESSAGE,
     session_params,
@@ -46,12 +46,12 @@ def generate_signals(df, asset, timeframe, params):
     for breakout in find_breakouts(df, session, orb_minutes, start_minute, end_minute):
         fvgs = track_fvgs_to_bar(
             breakout.day_data,
-            breakout.position,
+            breakout.bar_index,
             minute_col="_session_minute",
             fvg_start=start_minute,
             fvg_end=end_minute,
         )
-        fvg = find_qualifying_fvg(fvgs, 1 if breakout.is_long else -1, require_ext=True)
+        fvg = find_qualifying_fvg(fvgs, breakout.direction, require_ext=True)
         if fvg is None or fvg.ext_price is None:
             continue
 
@@ -78,7 +78,7 @@ def generate_signals(df, asset, timeframe, params):
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
     trade = (params or {}).get("trade") or {}
-    required = (*ORB_PLOT_KEYS, "fvg_top", "fvg_bottom", "fvg_ext", "fvg_form_time", "fvg_ext_time")
+    required = (*OPENING_RANGE_PLOT_KEYS, "fvg_top", "fvg_bottom", "fvg_ext", "fvg_form_time", "fvg_ext_time")
     if not all(key in trade for key in required):
         return
 
