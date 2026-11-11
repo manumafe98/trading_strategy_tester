@@ -8,7 +8,7 @@ import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
 from .models import AssetConfig, ExitReason, Side
-from .utils import csv_items
+from .utils import csv_items, decimal_places
 
 
 DEFAULT_RISK = 1.0
@@ -86,12 +86,8 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
     return signals.sort_values("time")
 
 
-def _decimal_places(step: float) -> int:
-    return abs(Decimal(str(step)).as_tuple().exponent)
-
-
 def rounded_qty(qty: float, step: float) -> float:
-    places = _decimal_places(step)
+    places = decimal_places(step)
     return round(math.floor(qty / step) * step, places)
 
 
@@ -158,7 +154,6 @@ def exit_fill(
         "qty": qty,
         "gross_pnl": gross_pnl,
         "net_pnl": net_pnl,
-        "pnl": net_pnl,
         "realized_r": realized_r,
         "target_r": target_r,
         "gap_exit": gap_exit,
@@ -179,7 +174,6 @@ def finalize_trade(trade: dict, exits: list[dict]) -> dict:
             "exits": exits,
             "gross_pnl": gross_pnl,
             "net_pnl": net_pnl,
-            "pnl": net_pnl,
             "realized_r": realized_r,
             "net_realized_r": net_realized_r,
             "outcome": classify_outcome(realized_r),

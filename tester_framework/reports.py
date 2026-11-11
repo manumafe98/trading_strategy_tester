@@ -149,12 +149,6 @@ def metric_class(column: str, value: MetricValue) -> str:
         return "good" if float(value) > 0 else "bad" if float(value) < 0 else "neutral"
     if column == "Max DD":
         return "warn"
-    if column == "Expectancy R":
-        return "good" if float(value) > 0 else "bad" if float(value) < 0 else "neutral"
-    if column == "W":
-        return "good"
-    if column == "L":
-        return "bad"
     if column == "Return / DD":
         return "neutral"
     return "plain"
@@ -419,12 +413,6 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(value))}</span></div></td>'
     if col == "TF":
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
-    if col == "Long":
-        return f'<td class="c"><span class="dir long">+ {html_escape(str(value))}</span></td>'
-    if col == "Short":
-        return f'<td class="c"><span class="dir short">- {html_escape(str(value))}</span></td>'
-    if col == "Trades":
-        return f'<td class="c n">{html_escape(str(value))}</td>'
     sort_attr = ""
     if col in FINANCIAL_COLUMNS:
         sort_value = value[-1] if isinstance(value, (tuple, list)) else value

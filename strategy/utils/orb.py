@@ -1,8 +1,7 @@
 from __future__ import annotations
 
-from decimal import Decimal
-
 from tester_framework.sessions import SessionSpec, add_session_columns, session_start_utc
+from tester_framework.utils import decimal_places
 
 
 REQUIRED_SESSION_MESSAGE = "ORB strategies require --sessions; none is not supported."
@@ -29,10 +28,6 @@ def session_params(params: dict | None, timeframe: str, strategy_name: str) -> t
     if end_minute - start_minute <= orb_minutes:
         raise ValueError(f"{strategy_name} session must leave time after the {timeframe} opening range")
     return session, orb_minutes, start_minute, end_minute
-
-
-def decimal_places(step: float) -> int:
-    return max(0, -Decimal(str(step)).as_tuple().exponent)
 
 
 __all__ = [

@@ -1,5 +1,7 @@
 import pandas as pd
 
+CHART_EMA_WARMUP_BARS = 1000
+
 
 def generate_signals(df, asset, timeframe, params):
     ema = df["close"].ewm(span=50, adjust=False).mean()
@@ -23,7 +25,11 @@ def generate_signals(df, asset, timeframe, params):
 
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
-    ema = data["close"].ewm(span=50, adjust=False).mean().reindex(view.index)
+    # The seed's weight decays as (49/51)**n; after 1000 bars it is ~1e-18, so the
+    # windowed EMA matches the full-data EMA to float precision without scanning all bars.
+    start = max(0, data.index.searchsorted(view.index[0]) - CHART_EMA_WARMUP_BARS)
+    end = data.index.searchsorted(view.index[-1], side="right")
+    ema = data["close"].iloc[start:end].ewm(span=50, adjust=False).mean().reindex(view.index)
     fig.add_trace(
         {
             "type": "scatter",

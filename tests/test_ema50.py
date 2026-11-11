@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
+import plotly.graph_objects as go
 import pytest
 
-from strategy.ema50 import generate_signals
+from strategy.ema50 import generate_signals, plot_indicators
 
 
 def make_cross(jump: float) -> pd.DataFrame:
@@ -41,3 +43,18 @@ def test_ema50_does_not_mutate_input():
     before = df.copy()
     generate_signals(df, "MGC", "1h", {"tick_size": 0.1})
     pd.testing.assert_frame_equal(df, before)
+
+
+@pytest.mark.parametrize(("start", "end"), [(10, 50), (2500, 2600)])
+def test_ema50_plotted_ema_in_view_matches_full_data_ema(start, end):
+    rng = np.random.default_rng(7)
+    closes = 100.0 + rng.normal(0.0, 1.0, 3000).cumsum()
+    data = pd.DataFrame({"close": closes}, index=pd.date_range("2025-01-01", periods=len(closes), freq="h"))
+    view = data.iloc[start:end]
+    fig = go.Figure()
+
+    plot_indicators(fig, data, view, "MGC", "1h", {"tick_size": 0.1})
+
+    expected = data["close"].ewm(span=50, adjust=False).mean().iloc[start:end]
+    assert list(fig.data[0].x) == list(view.index)
+    np.testing.assert_allclose(fig.data[0].y, expected.to_numpy(), rtol=1e-12, atol=0)

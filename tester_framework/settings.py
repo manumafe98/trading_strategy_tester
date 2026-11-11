@@ -27,10 +27,6 @@ TIMEFRAMES = {
 }
 
 
-def get_project_root() -> Path:
-    return ROOT
-
-
 def load_assets() -> dict[str, AssetConfig]:
     path = CONFIG_DIR / "assets.json"
     if not path.exists():
@@ -84,6 +80,5 @@ __all__ = [
     "STRATEGY_DIR",
     "TIMEFRAMES",
     "TRADES_DIR",
-    "get_project_root",
     "load_assets",
 ]
