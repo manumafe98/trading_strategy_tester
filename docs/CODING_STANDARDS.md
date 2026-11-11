@@ -9,3 +9,4 @@ Judgement rules applied when a change is reviewed.
 - Keep trading logic deterministic and free of lookahead: use confirmed/current-or-past bars and configured tick alignment.
 - Document intentional differences from reference strategies and protect them with small synthetic regression tests.
 - Keep unit tests offline and strategy samples small. Run targeted tests first and the full suite for cross-cutting changes.
+- Prove a test can fail with `python tests/mutate.py <file> --tests <pytest args...> --mutation <search> <replace>`.
