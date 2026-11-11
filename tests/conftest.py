@@ -6,6 +6,9 @@ import pytest
 from tester_framework.models import AssetConfig
 
 
+pytest_plugins = ["pytester"]
+
+
 @pytest.fixture
 def test_asset_cfg() -> AssetConfig:
     return AssetConfig(

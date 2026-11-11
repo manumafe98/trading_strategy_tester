@@ -100,7 +100,7 @@ def _run_variant(
 
 
 def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
-    values = index_values = data = None
+    values = index_values = data = signals = None
     session = session_label(task["session"])
     batch_parts = [task["strategy"], task["asset"], task["timeframe"]]
     if session:
@@ -138,11 +138,10 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
                 raise RuntimeError(f"{label}: {detail}") from exc
         return rows
     finally:
-        data = None
-        for array in (values, index_values):
-            mmap = getattr(array, "_mmap", None)
-            if mmap is not None:
-                mmap.close()
+        # DataFrames built on the cached arrays may outlive this call (pytest
+        # renders them from traceback locals), so the memory maps stay open
+        # until their last reference is collected.
+        values = index_values = data = signals = None
 
 
 __all__ = ["cache_data", "run_variants"]
