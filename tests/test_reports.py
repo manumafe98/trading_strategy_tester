@@ -151,6 +151,34 @@ def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, 
     assert "<td>100 @ -3.00R stop (gap)</td>" in trailing_page
 
 
+def test_trade_chart_marks_gap_exit(monkeypatch, tmp_path, test_asset_cfg):
+    monkeypatch.setattr(reports, "TRADES_DIR", tmp_path / "trades")
+    idx = pd.date_range("2025-01-06", periods=3, freq="h")
+    data = pd.DataFrame(
+        {"open": [100.0, 100.0, 97.0], "high": [100.0, 100.5, 98.0], "low": [100.0, 99.5, 96.0], "close": [100.0, 100.0, 97.0], "volume": [0, 0, 0]},
+        index=idx,
+    )
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(
+            generate_signals=lambda *_args, **_kwargs: pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99.0}])
+        ),
+    )
+    runner.run_variants(
+        {
+            "strategy": "ema50", "data_cache": cache_data(data, str(tmp_path), 0),
+            "variants": ((3, "fixed"),), "asset": "TEST", "asset_cfg": test_asset_cfg,
+            "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
+            "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 1,
+            "session": None, "days": (), "months": (), "session_exit": False,
+        }
+    )
+
+    (chart,) = (tmp_path / "trades").glob("*.html")
+    assert '"name":"stop 100 (gap)"' in chart.read_text(encoding="utf-8")
+
+
 def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_path):
     monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
     analytics = {

@@ -14,7 +14,9 @@ def load_strategy(name: str) -> types.ModuleType:
     strategy_dir = STRATEGY_DIR.resolve()
     if Path(name).parts != (name,):
         raise ValueError(f"Strategy name must be a plain file name without path separators: {name}")
-    path = (STRATEGY_DIR / f"{Path(name).stem}.py").resolve()
+    if name.endswith(".py"):
+        raise ValueError(f"Strategy name must be given without the .py suffix: {name}")
+    path = (STRATEGY_DIR / f"{name}.py").resolve()
     if path.parent != strategy_dir:
         raise ValueError(f"Strategy path must stay inside {strategy_dir}")
     if not path.exists():

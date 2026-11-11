@@ -19,9 +19,8 @@ def test_absolute_name_rejected():
         load_strategy(str(Path(strategy_loader.STRATEGY_DIR, "ema50").resolve()))
 
 
-@pytest.mark.xfail(strict=True, reason="loader strips the suffix, so 'ema50.py' loads strategy/ema50.py (#12)")
 def test_name_with_py_suffix_rejected():
-    with pytest.raises(ValueError):
+    with pytest.raises(ValueError, match="without the .py suffix"):
         load_strategy("ema50.py")
 
 

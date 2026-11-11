@@ -93,7 +93,8 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     color = "green" if trade["side"] == Side.LONG else "red"
     fig.add_trace(go.Scatter(x=[trade["entry_time"]], y=[trade["entry"]], mode="markers", name="entry", marker={"color": color, "size": 10}))
     for fill in trade["exits"]:
-        name = f'{fill["exit_reason"]} {fill["qty"]:g}'
+        gap = " (gap)" if fill["gap_exit"] else ""
+        name = f'{fill["exit_reason"]} {fill["qty"]:g}{gap}'
         fig.add_trace(go.Scatter(x=[fill["exit_time"]], y=[fill["exit"]], mode="markers", name=name, marker={"color": "black", "size": 10}))
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     for target in trade["targets"]:
