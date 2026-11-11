@@ -74,6 +74,8 @@ python -m tester_framework --strategies ema50 --asset MGC,MNQ --risk MGC=1,MNQ=0
 
 Sizing is fixed-fractional: the risk percentage is applied to current net equity, so wins and losses compound. It measures entry-to-stop price risk; costs are reported separately and can make the net loss exceed the configured percentage. Only one position can be open per asset/timeframe, so overlapping signals are discarded.
 
+Every asset in `config/assets.json` must define `min_risk_ticks` (4 for MNQ, MES and MGC; 1 for EURUSD, GBPUSD and BTCUSD); a missing value fails at config load. For every strategy, a signal whose entry-to-stop distance, after the stop is rounded to the tick, is below `min_risk_ticks` × tick size is discarded and counted in `Discarded`. A distance exactly at the minimum is traded. This stops one-tick stops from producing huge positions and absurd R.
+
 `--sessions` filters entries by market-local session windows for any strategy. Use presets like `asia`, `london`, `ny`, expand `all`, or pass subranges such as `ny=09:30-12:00` and `london=08:00-10:00`. Omit it, or use `--sessions none`, to keep the unfiltered framework behavior. ORB strategies override this and require a real session value.
 
 `--days` and `--months` filter actual filled entries by the normalized data timestamp. Values are case-insensitive full names or three-letter abbreviations, for example `--days monday,wed --months january,sep`. Omit either flag to allow every weekday or month; when both are present, an entry must match both.
@@ -102,7 +104,7 @@ Local futures CSVs containing multiple expiries are converted to an unadjusted c
 
 Undefined Sharpe and Return/DD values display as `N/A`. With `--with_costs`, outcome and financial columns show Gross / Net pairs.
 
-Only fully resolved trades are counted. Setups still open at the end of the downloaded data—including any completed partial fills—are fully discarded and reported in `Unresolved`. Signals skipped due to invalid stops, bad entries, overlap, or minimum-quantity filters are reported in `Discarded`.
+Only fully resolved trades are counted. Setups still open at the end of the downloaded data—including any completed partial fills—are fully discarded and reported in `Unresolved`. Signals skipped due to invalid stops, bad entries, minimum risk, overlap, or minimum-quantity filters are reported in `Discarded`.
 
 ## Strategy API
 

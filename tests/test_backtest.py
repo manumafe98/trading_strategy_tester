@@ -839,3 +839,60 @@ def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
     assert (trades[0]["exit_i"], trades[0]["exit_reason"]) == (2, ExitReason.TARGET)
     assert metrics["Max DD"] == 0.5
     assert metrics["Return"] == 1
+
+
+def mnq_like_cfg(test_asset_cfg):
+    return replace(test_asset_cfg, point_value=2.0, tick_size=0.25, min_risk_ticks=4, bars_per_year={"1m": 347760})
+
+
+def min_risk_run(data, signals, cfg):
+    return run_backtest(
+        data, signals, strategy="test", asset="MNQ", timeframe="1m", risk_reward_ratio=2, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
+    )
+
+
+def min_risk_data():
+    idx = pd.date_range("2025-01-01", periods=2, freq="min")
+    return pd.DataFrame(
+        {"open": [100.0, 100.0], "high": [100.0, 102.5], "low": [100.0, 100.0], "close": [100.0, 102.0], "volume": [1, 1]},
+        index=idx,
+    )
+
+
+def test_one_tick_stop_on_flat_breakout_bar_through_halt_gap_is_discarded(test_asset_cfg):
+    # 2020-03-16 MNQ: flat breakout bar, 1-tick stop, halted bars missing, reopen gapping through the 2R target.
+    idx = pd.DatetimeIndex(["2020-03-16 13:30", "2020-03-16 13:45", "2020-03-16 13:46"])
+    data = pd.DataFrame(
+        {
+            "open": [7381.25, 7299.0, 7300.0],
+            "high": [7381.25, 7310.0, 7305.0],
+            "low": [7381.25, 7295.0, 7298.0],
+            "close": [7381.25, 7300.0, 7301.0],
+            "volume": [1, 1, 1],
+        },
+        index=idx,
+    )
+    signals = pd.DataFrame([{"time": idx[0], "side": "short", "entry": 7381.25, "stop": 7381.50}])
+    metrics, trades = min_risk_run(data, signals, mnq_like_cfg(test_asset_cfg))
+    assert trades == []
+    assert metrics["Discarded"] == 1
+
+
+def test_signal_exactly_at_min_risk_is_traded(test_asset_cfg):
+    data = min_risk_data()
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.0}])
+    metrics, trades = min_risk_run(data, signals, mnq_like_cfg(test_asset_cfg))
+    assert metrics["Discarded"] == 0
+    assert (trades[0]["initial_risk"], trades[0]["qty"], trades[0]["exit_reason"]) == (1.0, 50.0, ExitReason.TARGET)
+
+
+def test_min_risk_uses_tick_rounded_stop(test_asset_cfg):
+    # A long stop floors to the tick: 99.1 -> 99.0 is 4 ticks (traded), 99.3 -> 99.25 is 3 ticks (discarded).
+    data = min_risk_data()
+    cfg = mnq_like_cfg(test_asset_cfg)
+    at_min, _ = min_risk_run(data, pd.DataFrame([{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.1}]), cfg)
+    below, trades = min_risk_run(data, pd.DataFrame([{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.3}]), cfg)
+    assert at_min["Discarded"] == 0
+    assert below["Discarded"] == 1
+    assert trades == []

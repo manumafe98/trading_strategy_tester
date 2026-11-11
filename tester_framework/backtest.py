@@ -219,6 +219,8 @@ def _prepare_trade(
     if (side == Side.LONG and stop >= raw_entry) or (side == Side.SHORT and stop <= raw_entry):
         return None
     risk_points = abs(raw_entry - stop)
+    if round(risk_points / asset_cfg.tick_size, 6) < asset_cfg.min_risk_ticks:
+        return None
     qty = rounded_qty((current_net * risk_pct / 100) / (risk_points * asset_cfg.point_value), asset_cfg.qty_step)
     if qty < asset_cfg.min_qty:
         return None

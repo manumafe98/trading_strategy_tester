@@ -61,6 +61,7 @@ def load_assets() -> dict[str, AssetConfig]:
                 tick_size=float(raw["tick_size"]),
                 qty_step=float(raw["qty_step"]),
                 min_qty=float(raw["min_qty"]),
+                min_risk_ticks=raw["min_risk_ticks"],
                 spread_points=float(raw["spread_points"]),
                 slippage_points=float(raw["slippage_points"]),
                 commission_per_side=float(raw["commission_per_side"]),

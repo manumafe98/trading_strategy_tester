@@ -86,7 +86,7 @@ def test_daily_resample_uses_session_boundary_across_dst():
             encoding="utf-8",
         )
         cfg = AssetConfig(
-            ticker="TEST", point_value=1, tick_size=0.00001, qty_step=1, min_qty=1,
+            ticker="TEST", point_value=1, tick_size=0.00001, qty_step=1, min_qty=1, min_risk_ticks=1,
             spread_points=0, slippage_points=0, commission_per_side=0,
             session_timezone="America/New_York", session_start="17:00", bars_per_year={"1d": 252},
         )
