@@ -164,3 +164,13 @@ All three use 1-minute execution data (`EXECUTION_TIMEFRAME = "1m"`). For these 
 ```bash
 python -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
 ```
+
+### Differences From Pine
+
+The Pine references in `pine_scripts_examples/` differ from these strategies on purpose. Each difference is pinned by a test in `tests/test_pine_differences.py`.
+
+- **Day boundary.** Pine calls `strategy.close_all` on the first bar of a new New York calendar date and fills at that bar's close, so on 24-hour futures data an open trade is held through the evening session until the 00:00 New York bar. We never hold past the session window. The closest equivalent is `--sessions ny_bank=09:30-17:00 --session_exit`, which exits at the close of the last bar starting before 17:00 New York, not at the date change.
+- **Sizing.** Pine trades at least one contract, `max(1, floor(risk / R))`, and caps the size at what equity can margin at 5% of notional. We discard a trade whose risk-based quantity is below the asset's `min_qty` and apply no margin cap.
+- **FVG bars.** Pine checks `high[2] < low` on every bar in its FVG window, so on the window's first two bars an FVG can use bars from before the window. We only use bars inside the session window, so the first two window bars cannot complete an FVG.
+- **FVG cap.** Pine keeps at most `Max Tracked FVGs` (default 100) and drops the oldest. We keep every active FVG.
+- **FVG window.** Pine detects FVGs in a separate `FVG Session` input that defaults to 09:30-12:00 New York, and its trade window is hardcoded to 09:30-11:59. Both of ours follow the `--sessions` window, so a wider window detects and trades FVGs outside 09:30-12:00.
