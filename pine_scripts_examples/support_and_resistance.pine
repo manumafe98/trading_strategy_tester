@@ -5,7 +5,9 @@
 indicator('Support Resistance Channels', 'SRchannel', overlay = true, max_bars_back = 501)
 prd = input.int(defval = 10, title = 'Pivot Period', minval = 4, maxval = 30, group = 'Settings 🔨', tooltip = 'Used while calculating Pivot Points, checks left&right bars')
 ppsrc = input.string(defval = 'High/Low', title = 'Source', options = ['High/Low', 'Close/Open'], group = 'Settings 🔨', tooltip = 'Source for Pivot Points')
-ChannelW = input.int(defval = 5, title = 'Maximum Channel Width % (non-Gold)', minval = 1, maxval = 8, group = 'Settings 🔨', tooltip = 'Calculated using Highest/Lowest levels in 300 bars. Gold max width is 0.4% of the zone price. Every zone must be at least 0.1% of the zone price wide.')
+minZoneWidth = input.float(defval = 0.1, title = 'Minimum Zone Width', minval = 0, step = 0.05, inline = 'zone_width', group = 'Settings 🔨', tooltip = "Minimum accepted width. In %, measured from the completed candidate zone's low. In Pips, 1 pip = 0.0001 on Forex (0.01 for JPY-quoted pairs) and 1 tick otherwise. Set to 0 to disable this filter; single-pivot or zero-width zones may pass.")
+maxZoneWidth = input.float(defval = 0.4, title = 'Maximum Zone Width', minval = 0, step = 0.05, inline = 'zone_width', group = 'Settings 🔨', tooltip = 'Maximum width during pivot clustering. In %, measured from the lower of the current zone low and candidate pivot. In Pips, 1 pip = 0.0001 on Forex (0.01 for JPY-quoted pairs) and 1 tick otherwise.')
+zoneWidthUnit = input.string(defval = '%', title = 'Unit', options = ['%', 'Pips'], inline = 'zone_width', group = 'Settings 🔨', tooltip = 'Applies to both width values. Switching units leaves the numbers unchanged; for example, 0.1 / 0.4 becomes 0.1 / 0.4 pips.')
 minstrength = input.int(defval = 1, title = 'Minimum Strength', minval = 1, group = 'Settings 🔨', tooltip = 'Channel must contain at least 2 Pivot Points')
 maxnumsr = input.int(defval = 6, title = 'Maximum Number of S/R', minval = 1, maxval = 10, group = 'Settings 🔨', tooltip = 'Maximum number of Support/Resistance Channels to Show') - 1
 loopback = input.int(defval = 290, title = 'Loopback Period', minval = 100, maxval = 400, group = 'Settings 🔨', tooltip = 'While calculating S/R levels it checks Pivots in Loopback Period')
@@ -37,15 +39,14 @@ float pl = ta.pivotlow(src2, prd, prd)
 plotshape(bool(ph) and showpp, text = 'H', style = shape.labeldown, color = na, textcolor = color.new(color.red, 0), location = location.abovebar, offset = -prd)
 plotshape(bool(pl) and showpp, text = 'L', style = shape.labelup, color = na, textcolor = color.new(color.lime, 0), location = location.belowbar, offset = -prd)
 
-//calculate maximum S/R channel width
-prdhighest = ta.highest(300)
-prdlowest = ta.lowest(300)
-cwidth = (prdhighest - prdlowest) * ChannelW / 100
-// Gold maximum zone width is a percentage of the zone's lower price, not the 300-bar range.
-isGold = syminfo.ticker == 'XAUUSD' or syminfo.basecurrency == 'XAU' or syminfo.root == 'GC' or syminfo.root == 'MGC'
-goldMaxWidthPct = 0.4
-// Every zone, on any symbol, must be at least this wide, as a percentage of the zone's lower price.
-minZoneWidthPct = 0.1
+// Zone width rules match choch_sr_mtf_strategy.pine.
+if minZoneWidth < 0 or maxZoneWidth < 0
+    runtime.error('Minimum and maximum S/R zone widths cannot be negative.')
+if maxZoneWidth == 0
+    runtime.error('Maximum S/R zone width must be greater than zero.')
+if minZoneWidth > maxZoneWidth
+    runtime.error('Minimum S/R zone width cannot be greater than the maximum.')
+float pipSize = syminfo.type == 'forex' ? (syminfo.currency == 'JPY' ? 0.01 : 0.0001) : syminfo.mintick
 
 // get/keep Pivot levels
 var pivotvals = array.new_float(0)
@@ -68,7 +69,8 @@ get_sr_vals(ind) =>
     for y = 0 to array.size(pivotvals) - 1 by 1
         float cpp = array.get(pivotvals, y)
         float wdth = cpp <= hi ? hi - cpp : cpp - lo
-        if wdth <= (isGold ? math.min(lo, cpp) * goldMaxWidthPct / 100 : cwidth) // fits the max channel width?
+        float allowedWidth = zoneWidthUnit == '%' ? math.min(lo, cpp) * maxZoneWidth / 100 : maxZoneWidth * pipSize
+        if wdth <= allowedWidth // fits the max channel width?
             if cpp <= hi
                 lo := math.min(lo, cpp)
                 lo
@@ -109,8 +111,9 @@ if bool(ph) or bool(pl)
             if high[y] <= h and high[y] >= l or low[y] <= h and low[y] >= l
                 s := s + 1
                 s
-        // A single pivot or a narrow cluster is not a valid zone on any symbol.
-        if h - l < l * minZoneWidthPct / 100
+        // Reject zones narrower than the minimum width; 0 disables the filter.
+        float minAllowedWidth = zoneWidthUnit == '%' ? l * minZoneWidth / 100 : minZoneWidth * pipSize
+        if minZoneWidth > 0 and h - l < minAllowedWidth
             array.set(supres, x * 3, -1)
         else
             array.set(supres, x * 3, array.get(supres, x * 3) + s)
