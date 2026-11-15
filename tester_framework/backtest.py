@@ -423,6 +423,7 @@ def run_backtest(
         contracts = data["contract"].to_numpy()
         roll_last_bar[:-1] = contracts[1:] != contracts[:-1]
     roll_last_times = data.index[roll_last_bar]
+    roll_times = data.index[1:][roll_last_bar[:-1]]
     day_filter = set(days)
     month_filter = set(months)
     try:
@@ -458,6 +459,11 @@ def run_backtest(
         # No entries in the 60 minutes before the last bar ahead of a roll closes.
         next_roll = roll_last_times.searchsorted(entry_time)
         if next_roll < len(roll_last_times) and roll_last_times[next_roll] - entry_time < ROLL_ENTRY_BLOCK:
+            discarded_signals += 1
+            continue
+        # A signal from before a roll carries an old-contract stop, so it never fills on or after the roll bar.
+        roll_after_signal = roll_times.searchsorted(signal["time"], side="right")
+        if roll_after_signal < len(roll_times) and roll_times[roll_after_signal] <= entry_time:
             discarded_signals += 1
             continue
 

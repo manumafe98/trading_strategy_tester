@@ -93,7 +93,7 @@ An exit filled at a bar's open because the price gapped through the stop or a ta
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, a fill in the 60 minutes before a roll, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, a fill in the 60 minutes before a roll or across one, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
 
 **Unresolved trade**:

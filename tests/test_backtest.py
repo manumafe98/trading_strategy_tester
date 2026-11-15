@@ -1275,3 +1275,24 @@ def test_signal_filling_in_last_60_minutes_before_roll_is_discarded(test_asset_c
 
     assert metrics["Discarded"] == discarded
     assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)
+
+
+
+@pytest.mark.parametrize(("signal_time", "stop", "discarded"), [("12:00", 99.0, 1), ("22:00", 149.0, 0)])
+def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, signal_time, stop, discarded):
+    # The last FUTZ4 bar starts 6 hours after the previous one, so the 60-minute block alone does not reach its signal.
+    data = _contract_bars(
+        {
+            "2025-01-02 06:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
+            "2025-01-02 12:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
+            "2025-01-02 22:00": (150.0, 150.0, 150.0, 150.0, "FUTH5"),
+            "2025-01-02 23:00": (150.0, 151.0, 150.0, 151.0, "FUTH5"),
+        }
+    )
+    signal = {"time": pd.Timestamp(f"2025-01-02 {signal_time}"), "side": "long", "stop": stop}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    # A signal on the last FUTZ4 bar carries a FUTZ4 stop; one on the roll bar fills on FUTH5 and trades.
+    assert (metrics["Discarded"], metrics["Unresolved"]) == (discarded, 0)
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.TARGET] * (1 - discarded)
