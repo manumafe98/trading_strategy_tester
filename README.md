@@ -86,6 +86,10 @@ The `ny_bank` preset is America/New_York 08:00-17:00, for a true New York bank c
 
 `--session_exit` (off by default) closes a trade still open at the end of its variant's session window at the close of the last execution bar that starts inside the window, with exit reason `session`. It applies to every exit mode and closes whatever position remains after partial targets. The window end is exclusive, matching the session filter, and DST follows the window's timezone. If bars are missing at the window end, the exit happens on the last in-window bar present. Costs apply as for any exit. With the flag on, a signal whose fill would land outside the window, or a close entry on the window's last bar, is discarded, and a trade still open when the data ends inside a window stays unresolved. The flag requires `--sessions` with a session window and is rejected without it or with `--sessions none`. For example: `--sessions ny_bank=09:30-17:00 --session_exit`.
 
+`--target_fill` sets the target fill. The default `tick_through` fills a target only when price trades at least one tick beyond it, and a bar that opens beyond the target fills at the target price, never better. `touch` fills a target when price reaches it and fills a gap at the open, as TradingView does. Both apply to every target, including partial targets (see `docs/adr/0001-tick-through-targets-by-default.md`).
+
+`--intrabar` sets the intrabar rule. The default `path` follows the TradingView path described under Execution Model. `stop_first` exits at the stop on any bar that can reach both the stop and the next target, whatever its open; a bar that can reach only one of them still follows the path. The result report shows either flag when it is not the default. `--target_fill touch --intrabar path` reproduces TradingView's fills.
+
 `--days` and `--months` filter actual filled entries by the normalized data timestamp. Values are case-insensitive full names or three-letter abbreviations, for example `--days monday,wed --months january,sep`. Omit either flag to allow every weekday or month; when both are present, an entry must match both.
 
 `--time_period` accepts rolling periods such as `60d`, `6mo`, and `1y`, plus `max`. A single calendar year such as `2021` selects that full year, and `2020-2021` selects both years inclusively. Calendar years use the same boundaries for yfinance and local CSV data; Yahoo's intraday history limits still apply.
@@ -97,7 +101,8 @@ Historical OHLC bars do not reveal their intrabar price order. The runner uses t
 - If the open is closer to the high, the path is open → high → low → close.
 - If the open is closer to the low, the path is open → low → high → close.
 - Equal-distance bars take the stop-first path.
-- Orders crossed by an overnight/session gap fill at the current bar's open.
+- Stops crossed by an overnight/session gap fill at the current bar's open. Targets do too with `--target_fill touch`; by default a target gap fills at the target price.
+- With `--intrabar stop_first`, a bar that can reach both the stop and the next target exits at the stop instead of following the path.
 
 Stops, targets, and trailing stops are rounded conservatively to the asset's tick size. Trailing mode activates after 1R of favorable movement and stays 0.5R behind the favorable extreme. Partial targets and trailing changes are applied in path order.
 
@@ -186,6 +191,7 @@ All three use 1-minute execution data (`EXECUTION_TIMEFRAME = "1m"`). For these 
 The Pine references in `pine_scripts_examples/` differ from these strategies on purpose. Each difference is pinned by a test in `tests/test_pine_differences.py`.
 
 - **Day boundary.** Pine calls `strategy.close_all` on the first bar of a new New York calendar date and fills at that bar's close, so on 24-hour futures data an open trade is held through the evening session until the 00:00 New York bar. By default we hold a trade until its stop, its target, or the end of the data; only with `--session_exit` do we never hold past the session window. The closest equivalent is `--sessions ny_bank=09:30-17:00 --session_exit`, which exits at the close of the last bar starting before 17:00 New York, not at the date change.
+- **Target fills.** TradingView fills a target on a touch and fills a gap beyond it at the better open. By default we need a trade one tick beyond the target and fill a gap at the target price (`--target_fill tick_through`); `--target_fill touch` restores TradingView's rule, and the other tests in `tests/test_pine_differences.py` pin it.
 - **Sizing.** Pine trades at least one contract, `max(1, floor(risk / R))`, and caps the size at what equity can margin at 5% of notional. We discard a trade whose risk-based quantity is below the asset's `min_qty` and apply no margin cap.
 - **FVG bars.** Pine checks `high[2] < low` on every bar in its FVG window, so on the window's first two bars an FVG can use bars from before the window. We only use bars inside the session window, so the first two window bars cannot complete an FVG.
 - **FVG cap.** Pine keeps at most `Max Tracked FVGs` (default 100) and drops the oldest. We keep every active FVG.

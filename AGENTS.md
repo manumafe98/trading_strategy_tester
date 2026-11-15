@@ -51,7 +51,7 @@ PY="$(git rev-parse --path-format=absolute --git-common-dir)/../.venv/Scripts/py
 "$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
 ```
 
-The smoke run takes about 20 seconds and prints 139 trades and Return -5.75% / -15.05% (gross / net). A different result signals a behaviour change. It reads `data/` from the checkout it runs in, and local `data/` only exists on the machine that holds it; agents elsewhere skip the smoke run, and a linked worktree should point at the main checkout's `data/` or run the smoke command there.
+The smoke run takes about 20 seconds and prints 139 trades and Return -5.75% / -15.05% (gross / net); adding `--target_fill touch --intrabar path` prints the same. A different result signals a behaviour change. It reads `data/` from the checkout it runs in, and local `data/` only exists on the machine that holds it; agents elsewhere skip the smoke run, and a linked worktree should point at the main checkout's `data/` or run the smoke command there.
 
 ## Agent skills
 

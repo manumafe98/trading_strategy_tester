@@ -589,6 +589,22 @@ def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
     assert configs[0].session_exit is True
 
 
+def test_fill_rule_flags_default_to_tick_through_and_path_and_map_to_config(monkeypatch):
+    args = cli.parser().parse_args([])
+    assert (args.target_fill, args.intrabar) == ("tick_through", "path")
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--target_fill", "near"])
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--intrabar", "low_first"])
+    configs = []
+    argv = ["tester_framework", "--strategies", "ema50", "--target_fill", "touch", "--intrabar", "stop_first"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert (configs[0].target_fill, configs[0].intrabar) == ("touch", "stop_first")
+
+
 def test_split_flags_default_off_and_map_to_config(monkeypatch):
     args = cli.parser().parse_args([])
     assert (args.oos_start, args.oos_fraction) == (None, None)

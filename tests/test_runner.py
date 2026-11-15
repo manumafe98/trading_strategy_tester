@@ -37,6 +37,8 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "months": (),
         "session_exit": False,
         "oos_cutoff": None,
+        "target_fill": "tick_through",
+        "intrabar": "path",
     }
     task.update(overrides)
     return task
@@ -143,10 +145,31 @@ def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
     assert reports._trade_table([stored]).count('<tr class="trade-row">') == 1
 
 
+def test_run_variants_passes_the_fill_rules_to_the_backtest(monkeypatch, tmp_path, test_asset_cfg):
+    # A long enters at 100 with stop 99; the 1R target is 101.
+    touch_bar = (100.0, 101.0, 100.0, 100.5)  # touches the target
+    both_bar = (100.8, 101.5, 98.5, 100.0)  # the path reaches the target first, then the stop
+    data = pd.DataFrame(
+        [(100.0, 100.0, 100.0, 100.0, 0), (100.0, 100.0, 100.0, 100.0, 0), (*touch_bar, 0), (*both_bar, 0)],
+        index=pd.date_range("2025-01-02 08:00", periods=4, freq="1h"),
+        columns=["open", "high", "low", "close", "volume"],
+    )
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
+    task = _task(data, tmp_path, test_asset_cfg)
+
+    def exit_of(**rules):
+        (trade,) = decode_analytics(runner.run_variants({**task, **rules})[0]["_analytics"])["trades"]
+        return trade["exit_reason"], trade["exit_time"]
+
+    assert exit_of(target_fill="touch") == ("target", data.index[2])
+    assert exit_of() == ("target", data.index[3])
+    assert exit_of(intrabar="stop_first") == ("stop", data.index[3])
+
+
 def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_end(monkeypatch, tmp_path, test_asset_cfg):
     london_open = parse_sessions("london=08:00-10:00")[0]
-    # Entered at the 09:00 open; the 10:00 bar would reach the target but starts at the window end.
-    data = _target_bars([100.0, 100.0, 102.0])
+    # Entered at the 09:00 open; the 10:00 bar would trade through the 2R target but starts at the window end.
+    data = _target_bars([100.0, 100.0, 102.1])
     monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
     task = _task(data, tmp_path, test_asset_cfg, variants=((2, "trailing"),), session=london_open)
 
@@ -293,6 +316,8 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "months": (),
                 "session_exit": False,
                 "oos_cutoff": None,
+                "target_fill": "tick_through",
+                "intrabar": "path",
             }
 
             rows = runner.run_variants(task)

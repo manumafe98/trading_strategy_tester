@@ -17,7 +17,7 @@ NY_MORNING = parse_sessions("ny=09:30-12:00")[0]
 def _run(data, signals, cfg, **overrides):
     kwargs = dict(
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="fixed", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
+        risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg, target_fill="touch", intrabar="path",
     )
     kwargs.update(overrides)
     return run_backtest(data, pd.DataFrame(signals), **kwargs)
@@ -61,6 +61,21 @@ def test_session_exit_closes_at_in_window_close_not_at_ny_day_change(test_asset_
     assert (trade["exit_reason"], trade["exit_time"], trade["exit"]) == (
         ExitReason.SESSION, pd.Timestamp("2025-01-02 21:00"), 100.5,
     )
+
+
+def test_default_target_fill_needs_a_tick_through_and_never_fills_a_gap_better(test_asset_cfg):
+    # TradingView fills a limit target on a touch, and at the open when price gaps beyond it.
+    # By default we need a trade one tick beyond the target and fill a gap at the target.
+    touch_bar = (100.0, 102.0, 99.5, 101.5)  # high equals the 102 2R target
+    gap_bar = (104.0, 104.5, 103.5, 104.0)
+    data = _timed_bars({"2025-01-02 15:00": FLAT, "2025-01-02 16:00": touch_bar, "2025-01-02 17:00": gap_bar})
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, pine = _run(data, signals, test_asset_cfg)
+    _, ours = _run(data, signals, test_asset_cfg, target_fill="tick_through")
+
+    assert (pine[0]["exit_time"], pine[0]["exit"]) == (data.index[1], 102.0)
+    assert (ours[0]["exit_time"], ours[0]["exit"], ours[0]["exits"][0]["gap_exit"]) == (data.index[2], 102.0, True)
 
 
 def test_sizing_discards_below_min_qty_and_has_no_margin_cap(test_asset_cfg):

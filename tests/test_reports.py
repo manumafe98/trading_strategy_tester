@@ -114,6 +114,15 @@ def test_results_index_shows_quick_view_headers_sort_buttons_and_run_notes(monke
     )
     session_exit_html = reports.write_results_html(table, session_exit_config).read_text(encoding="utf-8")
     assert "session exit on" in session_exit_html
+    assert "target fill" not in capped_html and "intrabar" not in capped_html
+
+    fill_rules_config = RunConfig(
+        ("ema50",), None, None, None, "60d", "yfinance", "all", "1", "all", "1", 10_000, False, None,
+        target_fill="touch", intrabar="stop_first",
+    )
+    fill_rules_html = reports.write_results_html(table, fill_rules_config).read_text(encoding="utf-8")
+    assert "target fill touch" in fill_rules_html
+    assert "intrabar stop first" in fill_rules_html
 
 
 def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, tmp_path, test_asset_cfg):
@@ -138,6 +147,7 @@ def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, 
             "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 0,
             "session": None, "days": (), "months": (), "session_exit": False, "oos_cutoff": None,
+            "target_fill": "tick_through", "intrabar": "path",
         }
     )
     config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "3", "fixed,trailing", "1", 10_000, False, None)
@@ -173,6 +183,7 @@ def test_trade_chart_marks_gap_exit(monkeypatch, tmp_path, test_asset_cfg):
             "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 1,
             "session": None, "days": (), "months": (), "session_exit": False, "oos_cutoff": None,
+            "target_fill": "tick_through", "intrabar": "path",
         }
     )
 

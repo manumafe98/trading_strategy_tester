@@ -58,6 +58,8 @@ def _run_variant(
         months=task["months"],
         session_exit=task["session"] if task["session_exit"] else None,
         oos_cutoff=task["oos_cutoff"],
+        target_fill=task["target_fill"],
+        intrabar=task["intrabar"],
     )
     params = {
         "risk_reward_ratio": risk_reward_ratio,

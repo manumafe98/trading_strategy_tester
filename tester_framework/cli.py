@@ -55,3 +55,5 @@ class RunConfig:
     oos_fraction: float | None = None
     select_by: str | None = None
     select_top: int | None = None
+    target_fill: str = "tick_through"
+    intrabar: str = "path"

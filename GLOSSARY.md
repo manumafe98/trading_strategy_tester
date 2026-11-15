@@ -88,8 +88,14 @@ The first bar of a market session where the chosen contract of a continuous seri
 **Roll exit**:
 The forced close of a trade at the close of the last bar before a roll.
 
+**Target fill**:
+The rule for when a target counts as reached: touch (price reaches the target) or tick-through (price trades at least one tick beyond it, the default).
+
+**Intrabar rule**:
+The rule for ordering prices inside a bar: path (TradingView's open-high-low-close order, the default) or stop-first (a bar that can reach both the stop and a target exits at the stop).
+
 **Gap exit**:
-An exit filled at a bar's open because the price gapped through the stop or a target.
+An exit filled at a bar's open because the price gapped through the stop or a target; under tick-through, a target gap fills at the target price instead.
 _Avoid_: slippage exit
 
 **Discarded signal**:

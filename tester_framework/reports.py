@@ -481,6 +481,10 @@ def write_results_html(
     ]
     if config.session_exit:
         tags.append('<span class="tag">session exit on</span>')
+    if config.target_fill != "tick_through":
+        tags.append(f'<span class="tag">target fill {html_escape(config.target_fill.replace("_", " "))}</span>')
+    if config.intrabar != "path":
+        tags.append(f'<span class="tag">intrabar {html_escape(config.intrabar.replace("_", " "))}</span>')
     if config.sessions and config.sessions.lower() != "none":
         tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')
     if config.days:

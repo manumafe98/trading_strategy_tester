@@ -414,7 +414,7 @@ def test_gap_stop_fills_at_open(test_asset_cfg):
     assert trades[0]["exit"] == 97.0
 
 
-def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", next_bar=None):
+def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", next_bar=None, target_fill="tick_through"):
     bars = [[100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], gap_bar]
     if next_bar:
         bars.append(next_bar)
@@ -424,7 +424,7 @@ def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", nex
         data,
         pd.DataFrame([{"time": idx[0], "side": side, "stop": stop}]),
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=risk_reward_ratio, exit_mode=exit_mode,
-        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
+        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg, target_fill=target_fill,
     )
     return trades[0]
 
@@ -439,7 +439,7 @@ def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", nex
     ],
 )
 def test_gap_through_stop_or_target_fills_at_open_as_gap_exit(test_asset_cfg, side, stop, gap_bar, reason, fill):
-    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3)
+    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3, target_fill="touch")
     assert [(f["exit_reason"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [(reason, fill, True)]
     assert trade["exit"] == fill
 
@@ -451,17 +451,44 @@ def test_intrabar_stop_and_target_are_not_gap_exits(test_asset_cfg):
     assert [(f["raw_exit"], f["gap_exit"]) for f in stop["exits"]] == [(99.0, False)]
 
 
-def test_gap_through_partial_targets_fills_each_crossed_target_at_open(test_asset_cfg):
+@pytest.mark.parametrize(
+    ("side", "stop", "gap_bar", "fill"),
+    [
+        ("long", 99.0, [105.0, 106.0, 104.0, 105.0], 103.0),
+        ("short", 101.0, [95.0, 96.0, 94.0, 95.0], 97.0),
+    ],
+)
+def test_tick_through_gap_beyond_target_fills_at_the_target_as_gap_exit(test_asset_cfg, side, stop, gap_bar, fill):
+    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3)
+    assert [(f["exit_reason"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [(ExitReason.TARGET, fill, True)]
+
+
+@pytest.mark.parametrize(
+    ("target_fill", "gap_fills"),
+    [("touch", (102.5, 102.5)), ("tick_through", (101.0, 102.0))],
+)
+def test_gap_through_partial_targets_fills_each_crossed_target(test_asset_cfg, target_fill, gap_fills):
     trade = _gap_run(
         test_asset_cfg, [102.5, 102.6, 102.4, 102.5], "long", 99.0, risk_reward_ratio=3, exit_mode="partial",
-        next_bar=[102.5, 103.5, 102.4, 103.0],
+        next_bar=[102.5, 103.5, 102.4, 103.0], target_fill=target_fill,
     )
     assert [(f["target_r"], f["qty"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [
-        (1.0, 33.0, 102.5, True),
-        (2.0, 33.0, 102.5, True),
+        (1.0, 33.0, gap_fills[0], True),
+        (2.0, 33.0, gap_fills[1], True),
         (3, 34.0, 103.0, False),
     ]
-    assert trade["gross_pnl"] == 33 * 2.5 * 2 + 34 * 3.0
+
+
+def test_partial_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
+    # 2R partial: 50 at the 101 1R target, 50 at the 102 final target.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.5, 100.5], [100.5, 102.1, 100.5, 102.0])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, touched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="partial", target_fill="touch")
+    _, ticked = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="partial")
+
+    assert [(f["target_r"], f["exit_i"]) for f in touched[0]["exits"]] == [(1.0, 1), (2, 2)]
+    assert [(f["target_r"], f["exit_i"]) for f in ticked[0]["exits"]] == [(1.0, 2), (2, 2)]
 
 
 def test_high_first_path_reaches_target_before_stop(test_asset_cfg):
@@ -510,7 +537,7 @@ def test_partial_peak_and_giveback_are_position_weighted(test_asset_cfg):
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
+        risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg, target_fill="touch",
     )
     trade = trades[0]
     assert trade["realized_r"] == 0
@@ -1258,9 +1285,9 @@ def test_data_without_contract_column_has_no_roll_exit(test_asset_cfg):
     data = _contract_bars(ROLL_BARS).drop(columns="contract")
     _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg)
 
-    # The contract gap reaches the trade as a gap through the 101 target.
+    # The contract gap reaches the trade as a gap through the 101 target, which fills at the target.
     (trade,) = trades
-    assert (trade["exit_reason"], trade["exit"]) == (ExitReason.TARGET, 150.0)
+    assert (trade["exit_reason"], trade["exit"]) == (ExitReason.TARGET, 101.0)
 
 
 @pytest.mark.parametrize(("fill", "discarded"), [("20:00", 1), ("19:59", 0)])
@@ -1286,7 +1313,7 @@ def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, sig
             "2025-01-02 06:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
             "2025-01-02 12:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
             "2025-01-02 22:00": (150.0, 150.0, 150.0, 150.0, "FUTH5"),
-            "2025-01-02 23:00": (150.0, 151.0, 150.0, 151.0, "FUTH5"),
+            "2025-01-02 23:00": (150.0, 151.1, 150.0, 151.0, "FUTH5"),
         }
     )
     signal = {"time": pd.Timestamp(f"2025-01-02 {signal_time}"), "side": "long", "stop": stop}
@@ -1296,3 +1323,96 @@ def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, sig
     # A signal on the last FUTZ4 bar carries a FUTZ4 stop; one on the roll bar fills on FUTH5 and trades.
     assert (metrics["Discarded"], metrics["Unresolved"]) == (discarded, 0)
     assert [trade["exit_reason"] for trade in trades] == [ExitReason.TARGET] * (1 - discarded)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "touch_bar"),
+    [
+        ("long", 99.0, [100.0, 101.0, 99.5, 100.5]),
+        ("short", 101.0, [100.0, 100.5, 99.0, 99.5]),
+    ],
+)
+def test_bar_extreme_equal_to_target_fills_on_touch_but_not_tick_through(test_asset_cfg, side, stop, touch_bar):
+    data = _bars([100.0, 100.0, 100.0, 100.0], touch_bar)
+    signals = [{"time": data.index[0], "side": side, "stop": stop}]
+
+    _, touched = _run(data, signals, test_asset_cfg, target_fill="touch")
+    tick_through, untouched = _run(data, signals, test_asset_cfg, target_fill="tick_through")
+
+    assert (touched[0]["exit_reason"], touched[0]["exit"]) == (ExitReason.TARGET, touch_bar[1] if side == "long" else touch_bar[2])
+    assert (untouched, tick_through["Unresolved"]) == ([], 1)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "through_bar", "target"),
+    [
+        ("long", 99.0, [100.0, 101.1, 99.5, 100.5], 101.0),
+        ("short", 101.0, [100.0, 100.5, 98.9, 99.5], 99.0),
+    ],
+)
+def test_tick_through_target_fills_at_the_target_price(test_asset_cfg, side, stop, through_bar, target):
+    data = _bars([100.0, 100.0, 100.0, 100.0], through_bar)
+
+    _, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg)
+
+    assert (trades[0]["exit_reason"], trades[0]["exit"]) == (ExitReason.TARGET, target)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "both_bar"),
+    [
+        ("long", 99.0, [100.8, 101.5, 98.5, 100.0]),  # open nearer the high: the path reaches the target first
+        ("long", 99.0, [99.2, 101.5, 98.5, 100.0]),  # open nearer the low
+        ("short", 101.0, [99.2, 101.5, 98.5, 100.0]),  # open nearer the low: the path reaches the target first
+        ("short", 101.0, [100.8, 101.5, 98.5, 100.0]),  # open nearer the high
+    ],
+)
+def test_stop_first_exits_at_the_stop_when_stop_and_target_share_a_bar(test_asset_cfg, side, stop, both_bar):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], both_bar)
+    signals = [{"time": data.index[0], "side": side, "stop": stop}]
+
+    _, trades = _run(data, signals, test_asset_cfg, intrabar="stop_first")
+
+    assert [(f["exit_reason"], f["raw_exit"]) for f in trades[0]["exits"]] == [(ExitReason.STOP, stop)]
+
+
+@pytest.mark.parametrize(
+    ("exit_mode", "bar", "path_exits", "stop_first_exits"),
+    [
+        # Partial 2R: 50 at the 101 1R target, 50 at 102; the bar reaches 101.5 then 98.5.
+        ("partial", [100.8, 101.5, 98.5, 100.0], [(ExitReason.TARGET, 101.0), (ExitReason.STOP, 99.0)], [(ExitReason.STOP, 99.0)]),
+        # Trailing 2R: the open trails the stop to 101.4; the bar reaches the 102 target then 100.8.
+        ("trailing", [101.9, 102.5, 100.8, 101.0], [(ExitReason.TARGET, 102.0)], [(ExitReason.STOP, 101.4)]),
+    ],
+)
+def test_managed_exit_modes_follow_the_intrabar_rule(test_asset_cfg, exit_mode, bar, path_exits, stop_first_exits):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], bar)
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, path = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode=exit_mode)
+    _, stop_first = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode=exit_mode, intrabar="stop_first")
+
+    assert [(f["exit_reason"], f["raw_exit"]) for f in path[0]["exits"]] == path_exits
+    assert [(f["exit_reason"], f["raw_exit"]) for f in stop_first[0]["exits"]] == stop_first_exits
+
+
+def test_trailing_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
+    # Trailing 2R: the 102 target is touched; the trailing stop at 101.5 stays below the bar.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 102.0, 100.0, 101.8])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, touched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing", target_fill="touch")
+    tick_through, untouched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing")
+
+    assert (touched[0]["exit_reason"], touched[0]["exit"]) == (ExitReason.TARGET, 102.0)
+    assert (untouched, tick_through["Unresolved"]) == ([], 1)
+
+
+def test_stop_first_leaves_a_bar_that_cannot_reach_the_target_to_the_path(test_asset_cfg):
+    # Trailing 3R (target 103): the path reaches 101.6, trails the stop to 101.1, then falls through it.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], [100.2, 101.6, 98.5, 99.0])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, trades = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing", intrabar="stop_first")
+
+    assert [(f["exit_reason"], f["raw_exit"]) for f in trades[0]["exits"]] == [(ExitReason.STOP, 101.1)]

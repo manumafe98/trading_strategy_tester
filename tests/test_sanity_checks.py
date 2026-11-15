@@ -120,6 +120,7 @@ def test_lookahead_check_catches_a_cheat():
 
 
 def backtest(signals: pd.DataFrame, data: pd.DataFrame):
+    # Touch fills keep target and stop symmetric on a random walk, so random entries break even gross.
     return run_backtest(
         data,
         signals,
@@ -133,6 +134,7 @@ def backtest(signals: pd.DataFrame, data: pd.DataFrame):
         capital=100_000.0,
         with_costs=True,
         asset_cfg=SANITY_ASSET,
+        target_fill="touch",
     )
 
 

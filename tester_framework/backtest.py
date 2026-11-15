@@ -18,8 +18,10 @@ from .utils import csv_items, decimal_places
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
+TARGET_FILLS = ("tick_through", "touch")
+INTRABAR_RULES = ("path", "stop_first")
 
-__all__ = ["add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
+__all__ = ["INTRABAR_RULES", "TARGET_FILLS", "add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
 
 
 def risk_reward_ratios(value: str | None) -> list[float]:
@@ -210,6 +212,7 @@ class _OpenTrade:
     trade: dict
     cfg: AssetConfig
     with_costs: bool
+    target_fill: str = "tick_through"
     stop: float = field(init=False)
     remaining_qty: float = field(init=False)
     direction: int = field(init=False)
@@ -234,13 +237,27 @@ class _OpenTrade:
     def stop_gapped(self, opened: float) -> bool:
         return opened * self.direction <= self.stop * self.direction
 
-    def target_gapped(self, opened: float) -> bool:
+    def _target_reached_at(self) -> float | None:
+        """The price that reaches the next target: the target on a touch, one tick beyond it under tick-through."""
         target = self.target
-        return target is not None and opened * self.direction >= target["price"] * self.direction
+        if target is None:
+            return None
+        if self.target_fill == "touch":
+            return target["price"]
+        tick_size = self.cfg.tick_size
+        return tick_price(target["price"] + self.direction * tick_size, tick_size, self.direction)
+
+    def target_gapped(self, opened: float) -> bool:
+        reached_at = self._target_reached_at()
+        return reached_at is not None and opened * self.direction >= reached_at * self.direction
+
+    def target_gap_price(self, opened: float) -> float:
+        """A gap beyond the target fills at the open on a touch, at the target price under tick-through."""
+        return opened if self.target_fill == "touch" else self.target["price"]
 
     def target_between(self, start: float, end: float) -> bool:
-        target = self.target
-        return target is not None and start * self.direction < target["price"] * self.direction <= end * self.direction
+        reached_at = self._target_reached_at()
+        return reached_at is not None and start * self.direction < reached_at * self.direction <= end * self.direction
 
     def stop_between(self, start: float, end: float) -> bool:
         return end * self.direction <= self.stop * self.direction <= start * self.direction
@@ -363,6 +380,8 @@ def run_backtest(
     months: tuple[int, ...] = (),
     session_exit: SessionSpec | None = None,
     oos_cutoff: int | None = None,
+    target_fill: str = "tick_through",
+    intrabar: str = "path",
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -370,6 +389,10 @@ def run_backtest(
         raise ValueError(f"Unknown exit mode: {exit_mode}")
     if operation not in OPERATIONS:
         raise ValueError(f"Unknown operation: {operation}")
+    if target_fill not in TARGET_FILLS:
+        raise ValueError(f"--target_fill must be one of {', '.join(TARGET_FILLS)}; got: {target_fill}")
+    if intrabar not in INTRABAR_RULES:
+        raise ValueError(f"--intrabar must be one of {', '.join(INTRABAR_RULES)}; got: {intrabar}")
     if not math.isfinite(risk_pct) or risk_pct <= 0:
         raise ValueError("--risk must be finite and positive")
     if not math.isfinite(capital) or capital <= 0:
@@ -482,7 +505,7 @@ def run_backtest(
             discarded_signals += 1
             continue
 
-        open_trade = _OpenTrade(trade, asset_cfg, with_costs)
+        open_trade = _OpenTrade(trade, asset_cfg, with_costs, target_fill)
         side = trade["side"]
         trailing = exit_mode == "trailing"
         for i in range(start_i, bar_count):
@@ -496,11 +519,18 @@ def run_backtest(
                 break
             open_trade.update_peak(opened)
             while open_trade.target_gapped(opened):
-                open_trade.fill_target(opened, i, bar_time, gap_exit=True)
+                open_trade.fill_target(open_trade.target_gap_price(opened), i, bar_time, gap_exit=True)
             if open_trade.closed:
                 break
             if trailing:
                 open_trade.trail(opened)
+
+            # Stop-first: a bar that can reach both the stop and the next target exits at the stop.
+            if intrabar == "stop_first":
+                favor, adverse = (highs[i], lows[i]) if side == Side.LONG else (lows[i], highs[i])
+                if open_trade.stop_between(opened, adverse) and open_trade.target_between(opened, favor):
+                    open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
+                    break
 
             for start, end in zip(path, path[1:]):
                 if (end - start) * open_trade.direction > 0:
