@@ -51,3 +51,5 @@ class RunConfig:
     days: tuple[int, ...] = ()
     months: tuple[int, ...] = ()
     session_exit: bool = False
+    oos_start: str | None = None
+    oos_fraction: float | None = None

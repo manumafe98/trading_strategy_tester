@@ -34,6 +34,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "days": (),
         "months": (),
         "session_exit": False,
+        "oos_cutoff": None,
     }
     task.update(overrides)
     return task
@@ -157,6 +158,23 @@ def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_e
     assert "100 @ +0.00R session" in reports._trade_table([trade])
 
 
+def test_split_row_counts_in_sample_trades_by_entry_and_pairs_oos_metrics(monkeypatch, tmp_path, cost_asset_cfg):
+    # Long trades enter at bars 1, 3 and 5 and reach their 1R target on the same bar; the cutoff is bar 3.
+    data = _target_bars([100.0, 102.0, 100.0, 102.0, 100.0, 102.0])
+    signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 2, 4)])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    row = runner.run_variants(_task(data, tmp_path, cost_asset_cfg, with_costs=True, oos_cutoff=3))[0]
+
+    assert (row["Trades"], row["OOS Trades"], row["Spanning"]) == (1, 2, 0)
+    assert row["W"] == (1, 1)
+    for column, source in (("OOS Return", "Return"), ("OOS Sharpe", "Sharpe Ratio")):
+        assert row[column] == (row["OOS Gross"][source], row["OOS Net"][source])
+    assert row["Return"] == (row["Gross"]["Return"], row["Net"]["Return"])
+    # Variant pages keep whole-period analytics.
+    assert decode_analytics(row["_analytics"])["outcomes"][0]["Trades"] == 3
+
+
 def test_run_variants_surfaces_strategy_errors_from_mid_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
     calls = []
 
@@ -245,6 +263,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "days": (),
                 "months": (),
                 "session_exit": False,
+                "oos_cutoff": None,
             }
 
             rows = runner.run_variants(task)

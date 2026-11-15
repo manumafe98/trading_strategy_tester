@@ -13,6 +13,7 @@ from tester_framework.backtest import result_columns
 from tester_framework.cli import RunConfig
 from tester_framework.reports import format_metric, metric_class
 from tester_framework.runner import cache_data
+from tester_framework.split import Split
 
 
 def test_format_metric_return_positive():
@@ -136,7 +137,7 @@ def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, 
             "variants": ((3, "fixed"), (3, "trailing")), "asset": "TEST", "asset_cfg": test_asset_cfg,
             "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 0,
-            "session": None, "days": (), "months": (), "session_exit": False,
+            "session": None, "days": (), "months": (), "session_exit": False, "oos_cutoff": None,
         }
     )
     config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "3", "fixed,trailing", "1", 10_000, False, None)
@@ -171,7 +172,7 @@ def test_trade_chart_marks_gap_exit(monkeypatch, tmp_path, test_asset_cfg):
             "variants": ((3, "fixed"),), "asset": "TEST", "asset_cfg": test_asset_cfg,
             "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 1,
-            "session": None, "days": (), "months": (), "session_exit": False,
+            "session": None, "days": (), "months": (), "session_exit": False, "oos_cutoff": None,
         }
     )
 
@@ -408,6 +409,50 @@ def test_results_index_shows_session_column_and_gross_net_pairs(monkeypatch, tmp
     assert "+9.00% / +1.25%" in html
     assert 'data-original-order="0"' in html
     assert 'id="filter-bar"' not in html
+
+
+def _split_table():
+    analytics = {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [], "Gap Exits": 0}
+    return pd.DataFrame(
+        [
+            {
+                "Strategy": "ema50", "Asset": "MGC", "TF": "1h", "RR": "1", "Exit Mode": "fixed",
+                "Return": (2.0, 1.5), "Max DD": (1.0, 1.25), "Sharpe Ratio": (0.5, 0.25), "Return / DD": (2.0, 1.2),
+                "OOS Trades": 7, "OOS Return": (-3.0, -4.5), "OOS Max DD": (5.0, 6.0), "OOS Sharpe": (math.nan, -1.0),
+                "OOS Return / DD": (-0.6, -0.75), "Spanning": 2,
+                "_analytics": analytics, "_strategy_metrics": {},
+            }
+        ]
+    )
+
+
+def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(monkeypatch, tmp_path):
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
+    config = RunConfig(("ema50",), "MGC", "1h", None, "2021", "local", "all", "1", "fixed", "1", 10_000, True, None, oos_start="2021-07-01")
+    index = pd.DatetimeIndex(["2021-01-03 23:00", "2021-06-30 20:00", "2021-07-01 22:00", "2021-12-30 21:00"])
+    split = Split.from_index("MGC", "1h", index, 2)
+
+    html = reports.write_results_html(_split_table(), config, result_columns("all", split=True), [split]).read_text(encoding="utf-8")
+    plain = reports.write_results_html(_split_table(), config, result_columns("all")).read_text(encoding="utf-8")
+
+    header_row = re.search(r"<thead><tr>(.*?)</tr></thead>", html, re.S).group(1)
+    headers = [re.sub(r"<[^>]+>", "", value) for value in re.findall(r"<th[^>]*>(.*?)</th>", header_row)]
+    assert headers[-7:] == [
+        "OOS Trades",
+        "OOS ReturnGross / Net",
+        "OOS Max DDGross / Net",
+        "OOS SharpeGross / Net",
+        "OOS Ret / DDGross / Net",
+        "Spanning",
+        "Details",
+    ]
+    assert header_row.count('class="sort-button"') == 8
+    assert "-3.00% / -4.50%" in html
+    assert "N/A / -1.00" in html
+    assert '<td class="c" data-sort-value="-4.5"><span class="pill bad">' in html
+    assert "MGC 1h in-sample 2021-01-03 23:00 to 2021-06-30 20:00 UTC" in html
+    assert "MGC 1h out-of-sample 2021-07-01 22:00 to 2021-12-30 21:00 UTC" in html
+    assert "OOS" not in plain and "in-sample" not in plain
 
 
 def test_reset_output_dirs_empties_folders_inside_root(monkeypatch, tmp_path):
