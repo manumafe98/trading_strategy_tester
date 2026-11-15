@@ -7,17 +7,20 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .data import _session_labels
+from .data import session_labels
 from .models import AssetConfig
 from .settings import OOS_FINANCIAL_COLUMNS
+from .utils import net_value
 
 
 __all__ = [
     "SELECT_BY",
     "Split",
+    "entered_in_sample",
     "oos_cutoff",
     "rank_variants",
     "split_tags",
+    "validate_selection_args",
     "validate_split_args",
     "walk_forward_efficiency",
 ]
@@ -31,15 +34,15 @@ class Split:
     """The cutoff of one asset and execution timeframe, with the bar times either side of it."""
 
     asset: str
-    timeframe: str
+    execution_timeframe: str
     cutoff: int
     bar_count: int
     in_sample: tuple[pd.Timestamp, pd.Timestamp]
     out_of_sample: tuple[pd.Timestamp, pd.Timestamp]
 
     @classmethod
-    def from_index(cls, asset: str, timeframe: str, index: pd.DatetimeIndex, cutoff: int) -> Split:
-        return cls(asset, timeframe, cutoff, len(index), (index[0], index[cutoff - 1]), (index[cutoff], index[-1]))
+    def from_index(cls, asset: str, execution_timeframe: str, index: pd.DatetimeIndex, cutoff: int) -> Split:
+        return cls(asset, execution_timeframe, cutoff, len(index), (index[0], index[cutoff - 1]), (index[cutoff], index[-1]))
 
 
 def validate_split_args(oos_start: str | None, oos_fraction: float | None) -> None:
@@ -67,7 +70,7 @@ def oos_cutoff(
     if oos_start is None and oos_fraction is None:
         raise ValueError("A split needs --oos_start or --oos_fraction")
     validate_split_args(oos_start, oos_fraction)
-    labels = _session_labels(index, asset_cfg.session_timezone, asset_cfg.session_start)
+    labels = session_labels(index, asset_cfg.session_timezone, asset_cfg.session_start)
     if oos_start is not None:
         # A market session label is the local date its session starts on.
         cutoff = int(labels.searchsorted(pd.Timestamp(oos_start), side="left"))
@@ -82,17 +85,37 @@ def oos_cutoff(
     return cutoff
 
 
+def entered_in_sample(trade: dict, cutoff: int) -> bool:
+    """Trades belong to the period of their entry bar."""
+    return trade["entry_i"] < cutoff
+
+
 def split_tags(split: Split) -> tuple[str, str]:
     def period(name: str, bounds: tuple[pd.Timestamp, pd.Timestamp]) -> str:
         start, end = (pd.Timestamp(value).strftime("%Y-%m-%d %H:%M") for value in bounds)
-        return f"{split.asset} {split.timeframe} {name} {start} to {end} UTC"
+        return f"{split.asset} {split.execution_timeframe} {name} {start} to {end} UTC"
 
     return period("in-sample", split.in_sample), period("out-of-sample", split.out_of_sample)
 
 
+def validate_selection_args(select_by: str, select_top: int) -> None:
+    if select_by not in SELECT_BY:
+        raise ValueError(f"--select_by must be one of {', '.join(SELECT_BY)}, got: {select_by}")
+    if isinstance(select_top, bool) or not isinstance(select_top, int) or select_top < 1:
+        raise ValueError("--select_top must be a positive integer")
+
+
 def walk_forward_efficiency(curve: np.ndarray, cutoff: int, bars_per_year: int) -> float:
-    """Out-of-sample annualized return as a percentage of in-sample annualized return; NaN when in-sample is not positive."""
+    """Out-of-sample annualized return as a percentage of in-sample annualized return.
+
+    NaN when the in-sample annualized return is not positive, or when equity at the curve start or the cutoff is not.
+    """
     curve = np.asarray(curve, dtype="float64")
+    bar_count = len(curve) - 1
+    if not 0 < cutoff < bar_count:
+        raise ValueError(f"WFE cutoff must be between 1 and {bar_count - 1}, got: {cutoff}")
+    if not (curve[0] > 0 and curve[cutoff] > 0):
+        return float("nan")
 
     def annualized(start: float, end: float, bars: int) -> float:
         return (end / start) ** (bars_per_year / bars) - 1
@@ -108,13 +131,14 @@ def rank_variants(table: pd.DataFrame, select_by: str, select_top: int) -> pd.Da
 
     Higher is better, NaN ranks last, ties keep the incoming order. Gross / Net pairs rank on Net.
     """
+    validate_selection_args(select_by, select_top)
     column = SELECT_BY[select_by]
     oos_column = next(oos for oos, source in OOS_FINANCIAL_COLUMNS.items() if source == column)
     table = table.copy()
     groups = ["Strategy", "Asset"]
 
     def rank(source: str) -> pd.Series:
-        values = table[source].map(lambda value: float(value[-1] if isinstance(value, (tuple, list)) else value))
+        values = table[source].map(lambda value: float(net_value(value)))
         ordered = values.sort_values(ascending=False, na_position="last", kind="stable")
         return table.loc[ordered.index].groupby(groups, sort=False).cumcount().add(1).reindex(table.index)
 

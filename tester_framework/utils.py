@@ -16,4 +16,9 @@ def csv_items(value: str | None) -> list[str]:
     return [x.strip() for x in str(value or "").split(",") if x.strip()]
 
 
-__all__ = ["clean_exit_name", "csv_items", "decimal_places"]
+def net_value(value):
+    """The Net value of a Gross / Net pair, else the value itself."""
+    return value[-1] if isinstance(value, (tuple, list)) else value
+
+
+__all__ = ["clean_exit_name", "csv_items", "decimal_places", "net_value"]

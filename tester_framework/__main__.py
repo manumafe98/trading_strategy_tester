@@ -5,6 +5,7 @@ import math
 import os
 import sys
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from dataclasses import replace
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from time import perf_counter
@@ -19,7 +20,7 @@ from .models import OPERATIONS
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
-from .split import SELECT_BY, Split, oos_cutoff, rank_variants, split_tags, validate_split_args
+from .split import SELECT_BY, Split, oos_cutoff, rank_variants, split_tags, validate_selection_args, validate_split_args
 from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
@@ -259,12 +260,14 @@ def run(config: RunConfig) -> None:
         raise ValueError("--max_trades cannot be combined with a split")
     if not split_mode and (config.select_by is not None or config.select_top is not None):
         raise ValueError("--select_by and --select_top need --oos_start or --oos_fraction")
-    if config.select_by is not None and config.select_by not in SELECT_BY:
-        raise ValueError(f"--select_by must be one of {', '.join(SELECT_BY)}, got: {config.select_by}")
-    if config.select_top is not None and (
-        isinstance(config.select_top, bool) or not isinstance(config.select_top, int) or config.select_top < 1
-    ):
-        raise ValueError("--select_top must be a positive integer")
+    if split_mode:
+        # Defaults are resolved once here; everything after reads the config.
+        config = replace(
+            config,
+            select_by=DEFAULT_SELECT_BY if config.select_by is None else config.select_by,
+            select_top=DEFAULT_SELECT_TOP if config.select_top is None else config.select_top,
+        )
+        validate_selection_args(config.select_by, config.select_top)
     if config.trade_html is not None and (
         isinstance(config.trade_html, bool) or not isinstance(config.trade_html, int) or config.trade_html < 0
     ):
@@ -409,7 +412,7 @@ def run(config: RunConfig) -> None:
             table = table.sort_values(["_strategy_order", "_asset_order", "_sort_return"], ascending=[True, True, False]).drop(columns=["_strategy_order", "_asset_order"])
             if split_mode:
                 # Ranking needs every variant row, so it happens here rather than in the workers.
-                table = rank_variants(table, config.select_by or DEFAULT_SELECT_BY, config.select_top or DEFAULT_SELECT_TOP)
+                table = rank_variants(table, config.select_by, config.select_top)
         console = table.reindex(columns=columns).copy()
         for column in console.columns:
             console[column] = console[column].map(lambda value, column=column: format_metric(column, value))

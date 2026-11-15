@@ -15,10 +15,10 @@ from .analytics import decode_analytics
 from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
 from .models import Side
 from .settings import (
-    COST_PAIR_COLUMNS, DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
+    COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
-from .split import SELECT_BY, Split, split_tags
-from .utils import clean_exit_name
+from .split import SELECT_BY, Split, entered_in_sample, split_tags
+from .utils import clean_exit_name, net_value
 
 
 MetricValue: TypeAlias = float | int | tuple[float | int, ...] | list[float | int] | str
@@ -154,8 +154,7 @@ def format_metric(column: str, value: MetricValue) -> str:
 
 
 def metric_class(column: str, value: MetricValue) -> str:
-    if isinstance(value, (tuple, list)):
-        value = value[-1]
+    value = net_value(value)
     column = OOS_FINANCIAL_COLUMNS.get(column, column)
     if column == "Return":
         return "good" if float(value) > 0 else "bad" if float(value) < 0 else "neutral"
@@ -233,10 +232,9 @@ def _trade_row(trade: dict, oos_cutoff: int | None = None) -> str:
     if chart_path:
         name = html_escape(Path(chart_path).name, quote=True)
         chart = f'<a href="../../../trades/{name}" target="_blank" rel="noopener">chart</a>'
-    # Trades belong to the period they enter in, the same rule as the split metrics.
     sample = ""
     if oos_cutoff is not None:
-        sample = f'<td>{"in-sample" if trade["entry_i"] < oos_cutoff else "out-of-sample"}</td>'
+        sample = f'<td>{"in-sample" if entered_in_sample(trade, oos_cutoff) else "out-of-sample"}</td>'
     return (
         '<tr class="trade-row">'
         f"<td>{chart}</td>"
@@ -436,7 +434,7 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
     sort_attr = ""
     if col in SORTABLE_COLUMNS:
-        sort_value = value[-1] if isinstance(value, (tuple, list)) else value
+        sort_value = net_value(value)
         sort_attr = f' data-sort-value="{float(sort_value)}"' if math.isfinite(float(sort_value)) else ' data-sort-value=""'
     return f'<td class="c"{sort_attr}><span class="pill {metric_class(col, value)}">{html_escape(format_metric(col, value))}</span></td>'
 
@@ -506,8 +504,8 @@ def write_results_html(
         tags.extend(
             f'<span class="tag">{html_escape(tag)}</span>'
             for tag in (
-                f"ranked by in-sample {SELECT_BY[config.select_by or DEFAULT_SELECT_BY]}",
-                f"top {config.select_top or DEFAULT_SELECT_TOP} selected per strategy and asset",
+                f"ranked by in-sample {SELECT_BY[config.select_by]}",
+                f"top {config.select_top} selected per strategy and asset",
                 f"{len(table)} variants",
             )
         )
