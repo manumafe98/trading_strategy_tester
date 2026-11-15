@@ -587,3 +587,121 @@ def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
     cli.main()
 
     assert configs[0].session_exit is True
+
+
+def test_split_flags_default_off_and_map_to_config(monkeypatch):
+    args = cli.parser().parse_args([])
+    assert (args.oos_start, args.oos_fraction) == (None, None)
+    configs = []
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--oos_fraction", "0.25"])
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--oos_start", "2021-07-01"])
+    cli.main()
+
+    assert (configs[0].oos_start, configs[0].oos_fraction) == (None, 0.25)
+    assert (configs[1].oos_start, configs[1].oos_fraction) == ("2021-07-01", None)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"oos_start": "2025-01-02", "oos_fraction": 0.5}, "Use --oos_start or --oos_fraction, not both"),
+        ({"oos_fraction": 0.0}, "--oos_fraction must be between 0 and 1"),
+        ({"oos_fraction": 1.0}, "--oos_fraction must be between 0 and 1"),
+        ({"oos_fraction": -0.5}, "--oos_fraction must be between 0 and 1"),
+        ({"oos_start": "2025-13-01"}, "--oos_start must be a YYYY-MM-DD date"),
+        ({"oos_fraction": 0.5, "max_trades": 3}, "--max_trades cannot be combined with a split"),
+    ],
+)
+def test_run_rejects_invalid_split_flags_before_loading_data(monkeypatch, test_asset_cfg, overrides, message):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match=message):
+        cli.run(_config(**overrides))
+
+
+def test_main_reports_conflicting_split_flags_clearly(monkeypatch):
+    argv = ["tester_framework", "--strategies", "ema50", "--oos_start", "2021-07-01", "--oos_fraction", "0.3"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit, match="Use --oos_start or --oos_fraction, not both"):
+        cli.main()
+
+
+class _Done:
+    def __init__(self, value):
+        self.value = value
+
+    def result(self):
+        return self.value
+
+
+class _InlineExecutor:
+    def __init__(self, **_kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        pass
+
+    def submit(self, function, task):
+        return _Done(function(task))
+
+
+def _two_day_data():
+    index = pd.date_range("2025-01-01 00:00", periods=48, freq="h")
+    return pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 0}, index=index)
+
+
+def _split_run(monkeypatch, tmp_path, asset_cfg, data, **overrides):
+    submitted = []
+    written = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame()))
+    monkeypatch.setattr(runner, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame()))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: data)
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "run_variants", lambda task: submitted.append(task) or runner.run_variants(task))
+    monkeypatch.setattr(
+        cli, "write_results_html", lambda *args: written.append((args,)) or tmp_path / "results.html"
+    )
+    cli.run(_config(**overrides))
+    return submitted, written
+
+
+def test_split_run_sends_cutoff_to_workers_and_shows_split_columns_and_ranges(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    submitted, written = _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), oos_start="2025-01-02")
+
+    assert [task["oos_cutoff"] for task in submitted] == [24]
+    (args,) = written[0]
+    assert args[2][-6:] == ["OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "Spanning"]
+    (split,) = args[3]
+    assert (split.asset, split.timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
+    out = capsys.readouterr().out
+    assert "TEST 1h in-sample 2025-01-01 00:00 to 2025-01-01 23:00 UTC" in out
+    assert "TEST 1h out-of-sample 2025-01-02 00:00 to 2025-01-02 23:00 UTC" in out
+    assert "OOS Return" in out and "Spanning" in out
+
+
+def test_run_without_split_flags_sends_no_cutoff_and_shows_no_split_columns(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    submitted, written = _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data())
+
+    assert [task["oos_cutoff"] for task in submitted] == [None]
+    (args,) = written[0]
+    assert "OOS Return" not in args[2]
+    assert args[3] == []
+    out = capsys.readouterr().out
+    assert "OOS" not in out and "in-sample" not in out
+
+
+def test_run_rejects_a_cutoff_that_empties_a_period_with_the_asset_named(monkeypatch, tmp_path, test_asset_cfg):
+    with pytest.raises(ValueError, match="TEST 1h: Split cutoff leaves the out-of-sample period with no bars"):
+        _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), oos_start="2025-01-03")

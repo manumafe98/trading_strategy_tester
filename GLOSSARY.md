@@ -39,6 +39,18 @@ _Avoid_: timeframe, interval
 The bar size the engine uses to simulate fills and exits; a strategy may request one different from its signal timeframe.
 _Avoid_: timeframe, base timeframe
 
+**Cutoff**:
+The first bar of the out-of-sample period, always the first bar of a market session; it is set per asset and execution timeframe by `--oos_start` or `--oos_fraction`.
+_Avoid_: split date, holdout start
+
+**In-sample period**:
+The bars of the loaded time period before the cutoff; variants are judged on it.
+_Avoid_: training period, training set, IS data
+
+**Out-of-sample period**:
+The bars from the cutoff to the end of the loaded time period, kept back to check whether in-sample results hold.
+_Avoid_: test period, test set, holdout, forward period
+
 ## Backtest engine
 
 **Signal**:

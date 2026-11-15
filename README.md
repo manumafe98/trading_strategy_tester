@@ -112,6 +112,14 @@ Local futures CSVs containing multiple expiries are converted to an unadjusted c
 
 Undefined Sharpe and Return/DD values display as `N/A`. With `--with_costs`, outcome and financial columns show Gross / Net pairs.
 
+### Out-of-sample split
+
+`--oos_start YYYY-MM-DD` or `--oos_fraction F` (one of them, `0 < F < 1`) cuts the loaded `--time_period` into an in-sample period and an out-of-sample period. The cutoff is the first bar of a market session, in the asset's session timezone: the first market session starting on or after the date, or the bar at `ceil((1 - F) x bars)` moved forward to the next market session start. It is computed per asset and execution timeframe, and the result header lists both date ranges. Each variant is still backtested once over the whole period, with no capital reset at the cutoff; its equity curve is then split so the out-of-sample period starts from the equity at the close of the last in-sample bar. Trades belong to the period of their entry bar. The usual trade-count and financial columns describe the in-sample period, followed by `OOS Trades`, `OOS Return`, `OOS Max DD`, `OOS Sharpe`, `OOS Return / DD` and `Spanning` (trades entered in sample that exit at or after the cutoff; their P&L lands in the out-of-sample curve). `--max_trades` cannot be combined with a split.
+
+```bash
+"$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --oos_start 2021-07-01 --with_costs
+```
+
 Only fully resolved trades are counted. Setups still open at the end of the downloaded data—including any completed partial fills—are fully discarded and reported in `Unresolved`. Signals skipped due to invalid stops, bad entries, minimum risk, overlap, or minimum-quantity filters are reported in `Discarded`.
 
 ## Strategy API

@@ -10,7 +10,7 @@ from .analytics import analyze_trades, encode_analytics, strategy_metrics
 from .backtest import add_trade_counts, run_backtest
 from .reports import write_trade_html
 from .sessions import filter_signals, session_label
-from .settings import FINANCIAL_COLUMNS
+from .settings import FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
 
@@ -53,6 +53,7 @@ def _run_variant(
         days=task["days"],
         months=task["months"],
         session_exit=task["session"] if task["session_exit"] else None,
+        oos_cutoff=task["oos_cutoff"],
     )
     params = {
         "risk_reward_ratio": risk_reward_ratio,
@@ -84,10 +85,15 @@ def _run_variant(
         if charted % 100:
             gc.collect()
     analytics = analyze_trades(trades, exit_mode)
-    row = add_trade_counts(metrics, trades, task["operation"], task["with_costs"])
+    # In split mode the trade-count columns describe the in-sample period: trades entered before the cutoff.
+    counted = trades if task["oos_cutoff"] is None else [trade for trade in trades if trade["entry_i"] < task["oos_cutoff"]]
+    row = add_trade_counts(metrics, counted, task["operation"], task["with_costs"])
     if task["with_costs"]:
         for column in FINANCIAL_COLUMNS:
             row[column] = (metrics["Gross"][column], metrics["Net"][column])
+        if task["oos_cutoff"] is not None:
+            for column, source in OOS_FINANCIAL_COLUMNS.items():
+                row[column] = (metrics["OOS Gross"][source], metrics["OOS Net"][source])
     row["RR"] = f"{risk_reward_ratio:g}"
     row["Exit Mode"] = exit_mode
     if session:
