@@ -134,3 +134,42 @@ def test_rank_variants_ranks_nan_last():
     assert list(zip(ranked["RR"], ranked["IS Rank"], ranked["OOS Rank"], ranked["Selected"])) == [
         ("2", 1, 1, True), ("1", 2, 2, False)
     ]
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "message"),
+    [
+        ({"select_by": "profit"}, "select_by must be one of return_dd, sharpe, return, got: profit"),
+        ({"select_top": 0}, "select_top must be a positive integer"),
+        ({"select_top": -1}, "select_top must be a positive integer"),
+        ({"select_top": 1.5}, "select_top must be a positive integer"),
+        ({"select_top": True}, "select_top must be a positive integer"),
+    ],
+)
+def test_rank_variants_rejects_unknown_metric_and_non_positive_top(kwargs, message):
+    table = _variants([("a", "MGC", "1", 1.0, 1.0, 1.0, 1.0)])
+
+    with pytest.raises(ValueError, match=message):
+        rank_variants(table, **{"select_by": "return_dd", "select_top": 1, **kwargs})
+
+
+@pytest.mark.parametrize("cutoff", [0, 3, 4, -1])
+def test_walk_forward_efficiency_rejects_a_cutoff_outside_the_curve(cutoff):
+    # Four curve points are three bars, so the cutoff bar must be 1 or 2.
+    with pytest.raises(ValueError, match="cutoff must be between 1 and 2"):
+        walk_forward_efficiency(np.array([100.0, 105.0, 110.0, 121.0]), cutoff, 2)
+
+
+@pytest.mark.parametrize(
+    ("curve", "bars_per_year"),
+    [
+        # Equity of zero at the curve start would divide by zero.
+        ([0.0, 10.0, 20.0, 30.0], 2),
+        # Both ends negative: the ratio looks like +100% in sample.
+        ([-100.0, -150.0, -200.0, 10.0], 2),
+        # Negative equity at the cutoff raised to an even power looks positive.
+        ([100.0, 50.0, -200.0, 10.0], 4),
+    ],
+)
+def test_walk_forward_efficiency_is_blank_when_equity_at_the_start_or_cutoff_is_not_positive(curve, bars_per_year):
+    assert math.isnan(walk_forward_efficiency(np.array(curve), 2, bars_per_year))

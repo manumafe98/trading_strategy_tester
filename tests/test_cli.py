@@ -780,6 +780,57 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     assert "IS Rank" in out and "WFE" in out and "50.00%" in out
 
 
+def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_the_top_n(
+    monkeypatch, tmp_path, capsys, test_asset_cfg
+):
+    # In-sample Return / DD and out-of-sample Return / DD per RR 1, 2, 3, for each strategy and asset.
+    values = {
+        ("a", "TEST"): [(1.0, 2.0), (math.nan, 9.0), (3.0, math.nan)],
+        ("a", "OTHER"): [(5.0, 1.0), (4.0, 3.0), (6.0, 2.0)],
+        ("b", "TEST"): [(0.5, 0.0), (2.0, -1.0), (math.nan, 1.0)],
+    }
+
+    def fake_run_variants(task):
+        return [
+            {
+                "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
+                "Return": 1.0, "Max DD": 1.0, "Sharpe Ratio": 1.0, "Return / DD": ret_dd, "_sort_return": 1.0,
+                "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
+            }
+            for (rr, mode), (ret_dd, oos) in zip(task["variants"], values.get((task["strategy"], task["asset"]), []))
+        ]
+
+    written = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg, "OTHER": replace(test_asset_cfg, ticker="OTHER")})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: _two_day_data())
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "write_results_html", lambda *args: written.append(args) or tmp_path / "results.html")
+    monkeypatch.setattr(cli, "run_variants", fake_run_variants)
+
+    cli.run(_config(strategies=("a", "b"), asset="TEST,OTHER", risk_reward_ratio="1,2,3", oos_fraction=0.5, select_top=2))
+
+    table, config, columns, _splits = written[0]
+    assert (config.select_by, config.select_top) == ("return_dd", 2)
+    assert list(zip(table["Strategy"], table["Asset"], table["RR"], table["IS Rank"], table["OOS Rank"], table["Selected"])) == [
+        ("a", "TEST", "3", 1, 3, True),
+        ("a", "TEST", "1", 2, 2, True),
+        ("a", "TEST", "2", 3, 1, False),
+        ("a", "OTHER", "3", 1, 2, True),
+        ("a", "OTHER", "1", 2, 3, True),
+        ("a", "OTHER", "2", 3, 1, False),
+        ("b", "TEST", "2", 1, 3, True),
+        ("b", "TEST", "1", 2, 2, True),
+        ("b", "TEST", "3", 3, 1, False),
+    ]
+    assert list(table["WFE"]) == [30.0, 10.0, 20.0, 30.0, 10.0, 20.0, 20.0, 10.0, 30.0]
+    assert "WFE" in columns
+    out = capsys.readouterr().out
+    assert "30.00%" in out
+
+
 def test_run_without_split_keeps_return_sort_and_adds_no_rank_columns(monkeypatch, tmp_path, test_asset_cfg):
     written = []
     monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})

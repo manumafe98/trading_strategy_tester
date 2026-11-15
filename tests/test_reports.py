@@ -429,7 +429,10 @@ def _split_table():
 
 def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(monkeypatch, tmp_path):
     monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
-    config = RunConfig(("ema50",), "MGC", "1h", None, "2021", "local", "all", "1", "fixed", "1", 10_000, True, None, oos_start="2021-07-01")
+    config = RunConfig(
+        ("ema50",), "MGC", "1h", None, "2021", "local", "all", "1", "fixed", "1", 10_000, True, None,
+        oos_start="2021-07-01", select_by="return_dd", select_top=5,
+    )
     index = pd.DatetimeIndex(["2021-01-03 23:00", "2021-06-30 20:00", "2021-07-01 22:00", "2021-12-30 21:00"])
     split = Split.from_index("MGC", "1h", index, 2)
 

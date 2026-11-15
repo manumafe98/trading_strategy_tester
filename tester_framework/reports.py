@@ -15,7 +15,7 @@ from .analytics import decode_analytics
 from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
 from .models import Side
 from .settings import (
-    COST_PAIR_COLUMNS, DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
+    COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
 from .split import SELECT_BY, Split, split_tags
 from .utils import clean_exit_name
@@ -506,8 +506,8 @@ def write_results_html(
         tags.extend(
             f'<span class="tag">{html_escape(tag)}</span>'
             for tag in (
-                f"ranked by in-sample {SELECT_BY[config.select_by or DEFAULT_SELECT_BY]}",
-                f"top {config.select_top or DEFAULT_SELECT_TOP} selected per strategy and asset",
+                f"ranked by in-sample {SELECT_BY[config.select_by]}",
+                f"top {config.select_top} selected per strategy and asset",
                 f"{len(table)} variants",
             )
         )
