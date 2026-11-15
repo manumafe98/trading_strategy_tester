@@ -94,6 +94,14 @@ _Avoid_: open trade
 One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
 _Avoid_: run, scenario
 
+**Selected variant**:
+One of the top N variants of a strategy and asset, ranked on an in-sample metric (`--select_by`, `--select_top`) in split mode.
+_Avoid_: winner, best variant, optimized variant
+
+**Walk-forward efficiency (WFE)**:
+A variant's out-of-sample annualized return as a percentage of its in-sample annualized return; blank when the in-sample annualized return is zero or negative.
+_Avoid_: efficiency ratio, robustness score
+
 **Result bundle**:
 The output folder of one run, holding the results page, variant pages, and trade charts.
 _Avoid_: report

@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import math
 from dataclasses import replace
 
+import numpy as np
 import pandas as pd
 import pytest
 
-from tester_framework.split import oos_cutoff
+from tester_framework.split import oos_cutoff, rank_variants, walk_forward_efficiency
 
 
 # 48 hourly UTC bars from Monday 2025-01-06 00:00. In New York with an 18:00 session start,
@@ -64,3 +66,71 @@ def test_fraction_cutoff_past_the_last_market_session_start_is_rejected(new_york
 def test_invalid_split_arguments_are_rejected(test_asset_cfg, kwargs, message):
     with pytest.raises(ValueError, match=message):
         oos_cutoff(INDEX, test_asset_cfg, **kwargs)
+
+
+def test_walk_forward_efficiency_matches_a_hand_calculation():
+    # In-sample: 100 -> 110 over 2 bars; out-of-sample: 110 -> 121 over 1 bar; 2 bars per year.
+    # IS annualized = 1.1 ** (2 / 2) - 1 = 10%; OOS annualized = 1.1 ** (2 / 1) - 1 = 21%; WFE = 210%.
+    assert walk_forward_efficiency(np.array([100.0, 105.0, 110.0, 121.0]), 2, 2) == pytest.approx(210.0)
+
+
+@pytest.mark.parametrize("curve", [[100.0, 100.0, 100.0, 120.0], [100.0, 95.0, 90.0, 120.0]])
+def test_walk_forward_efficiency_is_blank_for_zero_or_negative_in_sample_return(curve):
+    assert math.isnan(walk_forward_efficiency(np.array(curve), 2, 2))
+
+
+def _variants(rows):
+    return pd.DataFrame(
+        [
+            {"Strategy": strategy, "Asset": asset, "RR": rr, "Return": ret, "Return / DD": ret_dd, "Sharpe Ratio": sharpe,
+             "OOS Return": oos, "OOS Return / DD": oos, "OOS Sharpe": oos}
+            for strategy, asset, rr, ret, ret_dd, sharpe, oos in rows
+        ]
+    )
+
+
+def test_rank_variants_ranks_each_strategy_and_asset_on_the_chosen_metric_and_sorts_by_is_rank():
+    table = _variants(
+        [
+            ("a", "MGC", "1", 5.0, 1.0, 0.2, 3.0),
+            ("a", "MGC", "2", 4.0, 3.0, 0.1, 1.0),
+            ("a", "MGC", "3", 3.0, 2.0, 0.3, 2.0),
+            ("a", "MNQ", "1", 1.0, 9.0, 0.0, 0.0),
+            ("b", "MGC", "1", 1.0, 9.0, 0.0, 0.0),
+        ]
+    )
+
+    by_return_dd = rank_variants(table, "return_dd", 2)
+    assert list(zip(by_return_dd["Strategy"], by_return_dd["Asset"], by_return_dd["RR"], by_return_dd["IS Rank"])) == [
+        ("a", "MGC", "2", 1), ("a", "MGC", "3", 2), ("a", "MGC", "1", 3), ("a", "MNQ", "1", 1), ("b", "MGC", "1", 1)
+    ]
+    assert list(by_return_dd["OOS Rank"]) == [3, 2, 1, 1, 1]
+    assert list(by_return_dd["Selected"]) == [True, True, False, True, True]
+    assert list(rank_variants(table, "sharpe", 1)["RR"]) == ["3", "1", "2", "1", "1"]
+    assert list(rank_variants(table, "return", 1)["RR"]) == ["1", "2", "3", "1", "1"]
+
+
+def test_rank_variants_uses_net_of_gross_net_pairs_and_keeps_table_order_on_ties():
+    table = _variants(
+        [
+            ("a", "MGC", "1", (9.0, 1.0), (9.0, 1.0), 0.0, (0.0, 2.0)),
+            ("a", "MGC", "2", (1.0, 2.0), (1.0, 2.0), 0.0, (5.0, 2.0)),
+            ("a", "MGC", "3", (5.0, 2.0), (5.0, 2.0), 0.0, (0.0, 1.0)),
+        ]
+    )
+
+    ranked = rank_variants(table, "return", 5)
+    assert list(ranked["RR"]) == ["2", "3", "1"]
+    assert list(ranked["IS Rank"]) == [1, 2, 3]
+    # The OOS tie between RR 1 and RR 2 keeps the incoming table order: RR 1 came first.
+    assert list(ranked.sort_values("OOS Rank")["RR"]) == ["1", "2", "3"]
+    assert ranked["Selected"].all()
+
+
+def test_rank_variants_ranks_nan_last():
+    table = _variants([("a", "MGC", "1", math.nan, math.nan, math.nan, math.nan), ("a", "MGC", "2", -5.0, -5.0, -5.0, -5.0)])
+
+    ranked = rank_variants(table, "return_dd", 1)
+    assert list(zip(ranked["RR"], ranked["IS Rank"], ranked["OOS Rank"], ranked["Selected"])) == [
+        ("2", 1, 1, True), ("1", 2, 2, False)
+    ]

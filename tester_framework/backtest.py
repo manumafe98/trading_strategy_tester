@@ -10,6 +10,7 @@ import pandas as pd
 from .analytics import classify_outcome, trade_stats
 from .models import OPERATIONS, AssetConfig, ExitReason, Side
 from .sessions import SessionSpec, session_exit_bars
+from .split import walk_forward_efficiency
 from .settings import OOS_FINANCIAL_COLUMNS, SPLIT_COLUMNS
 from .utils import csv_items, decimal_places
 
@@ -543,6 +544,8 @@ def run_backtest(
     metrics.update({column: oos[source] for column, source in OOS_FINANCIAL_COLUMNS.items()})
     metrics["OOS Gross"] = oos["Gross"]
     metrics["OOS Net"] = oos["Net"]
+    gross_wfe = walk_forward_efficiency(gross_curve, oos_cutoff, bars_per_year)
+    metrics["WFE"] = (gross_wfe, walk_forward_efficiency(net_curve, oos_cutoff, bars_per_year)) if with_costs else gross_wfe
     # Trades belong to the period of their entry bar.
     metrics["OOS Trades"] = sum(1 for trade in trades if trade["entry_i"] >= oos_cutoff)
     metrics["Spanning"] = sum(1 for trade in trades if trade["entry_i"] < oos_cutoff <= trade["exit_i"])

@@ -10,8 +10,10 @@ DEFAULT_TIMEFRAMES = ["1h"]
 FINANCIAL_COLUMNS = ("Return", "Max DD", "Sharpe Ratio", "Return / DD")
 # Out-of-sample financial columns and the in-sample column each one mirrors.
 OOS_FINANCIAL_COLUMNS = {"OOS Return": "Return", "OOS Max DD": "Max DD", "OOS Sharpe": "Sharpe Ratio", "OOS Return / DD": "Return / DD"}
-SPLIT_COLUMNS = ("OOS Trades", *OOS_FINANCIAL_COLUMNS, "Spanning")
-COST_PAIR_COLUMNS = ("W", "BE", "L", "Win Rate", "Expectancy R", *FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS)
+SPLIT_COLUMNS = ("OOS Trades", *OOS_FINANCIAL_COLUMNS, "Spanning", "WFE", "IS Rank", "OOS Rank", "Selected")
+COST_PAIR_COLUMNS = ("W", "BE", "L", "Win Rate", "Expectancy R", *FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS, "WFE")
+DEFAULT_SELECT_BY = "return_dd"
+DEFAULT_SELECT_TOP = 5
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config"
 RESULTS_DIR = ROOT / "results"
@@ -75,6 +77,8 @@ def load_assets() -> dict[str, AssetConfig]:
 
 __all__ = [
     "CONFIG_DIR",
+    "DEFAULT_SELECT_BY",
+    "DEFAULT_SELECT_TOP",
     "DEFAULT_TIMEFRAMES",
     "COST_PAIR_COLUMNS",
     "FINANCIAL_COLUMNS",
