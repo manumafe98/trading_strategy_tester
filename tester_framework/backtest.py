@@ -10,7 +10,7 @@ import pandas as pd
 from .analytics import classify_outcome, trade_stats
 from .models import OPERATIONS, AssetConfig, ExitReason, Side
 from .sessions import SessionSpec, session_exit_bars
-from .split import walk_forward_efficiency
+from .split import entered_in_sample, walk_forward_efficiency
 from .settings import OOS_FINANCIAL_COLUMNS, SPLIT_COLUMNS
 from .utils import csv_items, decimal_places
 
@@ -535,7 +535,7 @@ def run_backtest(
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
     if oos_cutoff is None:
         return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
-    # Curve point c is the equity at the close of the last in-sample bar; both slices include it.
+    # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
     metrics = make_metrics(
         asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs, bars_per_year,
         discarded_signals, unresolved_trades,
@@ -546,9 +546,8 @@ def run_backtest(
     metrics["OOS Net"] = oos["Net"]
     gross_wfe = walk_forward_efficiency(gross_curve, oos_cutoff, bars_per_year)
     metrics["WFE"] = (gross_wfe, walk_forward_efficiency(net_curve, oos_cutoff, bars_per_year)) if with_costs else gross_wfe
-    # Trades belong to the period of their entry bar.
-    metrics["OOS Trades"] = sum(1 for trade in trades if trade["entry_i"] >= oos_cutoff)
-    metrics["Spanning"] = sum(1 for trade in trades if trade["entry_i"] < oos_cutoff <= trade["exit_i"])
+    metrics["OOS Trades"] = sum(1 for trade in trades if not entered_in_sample(trade, oos_cutoff))
+    metrics["Spanning"] = sum(1 for trade in trades if entered_in_sample(trade, oos_cutoff) and trade["exit_i"] >= oos_cutoff)
     return metrics, trades
 
 

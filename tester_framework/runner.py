@@ -11,6 +11,7 @@ from .backtest import add_trade_counts, run_backtest
 from .reports import write_trade_html
 from .sessions import filter_signals, session_label
 from .settings import FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS
+from .split import entered_in_sample
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
 
@@ -86,7 +87,7 @@ def _run_variant(
             gc.collect()
     analytics = analyze_trades(trades, exit_mode)
     # In split mode the trade-count columns describe the in-sample period: trades entered before the cutoff.
-    counted = trades if task["oos_cutoff"] is None else [trade for trade in trades if trade["entry_i"] < task["oos_cutoff"]]
+    counted = trades if task["oos_cutoff"] is None else [trade for trade in trades if entered_in_sample(trade, task["oos_cutoff"])]
     row = add_trade_counts(metrics, counted, task["operation"], task["with_costs"])
     if task["with_costs"]:
         for column in FINANCIAL_COLUMNS:

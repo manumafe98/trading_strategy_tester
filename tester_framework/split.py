@@ -10,11 +10,13 @@ import pandas as pd
 from .data import session_labels
 from .models import AssetConfig
 from .settings import OOS_FINANCIAL_COLUMNS
+from .utils import net_value
 
 
 __all__ = [
     "SELECT_BY",
     "Split",
+    "entered_in_sample",
     "oos_cutoff",
     "rank_variants",
     "split_tags",
@@ -83,6 +85,11 @@ def oos_cutoff(
     return cutoff
 
 
+def entered_in_sample(trade: dict, cutoff: int) -> bool:
+    """Trades belong to the period of their entry bar."""
+    return trade["entry_i"] < cutoff
+
+
 def split_tags(split: Split) -> tuple[str, str]:
     def period(name: str, bounds: tuple[pd.Timestamp, pd.Timestamp]) -> str:
         start, end = (pd.Timestamp(value).strftime("%Y-%m-%d %H:%M") for value in bounds)
@@ -131,7 +138,7 @@ def rank_variants(table: pd.DataFrame, select_by: str, select_top: int) -> pd.Da
     groups = ["Strategy", "Asset"]
 
     def rank(source: str) -> pd.Series:
-        values = table[source].map(lambda value: float(value[-1] if isinstance(value, (tuple, list)) else value))
+        values = table[source].map(lambda value: float(net_value(value)))
         ordered = values.sort_values(ascending=False, na_position="last", kind="stable")
         return table.loc[ordered.index].groupby(groups, sort=False).cumcount().add(1).reindex(table.index)
 
