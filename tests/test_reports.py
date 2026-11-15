@@ -444,10 +444,10 @@ def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(m
         "OOS Max DDGross / Net",
         "OOS SharpeGross / Net",
         "OOS Ret / DDGross / Net",
-        "Spanning",
-        "WFEGross / Net",
         "IS Rank",
         "OOS Rank",
+        "WFEGross / Net",
+        "Spanning",
         "Selected",
         "Details",
     ]

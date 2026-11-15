@@ -11,7 +11,7 @@ from .models import AssetConfig
 from .settings import ROOT, TIMEFRAMES
 
 
-__all__ = ["load_data", "normalize_data", "time_period_args"]
+__all__ = ["load_data", "normalize_data", "session_labels", "time_period_args"]
 OHLCV = ["open", "high", "low", "close", "volume"]
 RESAMPLE_AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
 LOCAL_RESAMPLE_RULES = {
@@ -79,7 +79,7 @@ def _session_offset(session_start: str) -> pd.Timedelta:
     return pd.Timedelta(hours=value.hour, minutes=value.minute, seconds=value.second)
 
 
-def _session_labels(index, timezone: str, session_start: str) -> pd.DatetimeIndex:
+def session_labels(index, timezone: str, session_start: str) -> pd.DatetimeIndex:
     local = pd.DatetimeIndex(pd.to_datetime(index, utc=True)).tz_convert(timezone).tz_localize(None)
     return (local - _session_offset(session_start)).normalize()
 
@@ -180,7 +180,7 @@ def local_csv_path(asset: str, data_dir: Path) -> Path:
 
 def _continuous_futures(df: pd.DataFrame, timezone: str, session_start: str) -> pd.DataFrame:
     work = df.copy()
-    work["_session"] = _session_labels(work.index, timezone, session_start)
+    work["_session"] = session_labels(work.index, timezone, session_start)
     volume = work.groupby(["_session", "symbol"])["volume"].sum().unstack(fill_value=0)
     available = work.groupby(["_session", "symbol"]).size().unstack(fill_value=0).gt(0)
     ranked = volume.shift(1).where(available)

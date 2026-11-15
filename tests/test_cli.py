@@ -683,10 +683,10 @@ def test_split_run_sends_cutoff_to_workers_and_shows_split_columns_and_ranges(mo
     assert [task["oos_cutoff"] for task in submitted] == [24]
     (args,) = written[0]
     assert args[2][-10:] == [
-        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "Spanning", "WFE", "IS Rank", "OOS Rank", "Selected"
+        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected"
     ]
     (split,) = args[3]
-    assert (split.asset, split.timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
+    assert (split.asset, split.execution_timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
     out = capsys.readouterr().out
     assert "TEST 1h in-sample 2025-01-01 00:00 to 2025-01-01 23:00 UTC" in out
     assert "TEST 1h out-of-sample 2025-01-02 00:00 to 2025-01-02 23:00 UTC" in out
@@ -771,7 +771,7 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     cli.run(_config(risk_reward_ratio="1,2,3", oos_start="2025-01-02", select_top=2))
 
     table, _config_arg, columns, _splits = written[0]
-    assert columns[-4:] == ["WFE", "IS Rank", "OOS Rank", "Selected"]
+    assert columns[-5:] == ["IS Rank", "OOS Rank", "WFE", "Spanning", "Selected"]
     assert list(table["RR"]) == ["2", "3", "1"]
     assert list(table["IS Rank"]) == [1, 2, 3]
     assert list(table["OOS Rank"]) == [3, 1, 2]

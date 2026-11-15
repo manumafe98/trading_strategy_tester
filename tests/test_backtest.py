@@ -684,7 +684,7 @@ def test_result_columns_follow_operation_and_session():
 
 def test_result_columns_append_split_columns_only_in_split_mode():
     split_columns = [
-        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "Spanning", "WFE", "IS Rank", "OOS Rank", "Selected",
+        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected",
     ]
     assert result_columns("all", split=True) == result_columns("all") + split_columns
     assert not set(split_columns) & set(result_columns("all", include_session=True))

@@ -7,7 +7,7 @@ from datetime import date
 import numpy as np
 import pandas as pd
 
-from .data import _session_labels
+from .data import session_labels
 from .models import AssetConfig
 from .settings import OOS_FINANCIAL_COLUMNS
 
@@ -31,15 +31,15 @@ class Split:
     """The cutoff of one asset and execution timeframe, with the bar times either side of it."""
 
     asset: str
-    timeframe: str
+    execution_timeframe: str
     cutoff: int
     bar_count: int
     in_sample: tuple[pd.Timestamp, pd.Timestamp]
     out_of_sample: tuple[pd.Timestamp, pd.Timestamp]
 
     @classmethod
-    def from_index(cls, asset: str, timeframe: str, index: pd.DatetimeIndex, cutoff: int) -> Split:
-        return cls(asset, timeframe, cutoff, len(index), (index[0], index[cutoff - 1]), (index[cutoff], index[-1]))
+    def from_index(cls, asset: str, execution_timeframe: str, index: pd.DatetimeIndex, cutoff: int) -> Split:
+        return cls(asset, execution_timeframe, cutoff, len(index), (index[0], index[cutoff - 1]), (index[cutoff], index[-1]))
 
 
 def validate_split_args(oos_start: str | None, oos_fraction: float | None) -> None:
@@ -67,7 +67,7 @@ def oos_cutoff(
     if oos_start is None and oos_fraction is None:
         raise ValueError("A split needs --oos_start or --oos_fraction")
     validate_split_args(oos_start, oos_fraction)
-    labels = _session_labels(index, asset_cfg.session_timezone, asset_cfg.session_start)
+    labels = session_labels(index, asset_cfg.session_timezone, asset_cfg.session_start)
     if oos_start is not None:
         # A market session label is the local date its session starts on.
         cutoff = int(labels.searchsorted(pd.Timestamp(oos_start), side="left"))
@@ -85,7 +85,7 @@ def oos_cutoff(
 def split_tags(split: Split) -> tuple[str, str]:
     def period(name: str, bounds: tuple[pd.Timestamp, pd.Timestamp]) -> str:
         start, end = (pd.Timestamp(value).strftime("%Y-%m-%d %H:%M") for value in bounds)
-        return f"{split.asset} {split.timeframe} {name} {start} to {end} UTC"
+        return f"{split.asset} {split.execution_timeframe} {name} {start} to {end} UTC"
 
     return period("in-sample", split.in_sample), period("out-of-sample", split.out_of_sample)
 
