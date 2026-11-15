@@ -62,7 +62,7 @@ def normalize_data(df: pd.DataFrame) -> pd.DataFrame:
         raise ValueError(f"Data missing columns: {', '.join(missing)}")
     # Naive stamps are UTC; offset stamps (even mixed across DST) convert to naive UTC.
     idx = pd.to_datetime(df.index, utc=True).tz_convert(None)
-    df = df[OHLCV]
+    df = df[OHLCV + (["contract"] if "contract" in df else [])]
     df.index = idx
     df.index.name = "time"
     df = df.dropna(subset=["open", "high", "low", "close"]).sort_index()
@@ -86,6 +86,7 @@ def session_labels(index, timezone: str, session_start: str) -> pd.DatetimeIndex
 
 def resample_data(df: pd.DataFrame, rule: str | None, asset_cfg: AssetConfig | None = None) -> pd.DataFrame:
     if rule:
+        agg = RESAMPLE_AGG | ({"contract": "last"} if "contract" in df else {})
         if rule == "1D" and asset_cfg is not None:
             df = df.copy()
             offset = _session_offset(asset_cfg.session_start)
@@ -93,7 +94,7 @@ def resample_data(df: pd.DataFrame, rule: str | None, asset_cfg: AssetConfig | N
                 pd.DatetimeIndex(df.index).tz_localize("UTC").tz_convert(asset_cfg.session_timezone).tz_localize(None)
                 - offset
             )
-            df = df.resample(rule, closed="left", label="left").agg(RESAMPLE_AGG)
+            df = df.resample(rule, closed="left", label="left").agg(agg)
             df.index = (
                 (df.index + offset)
                 .tz_localize(asset_cfg.session_timezone, ambiguous="raise", nonexistent="raise")
@@ -101,7 +102,7 @@ def resample_data(df: pd.DataFrame, rule: str | None, asset_cfg: AssetConfig | N
                 .tz_localize(None)
             )
         else:
-            df = df.resample(rule).agg(RESAMPLE_AGG)
+            df = df.resample(rule).agg(agg)
         df = df.dropna(subset=["open", "high", "low", "close"])
     return df
 
@@ -187,7 +188,8 @@ def _continuous_futures(df: pd.DataFrame, timezone: str, session_start: str) -> 
     valid = ranked.notna().any(axis=1)
     chosen = ranked[valid].idxmax(axis=1).rename("_chosen")
     work = work.join(chosen, on="_session")
-    work = work[work["symbol"] == work["_chosen"]].drop(columns=["symbol", "_session", "_chosen"])
+    work = work[work["symbol"] == work["_chosen"]].drop(columns=["symbol", "_session"])
+    work = work.rename(columns={"_chosen": "contract"})
     if work.index.has_duplicates:
         raise ValueError("continuous futures selection produced duplicate timestamps")
     return work

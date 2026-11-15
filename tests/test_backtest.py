@@ -1223,3 +1223,55 @@ def test_without_cutoff_metrics_have_no_split_values(test_asset_cfg):
 def test_backtest_rejects_invalid_cutoffs(test_asset_cfg, overrides, message):
     with pytest.raises(ValueError, match=message):
         _split_run(test_asset_cfg, **overrides)
+
+
+def _contract_bars(bars):
+    """Bars keyed by UTC start time: {"2025-01-02 13:00": (open, high, low, close, contract)}."""
+    idx = pd.DatetimeIndex([pd.Timestamp(time) for time in bars])
+    data = pd.DataFrame(list(bars.values()), index=idx, columns=["open", "high", "low", "close", "contract"])
+    return data.astype({column: float for column in ("open", "high", "low", "close")})
+
+
+# FUTH5 trades 50 points above FUTZ4; the roll is the 22:00 bar, after the 21:00-22:00 break.
+ROLL_BARS = {
+    "2025-01-02 17:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
+    "2025-01-02 18:00": (100.0, 100.5, 100.0, 100.5, "FUTZ4"),
+    "2025-01-02 19:00": (100.4, 100.8, 100.2, 100.5, "FUTZ4"),
+    "2025-01-02 22:00": (150.0, 150.0, 150.0, 150.0, "FUTH5"),
+}
+
+
+def test_roll_exit_closes_open_trade_at_last_bar_before_roll(cost_asset_cfg):
+    data = _contract_bars(ROLL_BARS)
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], cost_asset_cfg, with_costs=True)
+
+    (trade,) = trades
+    assert trade["exit_reason"] == ExitReason.ROLL
+    assert trade["exit_time"] == pd.Timestamp("2025-01-02 19:00")
+    # 100 contracts entered at 100 and closed at 100.5; 0.2 points per side and commission 0.1 x 100 x 2.
+    assert trade["exit"] == 100.5
+    assert trade["gross_pnl"] == pytest.approx(50.0)
+    assert trade["net_pnl"] == pytest.approx(-10.0)
+
+
+def test_data_without_contract_column_has_no_roll_exit(test_asset_cfg):
+    data = _contract_bars(ROLL_BARS).drop(columns="contract")
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg)
+
+    # The contract gap reaches the trade as a gap through the 101 target.
+    (trade,) = trades
+    assert (trade["exit_reason"], trade["exit"]) == (ExitReason.TARGET, 150.0)
+
+
+@pytest.mark.parametrize(("fill", "discarded"), [("20:00", 1), ("19:59", 0)])
+def test_signal_filling_in_last_60_minutes_before_roll_is_discarded(test_asset_cfg, fill, discarded):
+    # 1m bars of FUTZ4 end with the 20:59 bar (closing 21:00); the market reopens on FUTH5 at 22:00.
+    bars = {str(time): (100.0, 100.0, 100.0, 100.0, "FUTZ4") for time in pd.date_range("2025-01-02 19:57", "2025-01-02 20:59", freq="1min")}
+    bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
+    data = _contract_bars(bars)
+    signal_time = pd.Timestamp(f"2025-01-02 {fill}") - pd.Timedelta(minutes=1)
+
+    metrics, trades = _run(data, [{"time": signal_time, "side": "long", "stop": 99.0}], test_asset_cfg)
+
+    assert metrics["Discarded"] == discarded
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)

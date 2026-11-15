@@ -17,6 +17,9 @@ from .types import VariantBatchTask
 
 
 def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, str, tuple[str, ...]]:
+    if "contract" in data:
+        # The cache is float-only and a roll needs only contract changes, so contracts become codes.
+        data = data.assign(contract=pd.factorize(data["contract"])[0])
     values_path = Path(cache_dir) / f"{cache_id}_values.npy"
     index_path = Path(cache_dir) / f"{cache_id}_index.npy"
     values = np.lib.format.open_memmap(values_path, mode="w+", dtype="float64", shape=data.shape)

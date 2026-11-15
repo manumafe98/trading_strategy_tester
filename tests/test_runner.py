@@ -313,3 +313,16 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
             "*1 failed*",
         ]
     )
+
+
+def test_run_variants_closes_trades_at_roll_on_cached_contract_data(monkeypatch, tmp_path, test_asset_cfg):
+    # FUTH5 trades 50 points above FUTZ4, so the 11:00 roll bar would otherwise gap through the target.
+    data = _target_bars([100.0, 100.0, 100.0, 150.0])
+    data.iloc[3, :4] = 150.0
+    data["contract"] = ["FUTZ4", "FUTZ4", "FUTZ4", "FUTH5"]
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
+
+    row = runner.run_variants(_task(data, tmp_path, test_asset_cfg))[0]
+
+    (trade,) = decode_analytics(row["_analytics"])["trades"]
+    assert (trade["exit_reason"], trade["exit_time"]) == ("roll", pd.Timestamp("2025-01-02 10:00"))

@@ -19,6 +19,7 @@ class ExitReason(StrEnum):
     STOP = "stop"
     TARGET = "target"
     SESSION = "session"
+    ROLL = "roll"
 
 
 @dataclass(frozen=True)

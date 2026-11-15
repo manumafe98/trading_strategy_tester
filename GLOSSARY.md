@@ -82,12 +82,20 @@ How the engine takes profit: fixed (one target), trailing (a stop that follows t
 An exit rule that closes an open trade at the end of its variant's session window.
 _Avoid_: EOD exit, end-of-day exit
 
+**Roll**:
+The first bar of a market session where the chosen contract of a continuous series changes.
+_Avoid_: rollover, contract switch
+
+**Roll exit**:
+The forced close of a trade at the close of the last bar before a roll.
+_Avoid_: rollover exit
+
 **Gap exit**:
 An exit filled at a bar's open because the price gapped through the stop or a target.
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, a fill in the 60 minutes before a roll, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
 
 **Unresolved trade**:
@@ -121,5 +129,5 @@ _Avoid_: max run-up
 The part of a trade's MFE R not kept at exit.
 
 **Continuous series**:
-An unadjusted futures price series that uses, for each market session, the contract with the highest volume in the previous market session.
+An unadjusted futures price series that uses, for each market session, the contract with the highest volume in the previous market session. Roll exits keep the price difference between contracts out of trades; indicators still see it.
 _Avoid_: back-adjusted series, front month

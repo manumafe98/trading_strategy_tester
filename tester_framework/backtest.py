@@ -17,6 +17,7 @@ from .utils import csv_items, decimal_places
 
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
+ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
 
 __all__ = ["add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
 
@@ -416,6 +417,12 @@ def run_backtest(
     # With a session exit, open trades close at the close of their session window's last bar.
     if session_exit is not None:
         in_window, window_last_bar = session_exit_bars(data.index, session_exit)
+    # A roll is a bar whose contract differs from the previous bar's; open trades close at the bar before it.
+    roll_last_bar = np.zeros(bar_count, dtype=bool)
+    if "contract" in data.columns:
+        contracts = data["contract"].to_numpy()
+        roll_last_bar[:-1] = contracts[1:] != contracts[:-1]
+    roll_last_times = data.index[roll_last_bar]
     day_filter = set(days)
     month_filter = set(months)
     try:
@@ -446,6 +453,11 @@ def run_backtest(
             continue
         # A trade must open inside the window, before the window's last close.
         if session_exit is not None and (not in_window[entry_i] or (close_entry and window_last_bar[entry_i])):
+            discarded_signals += 1
+            continue
+        # No entries in the 60 minutes before the last bar ahead of a roll closes.
+        next_roll = roll_last_times.searchsorted(entry_time)
+        if next_roll < len(roll_last_times) and roll_last_times[next_roll] - entry_time < ROLL_ENTRY_BLOCK:
             discarded_signals += 1
             continue
 
@@ -503,6 +515,9 @@ def run_backtest(
                 break
             if session_exit is not None and window_last_bar[i]:
                 open_trade.close(path[-1], i, bar_time, ExitReason.SESSION)
+                break
+            if roll_last_bar[i]:
+                open_trade.close(path[-1], i, bar_time, ExitReason.ROLL)
                 break
             bar_gross_equity[i], bar_net_equity[i] = open_trade.marked_equity(path[-1], current_gross, current_net)
 
