@@ -327,24 +327,17 @@ def _write_variant_pages(
     session_text = f' {session}' if pd.notna(session) else ""
     title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
-    trades = analytics["managed"]["trades"] if row["Exit Mode"] != "fixed" else []
+    trades = analytics["trades"]
     # Rows carry their asset's cutoff only in split mode.
     oos_cutoff = row.get("_oos_cutoff")
     oos_cutoff = int(oos_cutoff) if oos_cutoff is not None and pd.notna(oos_cutoff) else None
+    mode = html_escape(str(row["Exit Mode"]).title())
     page_count = max(1, (len(trades) + TRADE_ROWS_PER_PAGE - 1) // TRADE_ROWS_PER_PAGE)
     for page in range(1, page_count + 1):
         start = (page - 1) * TRADE_ROWS_PER_PAGE
         stop = min(start + TRADE_ROWS_PER_PAGE, len(trades))
-        page_trades = trades[start:stop]
-        pagination = (
-            _pagination(variant_id, page, page_count, start, stop, len(trades))
-            if row["Exit Mode"] != "fixed"
-            else ""
-        )
-        trade_section = ""
-        if row["Exit Mode"] != "fixed":
-            mode = html_escape(str(analytics["managed"]["Mode"]).title())
-            trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(page_trades, oos_cutoff)}</section>'
+        pagination = _pagination(variant_id, page, page_count, start, stop, len(trades))
+        trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(trades[start:stop], oos_cutoff)}</section>'
         html = template.substitute(
             title=html_escape(title),
             result=html_escape(result),

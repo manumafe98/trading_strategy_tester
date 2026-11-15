@@ -194,11 +194,12 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
         "month": [{"Period": "January", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
         "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}],
         "Gap Exits": 0,
+        "trades": [],
     }
     table = pd.DataFrame(
         [
             {"Strategy": "ema50", "Asset": "MES", "TF": "5m", "Session": "london", "RR": "1", "Exit Mode": "fixed", "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5, "_risk_pct": 0.5, "_analytics": analytics, "_strategy_metrics": {}},
-            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0, "trades": []}}, "_strategy_metrics": {}},
+            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0}, "trades": []}, "_strategy_metrics": {}},
         ]
     )
     config = RunConfig(
@@ -225,6 +226,8 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     assert 'id="filter-match-count" aria-live="polite">2 of 2 variants' in html
     assert "Entry weekday (UTC)" in fixed
     assert "Managed trades" not in fixed
+    assert "Trailing summary" not in fixed
+    assert "Fixed trades" in fixed
     assert "Trailing summary" in trailing
     assert "Trailing trades" in trailing
     assert "No trades" in trailing
@@ -272,8 +275,8 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
             "Avg Realized R": 2.0,
             "Avg MFE R": 2.5,
             "Avg Giveback R": 0.5,
-            "trades": trades,
         },
+        "trades": trades,
     }
     table = pd.DataFrame(
         [
@@ -387,7 +390,7 @@ def test_results_index_shows_session_column_and_gross_net_pairs(monkeypatch, tmp
                 "Max DD": (8.0, 2.5),
                 "Sharpe Ratio": (7.0, math.nan),
                 "Return / DD": (6.0, 4.5),
-                "_analytics": {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}], "Gap Exits": 0},
+                "_analytics": {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [{"Period": "2025", "Trades": 1, "Wins": 1, "BE": 0, "Losses": 0, "Win Rate": 100.0}], "Gap Exits": 0, "trades": []},
                 "_strategy_metrics": {},
             }
         ]
@@ -412,7 +415,7 @@ def test_results_index_shows_session_column_and_gross_net_pairs(monkeypatch, tmp
 
 
 def _split_table():
-    analytics = {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [], "Gap Exits": 0}
+    analytics = {"outcomes": [{"Group": "All", "Trades": 0, "Wins": 0, "BE": 0, "Losses": 0, "Win Rate": 0.0, "Avg Win R": 0.0, "Avg Loss R": 0.0, "Expectancy R": 0.0, "Max Losing Streak": 0, "Avg Duration": "0 days 00:00:00", "Median Duration": "0 days 00:00:00"}], "weekday": [], "month": [], "year": [], "Gap Exits": 0, "trades": []}
     return pd.DataFrame(
         [
             {

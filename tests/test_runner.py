@@ -63,7 +63,7 @@ def test_zero_trade_html_skips_writer_and_keeps_empty_chart_cell(
 
     row = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "trailing"),)))[0]
 
-    trade = decode_analytics(row["_analytics"])["managed"]["trades"][0]
+    trade = decode_analytics(row["_analytics"])["trades"][0]
     assert trade["chart_path"] is None
     assert "<td>-</td>" in reports._trade_table([trade])
 
@@ -77,7 +77,7 @@ def test_trade_html_limit_charts_first_trades_and_keeps_all_trades(monkeypatch, 
 
     row = runner.run_variants(_task(data, tmp_path, test_asset_cfg, variants=((1, "trailing"),), trade_html=2))[0]
 
-    trades = decode_analytics(row["_analytics"])["managed"]["trades"]
+    trades = decode_analytics(row["_analytics"])["trades"]
     assert row["Trades"] == 3
     assert [trade["chart_path"] is not None for trade in trades] == [True, True, False]
     assert len(list(trades_dir.glob("*.html"))) == 2
@@ -138,7 +138,7 @@ def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
     # Engine-owned keys win over same-named signal columns; NA columns are not copied.
     assert trade["target"] == 101.0
     assert "note" not in trade
-    stored = decode_analytics(row["_analytics"])["managed"]["trades"][0]
+    stored = decode_analytics(row["_analytics"])["trades"][0]
     assert stored["vwap"] == 100.25
     assert reports._trade_table([stored]).count('<tr class="trade-row">') == 1
 
@@ -152,9 +152,9 @@ def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_e
 
     held, exited = (runner.run_variants({**task, "session_exit": flag})[0] for flag in (False, True))
 
-    assert decode_analytics(held["_analytics"])["managed"]["trades"][0]["exit_reason"] == "target"
+    assert decode_analytics(held["_analytics"])["trades"][0]["exit_reason"] == "target"
     analytics = decode_analytics(exited["_analytics"])
-    (trade,) = analytics["managed"]["trades"]
+    (trade,) = analytics["trades"]
     assert (trade["exit_reason"], trade["exit_time"]) == ("session", pd.Timestamp("2025-01-02 09:00"))
     assert analytics["managed"]["Session Completions"] == 1
     assert "100 @ +0.00R session" in reports._trade_table([trade])
@@ -177,22 +177,23 @@ def test_split_row_counts_in_sample_trades_by_entry_and_pairs_oos_metrics(monkey
     assert decode_analytics(row["_analytics"])["outcomes"][0]["Trades"] == 3
 
 
+@pytest.mark.parametrize("exit_mode", ["fixed", "trailing"])
 @pytest.mark.parametrize("oos_cutoff", [3, None])
 def test_variant_page_trade_rows_show_period_by_entry_bar_only_in_split_mode(
-    monkeypatch, tmp_path, test_asset_cfg, oos_cutoff
+    monkeypatch, tmp_path, test_asset_cfg, oos_cutoff, exit_mode
 ):
     # Longs enter at bars 1 and 4; the first reaches its target on bar 3, the cutoff, so it spans the split.
     data = _target_bars([100.0, 100.0, 100.0, 102.0, 100.0, 102.0])
     signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 3)])
     monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
     monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path / "results")
-    task = _task(data, tmp_path, test_asset_cfg, variants=((1, "trailing"),), oos_cutoff=oos_cutoff)
+    task = _task(data, tmp_path, test_asset_cfg, variants=((1, exit_mode),), oos_cutoff=oos_cutoff)
     table = pd.DataFrame(runner.run_variants(task))
-    config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "1", "trailing", "1", 10_000, False, None)
+    config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "1", exit_mode, "1", 10_000, False, None)
 
     page = (reports.write_results_html(table, config).parent / "variants" / "000000.html").read_text(encoding="utf-8")
 
-    trade_table = page[page.index("<h2>Trailing trades</h2>"):]
+    trade_table = page[page.index(f"<h2>{exit_mode.title()} trades</h2>"):]
     rows = re.findall(r'<tr class="trade-row">(.*?)</tr>', trade_table, re.S)
     assert len(rows) == 2
     if oos_cutoff is None:
