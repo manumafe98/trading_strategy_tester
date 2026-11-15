@@ -15,9 +15,9 @@ from .analytics import decode_analytics
 from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
 from .models import Side
 from .settings import (
-    COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
+    COST_PAIR_COLUMNS, DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
-from .split import Split, split_tags
+from .split import SELECT_BY, Split, split_tags
 from .utils import clean_exit_name
 
 
@@ -134,8 +134,13 @@ def format_metric(column: str, value: MetricValue) -> str:
     if isinstance(value, (tuple, list)):
         return " / ".join(format_metric(column, item) for item in value)
     column = OOS_FINANCIAL_COLUMNS.get(column, column)
+    if column == "Selected":
+        return "yes" if value else ""
     if isinstance(value, (float, int)) and not math.isfinite(float(value)):
-        return "N/A"
+        # WFE is blank when the in-sample annualized return is not positive.
+        return "" if column == "WFE" else "N/A"
+    if column == "WFE":
+        return f"{float(value):.2f}%"
     if column in {"Return", "Max DD"}:
         prefix = "+" if column == "Return" and float(value) > 0 else ""
         return f"{prefix}{float(value):.2f}%"
@@ -488,6 +493,15 @@ def write_results_html(
         tags.append(f'<span class="tag">first {config.max_trades} closed trades per variant</span>')
     for split in splits or ():
         tags.extend(f'<span class="tag">{html_escape(tag)}</span>' for tag in split_tags(split))
+    if splits:
+        tags.extend(
+            f'<span class="tag">{html_escape(tag)}</span>'
+            for tag in (
+                f"ranked by in-sample {SELECT_BY[config.select_by or DEFAULT_SELECT_BY]}",
+                f"top {config.select_top or DEFAULT_SELECT_TOP} selected per strategy and asset",
+                f"{len(table)} variants",
+            )
+        )
     if config.trade_html == 0:
         tags.append('<span class="tag">trade charts off</span>')
     elif config.trade_html is not None:

@@ -20,6 +20,7 @@ from tester_framework.backtest import (
 )
 from tester_framework.models import ExitReason, Side
 from tester_framework.sessions import parse_sessions
+from tester_framework.split import walk_forward_efficiency
 
 
 def test_risk_reward_ratios_rejects_non_numeric():
@@ -682,7 +683,9 @@ def test_result_columns_follow_operation_and_session():
 
 
 def test_result_columns_append_split_columns_only_in_split_mode():
-    split_columns = ["OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "Spanning"]
+    split_columns = [
+        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "Spanning", "WFE", "IS Rank", "OOS Rank", "Selected",
+    ]
     assert result_columns("all", split=True) == result_columns("all") + split_columns
     assert not set(split_columns) & set(result_columns("all", include_session=True))
 
@@ -1169,6 +1172,19 @@ def test_split_metrics_are_the_curve_metrics_of_each_slice_gross_and_net(cost_as
     assert metrics["Return"] == metrics["Net"]["Return"] == -0.7
     assert metrics["OOS Return"] == metrics["OOS Net"]["Return"]
     assert metrics["OOS Sharpe"] == metrics["OOS Net"]["Sharpe Ratio"]
+
+
+def test_split_metrics_carry_walk_forward_efficiency_gross_and_net(cost_asset_cfg):
+    metrics, _ = _split_run(cost_asset_cfg, with_costs=True, oos_cutoff=4)
+
+    gross = np.array([10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100], dtype=float)
+    gross_wfe, net_wfe = metrics["WFE"]
+    assert gross_wfe == walk_forward_efficiency(gross, 4, 1716) > 0
+    # Net loses 0.7% in sample, so its WFE is blank.
+    assert math.isnan(net_wfe)
+    without_costs, _ = _split_run(cost_asset_cfg, oos_cutoff=4)
+    # Without costs WFE is one Gross value, not a pair.
+    assert isinstance(without_costs["WFE"], float) and without_costs["WFE"] > 0
 
 
 def test_out_of_sample_curve_starts_from_equity_at_last_in_sample_close(test_asset_cfg):

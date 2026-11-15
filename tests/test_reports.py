@@ -419,7 +419,8 @@ def _split_table():
                 "Strategy": "ema50", "Asset": "MGC", "TF": "1h", "RR": "1", "Exit Mode": "fixed",
                 "Return": (2.0, 1.5), "Max DD": (1.0, 1.25), "Sharpe Ratio": (0.5, 0.25), "Return / DD": (2.0, 1.2),
                 "OOS Trades": 7, "OOS Return": (-3.0, -4.5), "OOS Max DD": (5.0, 6.0), "OOS Sharpe": (math.nan, -1.0),
-                "OOS Return / DD": (-0.6, -0.75), "Spanning": 2,
+                "OOS Return / DD": (-0.6, -0.75), "Spanning": 2, "WFE": (120.5, math.nan),
+                "IS Rank": 1, "OOS Rank": 2, "Selected": True,
                 "_analytics": analytics, "_strategy_metrics": {},
             }
         ]
@@ -437,13 +438,17 @@ def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(m
 
     header_row = re.search(r"<thead><tr>(.*?)</tr></thead>", html, re.S).group(1)
     headers = [re.sub(r"<[^>]+>", "", value) for value in re.findall(r"<th[^>]*>(.*?)</th>", header_row)]
-    assert headers[-7:] == [
+    assert headers[-11:] == [
         "OOS Trades",
         "OOS ReturnGross / Net",
         "OOS Max DDGross / Net",
         "OOS SharpeGross / Net",
         "OOS Ret / DDGross / Net",
         "Spanning",
+        "WFEGross / Net",
+        "IS Rank",
+        "OOS Rank",
+        "Selected",
         "Details",
     ]
     assert header_row.count('class="sort-button"') == 8
@@ -452,7 +457,30 @@ def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(m
     assert '<td class="c" data-sort-value="-4.5"><span class="pill bad">' in html
     assert "MGC 1h in-sample 2021-01-03 23:00 to 2021-06-30 20:00 UTC" in html
     assert "MGC 1h out-of-sample 2021-07-01 22:00 to 2021-12-30 21:00 UTC" in html
-    assert "OOS" not in plain and "in-sample" not in plain
+    # Net WFE is blank: its in-sample annualized return was not positive.
+    assert '<span class="pill plain">120.50% / </span>' in html
+    assert '<span class="pill plain">yes</span>' in html
+    assert "ranked by in-sample Return / DD" in html
+    assert "top 5 selected per strategy and asset" in html
+    assert "1 variants" in html
+    assert "OOS" not in plain and "in-sample" not in plain and "selected per strategy" not in plain
+
+
+def test_results_page_header_names_the_chosen_ranking_metric_and_top_n(monkeypatch, tmp_path):
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
+    config = RunConfig(
+        ("ema50",), "MGC", "1h", None, "2021", "local", "all", "1", "fixed", "1", 10_000, True, None,
+        oos_start="2021-07-01", select_by="sharpe", select_top=2,
+    )
+    index = pd.DatetimeIndex(["2021-01-03 23:00", "2021-06-30 20:00", "2021-07-01 22:00", "2021-12-30 21:00"])
+    table = pd.concat([_split_table(), _split_table()], ignore_index=True)
+
+    html = reports.write_results_html(table, config, result_columns("all", split=True), [Split.from_index("MGC", "1h", index, 2)])
+
+    text = html.read_text(encoding="utf-8")
+    assert "ranked by in-sample Sharpe Ratio" in text
+    assert "top 2 selected per strategy and asset" in text
+    assert "2 variants" in text
 
 
 def test_reset_output_dirs_empties_folders_inside_root(monkeypatch, tmp_path):

@@ -19,8 +19,8 @@ from .models import OPERATIONS
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
-from .split import Split, oos_cutoff, split_tags, validate_split_args
-from .settings import DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
+from .split import SELECT_BY, Split, oos_cutoff, rank_variants, split_tags, validate_split_args
+from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
 from .utils import csv_items
@@ -257,6 +257,14 @@ def run(config: RunConfig) -> None:
     split_mode = config.oos_start is not None or config.oos_fraction is not None
     if split_mode and config.max_trades is not None:
         raise ValueError("--max_trades cannot be combined with a split")
+    if not split_mode and (config.select_by is not None or config.select_top is not None):
+        raise ValueError("--select_by and --select_top need --oos_start or --oos_fraction")
+    if config.select_by is not None and config.select_by not in SELECT_BY:
+        raise ValueError(f"--select_by must be one of {', '.join(SELECT_BY)}, got: {config.select_by}")
+    if config.select_top is not None and (
+        isinstance(config.select_top, bool) or not isinstance(config.select_top, int) or config.select_top < 1
+    ):
+        raise ValueError("--select_top must be a positive integer")
     if config.trade_html is not None and (
         isinstance(config.trade_html, bool) or not isinstance(config.trade_html, int) or config.trade_html < 0
     ):
@@ -399,6 +407,9 @@ def run(config: RunConfig) -> None:
             table["_strategy_order"] = table["Strategy"].map(strategy_order)
             table["_asset_order"] = table["Asset"].map(order)
             table = table.sort_values(["_strategy_order", "_asset_order", "_sort_return"], ascending=[True, True, False]).drop(columns=["_strategy_order", "_asset_order"])
+            if split_mode:
+                # Ranking needs every variant row, so it happens here rather than in the workers.
+                table = rank_variants(table, config.select_by or DEFAULT_SELECT_BY, config.select_top or DEFAULT_SELECT_TOP)
         console = table.reindex(columns=columns).copy()
         for column in console.columns:
             console[column] = console[column].map(lambda value, column=column: format_metric(column, value))
@@ -454,6 +465,17 @@ def parser() -> argparse.ArgumentParser:
         help="split the period: hold back the latest fraction F (0-1) of bars as the out-of-sample period",
     )
     p.add_argument(
+        "--select_by",
+        choices=tuple(SELECT_BY),
+        help=f"split mode: in-sample metric that ranks variants per strategy and asset (default {DEFAULT_SELECT_BY})",
+    )
+    p.add_argument(
+        "--select_top",
+        type=int,
+        metavar="N",
+        help=f"split mode: mark the top N in-sample variants per strategy and asset as selected (default {DEFAULT_SELECT_TOP})",
+    )
+    p.add_argument(
         "--trade_html",
         type=trade_html_count,
         metavar="N",
@@ -489,6 +511,8 @@ def main() -> None:
             session_exit=args.session_exit,
             oos_start=args.oos_start,
             oos_fraction=args.oos_fraction,
+            select_by=args.select_by,
+            select_top=args.select_top,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
