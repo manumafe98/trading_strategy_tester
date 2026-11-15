@@ -39,6 +39,22 @@ _Avoid_: timeframe, interval
 The bar size the engine uses to simulate fills and exits; a strategy may request one different from its signal timeframe.
 _Avoid_: timeframe, base timeframe
 
+**Cutoff**:
+The first bar of the out-of-sample period, always the first bar of a market session; it is set per asset and execution timeframe by `--oos_start` or `--oos_fraction`.
+_Avoid_: split date, holdout start
+
+**In-sample period**:
+The bars of the loaded time period before the cutoff; variants are judged on it.
+_Avoid_: training period, training set, IS data
+
+**Out-of-sample period**:
+The bars from the cutoff to the end of the loaded time period, kept back to check whether in-sample results hold.
+_Avoid_: test period, test set, holdout, forward period
+
+**Spanning trade**:
+A trade that enters in the in-sample period and exits in the out-of-sample period; it counts as in-sample, while its P&L lands in the out-of-sample equity curve.
+_Avoid_: straddling trade, crossover trade
+
 ## Backtest engine
 
 **Signal**:
@@ -81,6 +97,14 @@ _Avoid_: open trade
 **Variant**:
 One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
 _Avoid_: run, scenario
+
+**Selected variant**:
+One of the top N variants of a strategy and asset, ranked on an in-sample metric (`--select_by`, `--select_top`) in split mode.
+_Avoid_: winner, best variant, optimized variant
+
+**Walk-forward efficiency (WFE)**:
+A variant's out-of-sample annualized return as a percentage of its in-sample annualized return; blank when the in-sample annualized return is zero or negative.
+_Avoid_: efficiency ratio, robustness score
 
 **Result bundle**:
 The output folder of one run, holding the results page, variant pages, and trade charts.

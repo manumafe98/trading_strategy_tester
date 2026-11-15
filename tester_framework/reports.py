@@ -14,15 +14,19 @@ import pandas as pd
 from .analytics import decode_analytics
 from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
 from .models import Side
-from .settings import COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, TIMEFRAMES, TRADES_DIR
-from .utils import clean_exit_name
+from .settings import (
+    COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
+)
+from .split import SELECT_BY, Split, entered_in_sample, split_tags
+from .utils import clean_exit_name, net_value
 
 
 MetricValue: TypeAlias = float | int | tuple[float | int, ...] | list[float | int] | str
 
 
 ASSET_COLORS = ["#f9c22e", "#ff922b", "#4c8bf5", "#5cc9c8", "#b197fc", "#69db7c"]
-HTML_LABELS = {"Sharpe Ratio": "Sharpe", "Return / DD": "Ret / DD"}
+HTML_LABELS = {"Sharpe Ratio": "Sharpe", "Return / DD": "Ret / DD", "OOS Return / DD": "OOS Ret / DD"}
+SORTABLE_COLUMNS = (*FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS)
 FILTER_SPECS = (
     ("strategy", "Strategy", "Strategy"),
     ("asset", "Asset", "Asset"),
@@ -129,8 +133,14 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
 def format_metric(column: str, value: MetricValue) -> str:
     if isinstance(value, (tuple, list)):
         return " / ".join(format_metric(column, item) for item in value)
+    column = OOS_FINANCIAL_COLUMNS.get(column, column)
+    if column == "Selected":
+        return "yes" if value else ""
     if isinstance(value, (float, int)) and not math.isfinite(float(value)):
-        return "N/A"
+        # WFE is blank when the in-sample annualized return is not positive.
+        return "" if column == "WFE" else "N/A"
+    if column == "WFE":
+        return f"{float(value):.2f}%"
     if column in {"Return", "Max DD"}:
         prefix = "+" if column == "Return" and float(value) > 0 else ""
         return f"{prefix}{float(value):.2f}%"
@@ -144,8 +154,8 @@ def format_metric(column: str, value: MetricValue) -> str:
 
 
 def metric_class(column: str, value: MetricValue) -> str:
-    if isinstance(value, (tuple, list)):
-        value = value[-1]
+    value = net_value(value)
+    column = OOS_FINANCIAL_COLUMNS.get(column, column)
     if column == "Return":
         return "good" if float(value) > 0 else "bad" if float(value) < 0 else "neutral"
     if column == "Max DD":
@@ -216,12 +226,15 @@ def _managed_summary(analytics: dict) -> str:
     return f'<section><h2>{mode} summary</h2>{summary}</section>'
 
 
-def _trade_row(trade: dict) -> str:
+def _trade_row(trade: dict, oos_cutoff: int | None = None) -> str:
     chart_path = trade.get("chart_path")
     chart = "-"
     if chart_path:
         name = html_escape(Path(chart_path).name, quote=True)
         chart = f'<a href="../../../trades/{name}" target="_blank" rel="noopener">chart</a>'
+    sample = ""
+    if oos_cutoff is not None:
+        sample = f'<td>{"in-sample" if entered_in_sample(trade, oos_cutoff) else "out-of-sample"}</td>'
     return (
         '<tr class="trade-row">'
         f"<td>{chart}</td>"
@@ -235,11 +248,11 @@ def _trade_row(trade: dict) -> str:
         f'<td>{_r(trade["realized_r"])}</td>'
         f'<td>{_r(trade["mfe_r"])}</td>'
         f'<td>{_r(trade["giveback_r"])}</td>'
-        "</tr>"
+        f"{sample}</tr>"
     )
 
 
-def _trade_table(trades: list[dict]) -> str:
+def _trade_table(trades: list[dict], oos_cutoff: int | None = None) -> str:
     if not trades:
         return '<p class="empty">No trades</p>'
     headers = [
@@ -255,8 +268,10 @@ def _trade_table(trades: list[dict]) -> str:
         "MFE",
         "Giveback",
     ]
+    if oos_cutoff is not None:
+        headers.append("Sample")
     head = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
-    rows = "".join(_trade_row(trade) for trade in trades)
+    rows = "".join(_trade_row(trade, oos_cutoff) for trade in trades)
     return (
         '<div class="detail-scroll"><table class="detail-table ledger">'
         f"<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
@@ -313,6 +328,9 @@ def _write_variant_pages(
     title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     trades = analytics["managed"]["trades"] if row["Exit Mode"] != "fixed" else []
+    # Rows carry their asset's cutoff only in split mode.
+    oos_cutoff = row.get("_oos_cutoff")
+    oos_cutoff = int(oos_cutoff) if oos_cutoff is not None and pd.notna(oos_cutoff) else None
     page_count = max(1, (len(trades) + TRADE_ROWS_PER_PAGE - 1) // TRADE_ROWS_PER_PAGE)
     for page in range(1, page_count + 1):
         start = (page - 1) * TRADE_ROWS_PER_PAGE
@@ -326,7 +344,7 @@ def _write_variant_pages(
         trade_section = ""
         if row["Exit Mode"] != "fixed":
             mode = html_escape(str(analytics["managed"]["Mode"]).title())
-            trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(page_trades)}</section>'
+            trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(page_trades, oos_cutoff)}</section>'
         html = template.substitute(
             title=html_escape(title),
             result=html_escape(result),
@@ -402,7 +420,7 @@ def _render_filters(table: pd.DataFrame) -> str:
 def _render_header(column: str, with_costs: bool) -> str:
     label = html_escape(HTML_LABELS.get(column, column))
     suffix = '<span class="pair-label">Gross / Net</span>' if with_costs and column in COST_PAIR_COLUMNS else ""
-    if column in FINANCIAL_COLUMNS:
+    if column in SORTABLE_COLUMNS:
         return f'<th aria-sort="none"><button type="button" class="sort-button">{label}{suffix}</button></th>'
     return f"<th>{label}{suffix}</th>"
 
@@ -415,16 +433,19 @@ def _render_cell(col: str, value, color: str) -> str:
     if col == "TF":
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
     sort_attr = ""
-    if col in FINANCIAL_COLUMNS:
-        sort_value = value[-1] if isinstance(value, (tuple, list)) else value
+    if col in SORTABLE_COLUMNS:
+        sort_value = net_value(value)
         sort_attr = f' data-sort-value="{float(sort_value)}"' if math.isfinite(float(sort_value)) else ' data-sort-value=""'
     return f'<td class="c"{sort_attr}><span class="pill {metric_class(col, value)}">{html_escape(format_metric(col, value))}</span></td>'
 
 
-def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str] | None = None) -> Path:
+def write_results_html(
+    table: pd.DataFrame, config: RunConfig, columns: list[str] | None = None, splits: list[Split] | None = None
+) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
-    columns = [column for column in ("Strategy", "Asset", "TF", "Session", "RR", "Exit Mode", *FINANCIAL_COLUMNS) if column in columns]
+    shown = ("Strategy", "Asset", "TF", "Session", "RR", "Exit Mode", *FINANCIAL_COLUMNS, *SPLIT_COLUMNS)
+    columns = [column for column in shown if column in columns]
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     safe_name = "_".join(config.strategies)
@@ -477,6 +498,17 @@ def write_results_html(table: pd.DataFrame, config: RunConfig, columns: list[str
         )
     if config.max_trades is not None:
         tags.append(f'<span class="tag">first {config.max_trades} closed trades per variant</span>')
+    for split in splits or ():
+        tags.extend(f'<span class="tag">{html_escape(tag)}</span>' for tag in split_tags(split))
+    if splits:
+        tags.extend(
+            f'<span class="tag">{html_escape(tag)}</span>'
+            for tag in (
+                f"ranked by in-sample {SELECT_BY[config.select_by]}",
+                f"top {config.select_top} selected per strategy and asset",
+                f"{len(table)} variants",
+            )
+        )
     if config.trade_html == 0:
         tags.append('<span class="tag">trade charts off</span>')
     elif config.trade_html is not None:

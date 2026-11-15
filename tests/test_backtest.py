@@ -20,6 +20,7 @@ from tester_framework.backtest import (
 )
 from tester_framework.models import ExitReason, Side
 from tester_framework.sessions import parse_sessions
+from tester_framework.split import walk_forward_efficiency
 
 
 def test_risk_reward_ratios_rejects_non_numeric():
@@ -681,6 +682,14 @@ def test_result_columns_follow_operation_and_session():
     assert "Unresolved" in result_columns("all")
 
 
+def test_result_columns_append_split_columns_only_in_split_mode():
+    split_columns = [
+        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected",
+    ]
+    assert result_columns("all", split=True) == result_columns("all") + split_columns
+    assert not set(split_columns) & set(result_columns("all", include_session=True))
+
+
 def _long_then_short():
     # Long from bar 1 open 100 hits 101 on bar 1; short from bar 3 open 101 hits 100 on bar 3.
     data = _bars(
@@ -1130,3 +1139,87 @@ def test_session_exit_leaves_trade_unresolved_when_data_ends_inside_window(test_
     metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
 
     assert (metrics["Unresolved"], trades) == (1, [])
+
+
+def _split_run(cfg, **overrides):
+    # Trade 1 enters and exits in sample, trade 2 enters in sample and exits on the cutoff bar 4,
+    # trade 3 enters and exits out of sample.
+    data = _bars(
+        [100.0, 100.0, 100.0, 100.0],
+        [100.0, 102.0, 100.0, 101.0],
+        [100.0, 100.0, 100.0, 100.0],
+        [100.0, 100.0, 99.5, 99.5],
+        [99.5, 101.5, 99.5, 101.0],
+        [100.0, 100.0, 100.0, 100.0],
+        [100.0, 100.0, 98.0, 98.0],
+        [100.0, 100.0, 100.0, 100.0],
+    )
+    signals = [{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 2, 5)]
+    return _run(data, signals, cfg, **overrides)
+
+
+def test_split_metrics_are_the_curve_metrics_of_each_slice_gross_and_net(cost_asset_cfg):
+    metrics, trades = _split_run(cost_asset_cfg, with_costs=True, oos_cutoff=4)
+
+    # Sizing follows net equity: 100 contracts each; gross +100, +100, -100; net +40, +40, -160.
+    gross = [10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100]
+    net = [10000, 10000, 10040, 10040, 9930, 10080, 10080, 9920, 9920]
+    assert len(trades) == 3
+    assert metrics["Gross"] == _curve_metrics(np.array(gross[:5], dtype=float), 1716)
+    assert metrics["Net"] == _curve_metrics(np.array(net[:5], dtype=float), 1716)
+    assert metrics["OOS Gross"] == _curve_metrics(np.array(gross[4:], dtype=float), 1716)
+    assert metrics["OOS Net"] == _curve_metrics(np.array(net[4:], dtype=float), 1716)
+    assert metrics["Return"] == metrics["Net"]["Return"] == -0.7
+    assert metrics["OOS Return"] == metrics["OOS Net"]["Return"]
+    assert metrics["OOS Sharpe"] == metrics["OOS Net"]["Sharpe Ratio"]
+
+
+def test_split_metrics_carry_walk_forward_efficiency_gross_and_net(cost_asset_cfg):
+    metrics, _ = _split_run(cost_asset_cfg, with_costs=True, oos_cutoff=4)
+
+    gross = np.array([10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100], dtype=float)
+    gross_wfe, net_wfe = metrics["WFE"]
+    assert gross_wfe == walk_forward_efficiency(gross, 4, 1716) > 0
+    # Net loses 0.7% in sample, so its WFE is blank.
+    assert math.isnan(net_wfe)
+    without_costs, _ = _split_run(cost_asset_cfg, oos_cutoff=4)
+    # Without costs WFE is one Gross value, not a pair.
+    assert isinstance(without_costs["WFE"], float) and without_costs["WFE"] > 0
+
+
+def test_out_of_sample_curve_starts_from_equity_at_last_in_sample_close(test_asset_cfg):
+    metrics, _ = _split_run(test_asset_cfg, oos_cutoff=4)
+
+    # Bar 3 closes at 10049.5 (10100 cash, trade 2's 101 contracts marked at -50.5);
+    # bar 7 ends at 10099 after +101 and -102.
+    assert metrics["OOS Return"] == round((10099 / 10049.5 - 1) * 100, 2) == 0.49
+    assert metrics["OOS Max DD"] == round((1 - 10099 / 10201) * 100, 2)
+
+
+def test_split_assigns_trades_by_entry_bar_and_counts_spanning_trades(test_asset_cfg):
+    metrics, trades = _split_run(test_asset_cfg, oos_cutoff=4)
+
+    assert [(trade["entry_i"], trade["exit_i"]) for trade in trades] == [(1, 1), (3, 4), (6, 6)]
+    assert metrics["OOS Trades"] == 1
+    assert metrics["Spanning"] == 1
+
+
+def test_without_cutoff_metrics_have_no_split_values(test_asset_cfg):
+    whole, trades = _split_run(test_asset_cfg)
+
+    assert not any(key.startswith("OOS") or key == "Spanning" for key in whole)
+    assert whole["Return"] == round((10099 / 10000 - 1) * 100, 2)
+    assert len(trades) == 3
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"oos_cutoff": 0}, "in-sample period with no bars"),
+        ({"oos_cutoff": 8}, "out-of-sample period with no bars"),
+        ({"oos_cutoff": 4, "max_trades": 2}, "--max_trades cannot be combined with a split"),
+    ],
+)
+def test_backtest_rejects_invalid_cutoffs(test_asset_cfg, overrides, message):
+    with pytest.raises(ValueError, match=message):
+        _split_run(test_asset_cfg, **overrides)

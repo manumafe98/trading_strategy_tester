@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -9,6 +10,7 @@ import pytest
 import tester_framework.reports as reports
 import tester_framework.runner as runner
 from tester_framework.analytics import decode_analytics
+from tester_framework.cli import RunConfig
 from tester_framework.runner import cache_data
 from tester_framework.sessions import parse_sessions
 
@@ -34,6 +36,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "days": (),
         "months": (),
         "session_exit": False,
+        "oos_cutoff": None,
     }
     task.update(overrides)
     return task
@@ -157,6 +160,49 @@ def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_e
     assert "100 @ +0.00R session" in reports._trade_table([trade])
 
 
+def test_split_row_counts_in_sample_trades_by_entry_and_pairs_oos_metrics(monkeypatch, tmp_path, cost_asset_cfg):
+    # Long trades enter at bars 1, 3 and 5 and reach their 1R target on the same bar; the cutoff is bar 3.
+    data = _target_bars([100.0, 102.0, 100.0, 102.0, 100.0, 102.0])
+    signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 2, 4)])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    row = runner.run_variants(_task(data, tmp_path, cost_asset_cfg, with_costs=True, oos_cutoff=3))[0]
+
+    assert (row["Trades"], row["OOS Trades"], row["Spanning"]) == (1, 2, 0)
+    assert row["W"] == (1, 1)
+    for column, source in (("OOS Return", "Return"), ("OOS Sharpe", "Sharpe Ratio")):
+        assert row[column] == (row["OOS Gross"][source], row["OOS Net"][source])
+    assert row["Return"] == (row["Gross"]["Return"], row["Net"]["Return"])
+    # Variant pages keep whole-period analytics.
+    assert decode_analytics(row["_analytics"])["outcomes"][0]["Trades"] == 3
+
+
+@pytest.mark.parametrize("oos_cutoff", [3, None])
+def test_variant_page_trade_rows_show_period_by_entry_bar_only_in_split_mode(
+    monkeypatch, tmp_path, test_asset_cfg, oos_cutoff
+):
+    # Longs enter at bars 1 and 4; the first reaches its target on bar 3, the cutoff, so it spans the split.
+    data = _target_bars([100.0, 100.0, 100.0, 102.0, 100.0, 102.0])
+    signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 3)])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path / "results")
+    task = _task(data, tmp_path, test_asset_cfg, variants=((1, "trailing"),), oos_cutoff=oos_cutoff)
+    table = pd.DataFrame(runner.run_variants(task))
+    config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "1", "trailing", "1", 10_000, False, None)
+
+    page = (reports.write_results_html(table, config).parent / "variants" / "000000.html").read_text(encoding="utf-8")
+
+    trade_table = page[page.index("<h2>Trailing trades</h2>"):]
+    rows = re.findall(r'<tr class="trade-row">(.*?)</tr>', trade_table, re.S)
+    assert len(rows) == 2
+    if oos_cutoff is None:
+        assert "sample" not in page.lower()
+    else:
+        assert "<th>Sample</th>" in trade_table
+        assert ["in-sample" in row for row in rows] == [True, False]
+        assert ["out-of-sample" in row for row in rows] == [False, True]
+
+
 def test_run_variants_surfaces_strategy_errors_from_mid_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
     calls = []
 
@@ -245,6 +291,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "days": (),
                 "months": (),
                 "session_exit": False,
+                "oos_cutoff": None,
             }
 
             rows = runner.run_variants(task)

@@ -10,6 +10,8 @@ import pandas as pd
 from .analytics import classify_outcome, trade_stats
 from .models import OPERATIONS, AssetConfig, ExitReason, Side
 from .sessions import SessionSpec, session_exit_bars
+from .split import entered_in_sample, walk_forward_efficiency
+from .settings import OOS_FINANCIAL_COLUMNS, SPLIT_COLUMNS
 from .utils import csv_items, decimal_places
 
 
@@ -359,6 +361,7 @@ def run_backtest(
     days: tuple[int, ...] = (),
     months: tuple[int, ...] = (),
     session_exit: SessionSpec | None = None,
+    oos_cutoff: int | None = None,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -375,6 +378,13 @@ def run_backtest(
     validate_calendar_filters(days, months)
     if data.empty:
         raise ValueError(f"No data for {asset} {timeframe}")
+    if oos_cutoff is not None:
+        if max_trades is not None:
+            raise ValueError("--max_trades cannot be combined with a split")
+        if oos_cutoff <= 0:
+            raise ValueError("Split cutoff leaves the in-sample period with no bars")
+        if oos_cutoff >= len(data):
+            raise ValueError("Split cutoff leaves the out-of-sample period with no bars")
     missing_data = {"open", "high", "low", "close"} - set(data.columns)
     if missing_data:
         raise ValueError(f"Data missing columns: {', '.join(sorted(missing_data))}")
@@ -523,7 +533,22 @@ def run_backtest(
         bar_net_equity[last_bar_idx:bar_count] = current_net
 
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
-    return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
+    if oos_cutoff is None:
+        return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
+    # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
+    metrics = make_metrics(
+        asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs, bars_per_year,
+        discarded_signals, unresolved_trades,
+    )
+    oos = make_metrics(asset, timeframe, strategy, gross_curve[oos_cutoff:], net_curve[oos_cutoff:], with_costs, bars_per_year)
+    metrics.update({column: oos[source] for column, source in OOS_FINANCIAL_COLUMNS.items()})
+    metrics["OOS Gross"] = oos["Gross"]
+    metrics["OOS Net"] = oos["Net"]
+    gross_wfe = walk_forward_efficiency(gross_curve, oos_cutoff, bars_per_year)
+    metrics["WFE"] = (gross_wfe, walk_forward_efficiency(net_curve, oos_cutoff, bars_per_year)) if with_costs else gross_wfe
+    metrics["OOS Trades"] = sum(1 for trade in trades if not entered_in_sample(trade, oos_cutoff))
+    metrics["Spanning"] = sum(1 for trade in trades if entered_in_sample(trade, oos_cutoff) and trade["exit_i"] >= oos_cutoff)
+    return metrics, trades
 
 
 def validate_calendar_filters(days: tuple[int, ...], months: tuple[int, ...]) -> None:
@@ -606,11 +631,12 @@ def add_trade_counts(metrics: dict, trades: list[dict], operation: str, with_cos
     return metrics
 
 
-def result_columns(operation: str, include_session: bool = False) -> list[str]:
+def result_columns(operation: str, include_session: bool = False, split: bool = False) -> list[str]:
     columns = ["Strategy", "Asset", "TF"]
     if include_session:
         columns.append("Session")
     columns += ["RR", "Exit Mode", "Trades", "Discarded", "Unresolved"]
     if operation == "all":
         columns += ["Long", "Short"]
-    return columns + ["W", "BE", "L", "Win Rate", "Expectancy R", "Avg Duration", "Return", "Max DD", "Sharpe Ratio", "Return / DD"]
+    columns += ["W", "BE", "L", "Win Rate", "Expectancy R", "Avg Duration", "Return", "Max DD", "Sharpe Ratio", "Return / DD"]
+    return columns + list(SPLIT_COLUMNS) if split else columns

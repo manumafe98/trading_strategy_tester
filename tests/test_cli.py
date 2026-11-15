@@ -587,3 +587,263 @@ def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
     cli.main()
 
     assert configs[0].session_exit is True
+
+
+def test_split_flags_default_off_and_map_to_config(monkeypatch):
+    args = cli.parser().parse_args([])
+    assert (args.oos_start, args.oos_fraction) == (None, None)
+    configs = []
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--oos_fraction", "0.25"])
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--oos_start", "2021-07-01"])
+    cli.main()
+
+    assert (configs[0].oos_start, configs[0].oos_fraction) == (None, 0.25)
+    assert (configs[1].oos_start, configs[1].oos_fraction) == ("2021-07-01", None)
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"oos_start": "2025-01-02", "oos_fraction": 0.5}, "Use --oos_start or --oos_fraction, not both"),
+        ({"oos_fraction": 0.0}, "--oos_fraction must be between 0 and 1"),
+        ({"oos_fraction": 1.0}, "--oos_fraction must be between 0 and 1"),
+        ({"oos_fraction": -0.5}, "--oos_fraction must be between 0 and 1"),
+        ({"oos_start": "2025-13-01"}, "--oos_start must be a YYYY-MM-DD date"),
+        ({"oos_fraction": 0.5, "max_trades": 3}, "--max_trades cannot be combined with a split"),
+    ],
+)
+def test_run_rejects_invalid_split_flags_before_loading_data(monkeypatch, test_asset_cfg, overrides, message):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match=message):
+        cli.run(_config(**overrides))
+
+
+def test_main_reports_conflicting_split_flags_clearly(monkeypatch):
+    argv = ["tester_framework", "--strategies", "ema50", "--oos_start", "2021-07-01", "--oos_fraction", "0.3"]
+    monkeypatch.setattr(sys, "argv", argv)
+
+    with pytest.raises(SystemExit, match="Use --oos_start or --oos_fraction, not both"):
+        cli.main()
+
+
+class _Done:
+    def __init__(self, value):
+        self.value = value
+
+    def result(self):
+        return self.value
+
+
+class _InlineExecutor:
+    def __init__(self, **_kwargs):
+        pass
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        pass
+
+    def submit(self, function, task):
+        return _Done(function(task))
+
+
+def _two_day_data():
+    index = pd.date_range("2025-01-01 00:00", periods=48, freq="h")
+    return pd.DataFrame({"open": 100.0, "high": 100.0, "low": 100.0, "close": 100.0, "volume": 0}, index=index)
+
+
+def _split_run(monkeypatch, tmp_path, asset_cfg, data, **overrides):
+    submitted = []
+    written = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame()))
+    monkeypatch.setattr(runner, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame()))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: data)
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "run_variants", lambda task: submitted.append(task) or runner.run_variants(task))
+    monkeypatch.setattr(
+        cli, "write_results_html", lambda *args: written.append((args,)) or tmp_path / "results.html"
+    )
+    cli.run(_config(**overrides))
+    return submitted, written
+
+
+def test_split_run_sends_cutoff_to_workers_and_shows_split_columns_and_ranges(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    submitted, written = _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), oos_start="2025-01-02")
+
+    assert [task["oos_cutoff"] for task in submitted] == [24]
+    (args,) = written[0]
+    assert args[2][-10:] == [
+        "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected"
+    ]
+    (split,) = args[3]
+    assert (split.asset, split.execution_timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
+    out = capsys.readouterr().out
+    assert "TEST 1h in-sample 2025-01-01 00:00 to 2025-01-01 23:00 UTC" in out
+    assert "TEST 1h out-of-sample 2025-01-02 00:00 to 2025-01-02 23:00 UTC" in out
+    assert "OOS Return" in out and "Spanning" in out
+
+
+def test_run_without_split_flags_sends_no_cutoff_and_shows_no_split_columns(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    submitted, written = _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data())
+
+    assert [task["oos_cutoff"] for task in submitted] == [None]
+    (args,) = written[0]
+    assert "OOS Return" not in args[2]
+    assert args[3] == []
+    out = capsys.readouterr().out
+    assert "OOS" not in out and "in-sample" not in out
+
+
+def test_run_rejects_a_cutoff_that_empties_a_period_with_the_asset_named(monkeypatch, tmp_path, test_asset_cfg):
+    with pytest.raises(ValueError, match="TEST 1h: Split cutoff leaves the out-of-sample period with no bars"):
+        _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), oos_start="2025-01-03")
+
+
+def test_selection_flags_default_off_and_map_to_config(monkeypatch):
+    args = cli.parser().parse_args(["--strategies", "ema50"])
+    assert (args.select_by, args.select_top) == (None, None)
+    configs = []
+    monkeypatch.setattr(cli, "run", configs.append)
+    argv = ["tester_framework", "--strategies", "ema50", "--oos_start", "2021-07-01", "--select_by", "sharpe", "--select_top", "3"]
+    monkeypatch.setattr(sys, "argv", argv)
+    cli.main()
+    assert (configs[0].select_by, configs[0].select_top) == ("sharpe", 3)
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--strategies", "ema50", "--select_by", "profit"])
+
+
+@pytest.mark.parametrize(
+    ("overrides", "message"),
+    [
+        ({"select_by": "sharpe"}, "--select_by and --select_top need --oos_start or --oos_fraction"),
+        ({"select_top": 3}, "--select_by and --select_top need --oos_start or --oos_fraction"),
+        ({"oos_fraction": 0.5, "select_top": 0}, "--select_top must be a positive integer"),
+        ({"oos_fraction": 0.5, "select_top": -2}, "--select_top must be a positive integer"),
+    ],
+)
+def test_run_rejects_selection_flags_without_a_split_or_with_non_positive_top(monkeypatch, test_asset_cfg, overrides, message):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match=message):
+        cli.run(_config(**overrides))
+
+
+def _ranked_rows(monkeypatch, returns):
+    # Stand-in batch results: one row per RR with the given in-sample Return, Return / DD and out-of-sample values.
+    def fake_run_variants(task):
+        rows = []
+        for (rr, mode), (ret, ret_dd, oos) in zip(task["variants"], returns):
+            rows.append({
+                "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
+                "Return": ret, "Max DD": 1.0, "Sharpe Ratio": ret, "Return / DD": ret_dd, "_sort_return": ret,
+                "OOS Return": oos, "OOS Max DD": 1.0, "OOS Sharpe": oos, "OOS Return / DD": oos, "WFE": 50.0,
+            })
+        return rows
+
+    monkeypatch.setattr(cli, "run_variants", fake_run_variants)
+
+
+def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    written = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: _two_day_data())
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "write_results_html", lambda *args: written.append(args) or tmp_path / "results.html")
+    # Return / DD ranks RR 2 first; plain Return (the _sort_return order) would put RR 1 first.
+    _ranked_rows(monkeypatch, [(3.0, 1.0, 2.0), (1.0, 3.0, 1.0), (2.0, 2.0, 3.0)])
+
+    cli.run(_config(risk_reward_ratio="1,2,3", oos_start="2025-01-02", select_top=2))
+
+    table, _config_arg, columns, _splits = written[0]
+    assert columns[-5:] == ["IS Rank", "OOS Rank", "WFE", "Spanning", "Selected"]
+    assert list(table["RR"]) == ["2", "3", "1"]
+    assert list(table["IS Rank"]) == [1, 2, 3]
+    assert list(table["OOS Rank"]) == [3, 1, 2]
+    assert list(table["Selected"]) == [True, True, False]
+    out = capsys.readouterr().out
+    assert "IS Rank" in out and "WFE" in out and "50.00%" in out
+
+
+def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_the_top_n(
+    monkeypatch, tmp_path, capsys, test_asset_cfg
+):
+    # In-sample Return / DD and out-of-sample Return / DD per RR 1, 2, 3, for each strategy and asset.
+    values = {
+        ("a", "TEST"): [(1.0, 2.0), (math.nan, 9.0), (3.0, math.nan)],
+        ("a", "OTHER"): [(5.0, 1.0), (4.0, 3.0), (6.0, 2.0)],
+        ("b", "TEST"): [(0.5, 0.0), (2.0, -1.0), (math.nan, 1.0)],
+    }
+
+    def fake_run_variants(task):
+        return [
+            {
+                "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
+                "Return": 1.0, "Max DD": 1.0, "Sharpe Ratio": 1.0, "Return / DD": ret_dd, "_sort_return": 1.0,
+                "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
+            }
+            for (rr, mode), (ret_dd, oos) in zip(task["variants"], values.get((task["strategy"], task["asset"]), []))
+        ]
+
+    written = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg, "OTHER": replace(test_asset_cfg, ticker="OTHER")})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: _two_day_data())
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "write_results_html", lambda *args: written.append(args) or tmp_path / "results.html")
+    monkeypatch.setattr(cli, "run_variants", fake_run_variants)
+
+    cli.run(_config(strategies=("a", "b"), asset="TEST,OTHER", risk_reward_ratio="1,2,3", oos_fraction=0.5, select_top=2))
+
+    table, config, columns, _splits = written[0]
+    assert (config.select_by, config.select_top) == ("return_dd", 2)
+    assert list(zip(table["Strategy"], table["Asset"], table["RR"], table["IS Rank"], table["OOS Rank"], table["Selected"])) == [
+        ("a", "TEST", "3", 1, 3, True),
+        ("a", "TEST", "1", 2, 2, True),
+        ("a", "TEST", "2", 3, 1, False),
+        ("a", "OTHER", "3", 1, 2, True),
+        ("a", "OTHER", "1", 2, 3, True),
+        ("a", "OTHER", "2", 3, 1, False),
+        ("b", "TEST", "2", 1, 3, True),
+        ("b", "TEST", "1", 2, 2, True),
+        ("b", "TEST", "3", 3, 1, False),
+    ]
+    assert list(table["WFE"]) == [30.0, 10.0, 20.0, 30.0, 10.0, 20.0, 20.0, 10.0, 30.0]
+    assert "WFE" in columns
+    out = capsys.readouterr().out
+    assert "30.00%" in out
+
+
+def test_run_without_split_keeps_return_sort_and_adds_no_rank_columns(monkeypatch, tmp_path, test_asset_cfg):
+    written = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: _two_day_data())
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "write_results_html", lambda *args: written.append(args) or tmp_path / "results.html")
+    _ranked_rows(monkeypatch, [(3.0, 1.0, 2.0), (1.0, 3.0, 1.0), (2.0, 2.0, 3.0)])
+
+    cli.run(_config(risk_reward_ratio="1,2,3"))
+
+    table, _config_arg, columns, _splits = written[0]
+    assert list(table["RR"]) == ["1", "3", "2"]
+    assert "IS Rank" not in table and "IS Rank" not in columns and "WFE" not in columns

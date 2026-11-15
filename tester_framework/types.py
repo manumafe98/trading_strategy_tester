@@ -26,3 +26,4 @@ class VariantBatchTask(TypedDict):
     days: tuple[int, ...]
     months: tuple[int, ...]
     session_exit: bool
+    oos_cutoff: int | None

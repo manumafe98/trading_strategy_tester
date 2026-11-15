@@ -5,6 +5,7 @@ import math
 import os
 import sys
 from concurrent.futures import FIRST_COMPLETED, ProcessPoolExecutor, wait
+from dataclasses import replace
 from tempfile import TemporaryDirectory
 from threading import Event, Lock, Thread
 from time import perf_counter
@@ -19,7 +20,8 @@ from .models import OPERATIONS
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
-from .settings import DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
+from .split import SELECT_BY, Split, oos_cutoff, rank_variants, split_tags, validate_selection_args, validate_split_args
+from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
 from .utils import csv_items
@@ -252,6 +254,20 @@ def run(config: RunConfig) -> None:
         raise ValueError("--capital must be finite and positive")
     if config.max_trades is not None and config.max_trades < 1:
         raise ValueError("--max_trades must be a positive integer")
+    validate_split_args(config.oos_start, config.oos_fraction)
+    split_mode = config.oos_start is not None or config.oos_fraction is not None
+    if split_mode and config.max_trades is not None:
+        raise ValueError("--max_trades cannot be combined with a split")
+    if not split_mode and (config.select_by is not None or config.select_top is not None):
+        raise ValueError("--select_by and --select_top need --oos_start or --oos_fraction")
+    if split_mode:
+        # Defaults are resolved once here; everything after reads the config.
+        config = replace(
+            config,
+            select_by=DEFAULT_SELECT_BY if config.select_by is None else config.select_by,
+            select_top=DEFAULT_SELECT_TOP if config.select_top is None else config.select_top,
+        )
+        validate_selection_args(config.select_by, config.select_top)
     if config.trade_html is not None and (
         isinstance(config.trade_html, bool) or not isinstance(config.trade_html, int) or config.trade_html < 0
     ):
@@ -282,6 +298,7 @@ def run(config: RunConfig) -> None:
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     rows = []
+    splits: list[Split] = []
     outputs_reset = False
     status = StatusDisplay(workers, started)
     strategy_label = ", ".join(strategies)
@@ -305,6 +322,15 @@ def run(config: RunConfig) -> None:
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
                     data = load_data(asset, asset_cfg, data_timeframe, config.time_period, config.data_source)
+                    cutoff = None
+                    if split_mode:
+                        try:
+                            cutoff = oos_cutoff(
+                                data.index, asset_cfg, oos_start=config.oos_start, oos_fraction=config.oos_fraction
+                            )
+                        except ValueError as exc:
+                            raise ValueError(f"{asset} {data_timeframe}: {exc}") from None
+                        splits.append(Split.from_index(asset, data_timeframe, data.index, cutoff))
                     # Clear the previous bundle only once fresh data exists, so a failed load keeps it.
                     if not outputs_reset:
                         reset_output_dirs()
@@ -334,6 +360,7 @@ def run(config: RunConfig) -> None:
                                     days=config.days,
                                     months=config.months,
                                     session_exit=config.session_exit,
+                                    oos_cutoff=cutoff,
                                 )
                             )
                     del data
@@ -375,7 +402,7 @@ def run(config: RunConfig) -> None:
         status.update(phase="Writing results", detail="console + html", completed=len(rows), total=task_count)
         status.start()
 
-        columns = result_columns(config.operation, include_session=bool(session_specs))
+        columns = result_columns(config.operation, include_session=bool(session_specs), split=split_mode)
         table = pd.DataFrame(rows)
         if not table.empty:
             strategy_order = {name: i for i, name in enumerate(strategies)}
@@ -383,13 +410,18 @@ def run(config: RunConfig) -> None:
             table["_strategy_order"] = table["Strategy"].map(strategy_order)
             table["_asset_order"] = table["Asset"].map(order)
             table = table.sort_values(["_strategy_order", "_asset_order", "_sort_return"], ascending=[True, True, False]).drop(columns=["_strategy_order", "_asset_order"])
+            if split_mode:
+                # Ranking needs every variant row, so it happens here rather than in the workers.
+                table = rank_variants(table, config.select_by, config.select_top)
         console = table.reindex(columns=columns).copy()
         for column in console.columns:
             console[column] = console[column].map(lambda value, column=column: format_metric(column, value))
-        result_path = write_results_html(table, config, columns)
+        result_path = write_results_html(table, config, columns, splits)
     finally:
         status.close()
 
+    for split in splits:
+        print(" | ".join(split_tags(split)))
     print(console.to_string(index=False))
     print(f"results: {result_path}")
     elapsed = perf_counter() - started
@@ -425,6 +457,28 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--workers", type=int, help="parallel variant workers, capped at logical CPU count")
     p.add_argument("--max_trades", type=int, default=None, help="diagnostic cap on first N closed trades per variant")
     p.add_argument(
+        "--oos_start",
+        metavar="YYYY-MM-DD",
+        help="split the period: the out-of-sample period starts at the first market session starting on or after this date",
+    )
+    p.add_argument(
+        "--oos_fraction",
+        type=float,
+        metavar="F",
+        help="split the period: hold back the latest fraction F (0-1) of bars as the out-of-sample period",
+    )
+    p.add_argument(
+        "--select_by",
+        choices=tuple(SELECT_BY),
+        help=f"split mode: in-sample metric that ranks variants per strategy and asset (default {DEFAULT_SELECT_BY})",
+    )
+    p.add_argument(
+        "--select_top",
+        type=int,
+        metavar="N",
+        help=f"split mode: mark the top N in-sample variants per strategy and asset as selected (default {DEFAULT_SELECT_TOP})",
+    )
+    p.add_argument(
         "--trade_html",
         type=trade_html_count,
         metavar="N",
@@ -458,6 +512,10 @@ def main() -> None:
             days=args.days,
             months=args.months,
             session_exit=args.session_exit,
+            oos_start=args.oos_start,
+            oos_fraction=args.oos_fraction,
+            select_by=args.select_by,
+            select_top=args.select_top,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
