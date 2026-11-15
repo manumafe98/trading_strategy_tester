@@ -84,11 +84,9 @@ _Avoid_: EOD exit, end-of-day exit
 
 **Roll**:
 The first bar of a market session where the chosen contract of a continuous series changes.
-_Avoid_: rollover, contract switch
 
 **Roll exit**:
 The forced close of a trade at the close of the last bar before a roll.
-_Avoid_: rollover exit
 
 **Gap exit**:
 An exit filled at a bar's open because the price gapped through the stop or a target.

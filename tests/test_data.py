@@ -63,7 +63,8 @@ def test_continuous_futures_use_contract_with_most_previous_session_volume():
         assert list(local["contract"]) == ["FUTZ5", "FUTZ5"]
 
 
-def test_continuous_futures_keep_chosen_contract_through_resampling():
+@pytest.mark.parametrize("timeframe", ["1h", "1d"])
+def test_continuous_futures_keep_chosen_contract_through_resampling(timeframe):
     with TemporaryDirectory() as tmp:
         data_dir = Path(tmp)
         futures_dir = data_dir / "futures" / "FUT"
@@ -82,7 +83,12 @@ def test_continuous_futures_keep_chosen_contract_through_resampling():
             ),
             encoding="utf-8",
         )
-        local = load_local_data("FUT", "1h", "max", data_dir=data_dir)
+        cfg = AssetConfig(
+            ticker="FUT", point_value=1, tick_size=0.1, qty_step=1, min_qty=1, min_risk_ticks=1,
+            spread_points=0, slippage_points=0, commission_per_side=0,
+            session_timezone="UTC", session_start="00:00", bars_per_year={"1d": 252},
+        )
+        local = load_local_data("FUT", timeframe, "max", data_dir=data_dir, asset_cfg=cfg)
         assert list(local["contract"]) == ["FUTZ5", "FUTH6"]
         assert list(local["close"]) == [101.5, 202.5]
 
