@@ -100,6 +100,8 @@ def _run_variant(
         row["Session"] = session
     row["_risk_pct"] = task["risk_pct"]
     row["_sort_return"] = metrics["Net" if task["with_costs"] else "Gross"]["Return"]
+    if task["oos_cutoff"] is not None:
+        row["_oos_cutoff"] = task["oos_cutoff"]
     row["_analytics"] = encode_analytics(analytics)
     row["_strategy_metrics"] = custom_metrics
     return row

@@ -227,12 +227,16 @@ def _managed_summary(analytics: dict) -> str:
     return f'<section><h2>{mode} summary</h2>{summary}</section>'
 
 
-def _trade_row(trade: dict) -> str:
+def _trade_row(trade: dict, oos_cutoff: int | None = None) -> str:
     chart_path = trade.get("chart_path")
     chart = "-"
     if chart_path:
         name = html_escape(Path(chart_path).name, quote=True)
         chart = f'<a href="../../../trades/{name}" target="_blank" rel="noopener">chart</a>'
+    # Trades belong to the period they enter in, the same rule as the split metrics.
+    sample = ""
+    if oos_cutoff is not None:
+        sample = f'<td>{"in-sample" if trade["entry_i"] < oos_cutoff else "out-of-sample"}</td>'
     return (
         '<tr class="trade-row">'
         f"<td>{chart}</td>"
@@ -246,11 +250,11 @@ def _trade_row(trade: dict) -> str:
         f'<td>{_r(trade["realized_r"])}</td>'
         f'<td>{_r(trade["mfe_r"])}</td>'
         f'<td>{_r(trade["giveback_r"])}</td>'
-        "</tr>"
+        f"{sample}</tr>"
     )
 
 
-def _trade_table(trades: list[dict]) -> str:
+def _trade_table(trades: list[dict], oos_cutoff: int | None = None) -> str:
     if not trades:
         return '<p class="empty">No trades</p>'
     headers = [
@@ -266,8 +270,10 @@ def _trade_table(trades: list[dict]) -> str:
         "MFE",
         "Giveback",
     ]
+    if oos_cutoff is not None:
+        headers.append("Sample")
     head = "".join(f"<th>{html_escape(header)}</th>" for header in headers)
-    rows = "".join(_trade_row(trade) for trade in trades)
+    rows = "".join(_trade_row(trade, oos_cutoff) for trade in trades)
     return (
         '<div class="detail-scroll"><table class="detail-table ledger">'
         f"<thead><tr>{head}</tr></thead><tbody>{rows}</tbody></table></div>"
@@ -324,6 +330,9 @@ def _write_variant_pages(
     title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     trades = analytics["managed"]["trades"] if row["Exit Mode"] != "fixed" else []
+    # Rows carry their asset's cutoff only in split mode.
+    oos_cutoff = row.get("_oos_cutoff")
+    oos_cutoff = int(oos_cutoff) if oos_cutoff is not None and pd.notna(oos_cutoff) else None
     page_count = max(1, (len(trades) + TRADE_ROWS_PER_PAGE - 1) // TRADE_ROWS_PER_PAGE)
     for page in range(1, page_count + 1):
         start = (page - 1) * TRADE_ROWS_PER_PAGE
@@ -337,7 +346,7 @@ def _write_variant_pages(
         trade_section = ""
         if row["Exit Mode"] != "fixed":
             mode = html_escape(str(analytics["managed"]["Mode"]).title())
-            trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(page_trades)}</section>'
+            trade_section = f'<section><h2>{mode} trades</h2>{_trade_table(page_trades, oos_cutoff)}</section>'
         html = template.substitute(
             title=html_escape(title),
             result=html_escape(result),
