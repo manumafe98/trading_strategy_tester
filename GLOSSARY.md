@@ -51,6 +51,10 @@ _Avoid_: training period, training set, IS data
 The bars from the cutoff to the end of the loaded time period, kept back to check whether in-sample results hold.
 _Avoid_: test period, test set, holdout, forward period
 
+**Spanning trade**:
+A trade that enters in the in-sample period and exits in the out-of-sample period; it counts as in-sample, while its P&L lands in the out-of-sample equity curve.
+_Avoid_: straddling trade, crossover trade
+
 ## Backtest engine
 
 **Signal**:
