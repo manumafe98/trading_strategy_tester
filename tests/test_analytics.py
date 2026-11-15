@@ -23,7 +23,7 @@ def test_classify_outcome():
 
 
 def test_analytics_round_trip_uses_compressed_bytes():
-    analytics = {"managed": {"trades": [{"side": Side.LONG, "realized_r": 1.0}] * 10}}
+    analytics = {"trades": [{"side": Side.LONG, "realized_r": 1.0}] * 10}
     encoded = encode_analytics(analytics)
     assert isinstance(encoded, bytes)
     assert decode_analytics(encoded) == analytics
@@ -61,6 +61,13 @@ def test_analyze_trades_periods_and_outcomes():
     assert [row["Period"] for row in analytics["month"]] == ["January", "February"]
     assert analytics["month"][0]["Trades"] == 3
     assert analyze_trades([], "trailing")["outcomes"][0]["Trades"] == 0
+
+
+@pytest.mark.parametrize("exit_mode", ["fixed", "trailing", "partial"])
+def test_analyze_trades_keeps_trades_for_every_exit_mode(exit_mode):
+    trades = [{"side": Side.LONG, "realized_r": 1.0, "entry_time": pd.Timestamp("2025-01-01"), "exits": [], "holding_duration": pd.Timedelta(hours=1), "exit_reason": "target", "mfe_r": 1.0, "giveback_r": 0.0}]
+
+    assert analyze_trades(trades, exit_mode)["trades"] == trades
 
 
 def test_analyze_trades_counts_gap_exit_fills():
