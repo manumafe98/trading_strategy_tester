@@ -592,7 +592,7 @@ def run_backtest(
             discarded_signals,
         ), trades
     # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
-    # The cutoff is a market session's first bar, so that point is also the last in-sample session close.
+    # The cutoff is a market session's first bar, so that point is also the last in-sample market session close.
     metrics = make_metrics(
         asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs,
         session_closes[session_closes <= oos_cutoff], sessions_per_year, discarded_signals,
@@ -619,7 +619,7 @@ def validate_calendar_filters(days: tuple[int, ...], months: tuple[int, ...]) ->
 
 
 def _curve_metrics(equity_curve: np.ndarray, session_closes: np.ndarray, sessions_per_year: int) -> dict:
-    """Return, Max DD and Return / DD use every curve point; Daily Sharpe uses the start and each session close.
+    """Return, Max DD and Return / DD use every curve point; Daily Sharpe uses the start and each market session close.
 
     `session_closes` are the curve positions of each market session's close equity, in order.
     """

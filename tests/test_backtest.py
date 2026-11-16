@@ -656,7 +656,7 @@ def test_nonpositive_equity_has_no_sharpe():
 
 
 def test_curve_metrics_worked_example():
-    # Session closes 110, 99, 121 from 100 (105 is inside the first session):
+    # Market session closes 110, 99, 121 from 100 (105 is inside the first market session):
     # returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
     # Peak 110 -> trough 99 is a 10% drawdown; 100 -> 121 is a 21% return.
     assert _curve_metrics(np.array([100.0, 105.0, 110.0, 99.0, 121.0]), np.array([2, 3, 4]), 4) == {
@@ -1464,7 +1464,7 @@ def test_sharpe_is_daily_over_market_sessions_counting_sessions_without_trades(t
     metrics, trades = _daily_sharpe_run(test_asset_cfg)
 
     assert [trade["gross_pnl"] for trade in trades] == [100.0, 100.0]
-    # Session closes 10000, 10100, 10200 from 10000: returns 0, 1%, 0.99%.
+    # Market session closes 10000, 10100, 10200 from 10000: returns 0, 1%, 0.99%.
     # mean 0.00663, sample std 0.00575, so Sharpe = sqrt(252) x 1.1547 = 18.33.
     assert metrics["Sharpe Ratio"] == 18.33
 
@@ -1473,8 +1473,10 @@ def test_daily_sharpe_uses_the_net_curve_for_the_net_column(cost_asset_cfg):
     metrics, trades = _daily_sharpe_run(cost_asset_cfg, with_costs=True)
 
     first, second = (trade["net_pnl"] for trade in trades)
-    returns = np.array([0.0, first / 10000, second / (10000 + first)])
-    assert metrics["Net"]["Sharpe Ratio"] == round(math.sqrt(252) * returns.mean() / returns.std(ddof=1), 2)
+    # Market session closes 10000, 10000 + first, 10000 + first + second from 10000: returns 0, 0.4%, 0.697%.
+    # mean 0.00366, sample std 0.00350, so Sharpe = sqrt(252) x 1.0454 = 16.59.
+    assert (first, second) == pytest.approx((40.0, 70.0))
+    assert metrics["Net"]["Sharpe Ratio"] == 16.59
     assert metrics["Gross"]["Sharpe Ratio"] != metrics["Net"]["Sharpe Ratio"]
 
 
@@ -1502,8 +1504,8 @@ def test_split_daily_sharpe_uses_each_period_s_own_market_sessions(test_asset_cf
 
     metrics, _ = _daily_sharpe_run(test_asset_cfg, data, oos_cutoff=4)
 
-    # In sample, session closes 10000, 10100 from 10000: returns 0, 1%, so Sharpe = sqrt(252) x 0.7071 = 11.22.
+    # In sample, market session closes 10000, 10100 from 10000: returns 0, 1%, so Sharpe = sqrt(252) x 0.7071 = 11.22.
     assert metrics["Sharpe Ratio"] == 11.22
-    # Out of sample, session closes 10200, 10200, 10200 from 10100: returns 0.99%, 0, 0,
+    # Out of sample, market session closes 10200, 10200, 10200 from 10100: returns 0.99%, 0, 0,
     # so Sharpe = sqrt(252) x 0.5774 = 9.17.
     assert metrics["OOS Sharpe"] == 9.17
