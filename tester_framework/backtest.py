@@ -263,6 +263,11 @@ class _OpenTrade:
     def stop_between(self, start: float, end: float) -> bool:
         return end * self.direction <= self.stop * self.direction <= start * self.direction
 
+    def stop_and_target_reachable(self, opened: float, high: float, low: float) -> bool:
+        """Whether a bar opening at opened can reach both the stop and the next target."""
+        favor, adverse = (high, low) if self.direction > 0 else (low, high)
+        return self.stop_between(opened, adverse) and self.target_between(opened, favor)
+
     def _fill(self, qty: float, raw_exit_price: float, exit_i: int, exit_time, reason: ExitReason, target_r, gap_exit: bool) -> None:
         trade, cfg = self.trade, self.cfg
         raw_exit = float(raw_exit_price)
@@ -530,11 +535,9 @@ def run_backtest(
                 open_trade.trail(opened)
 
             # Stop-first: a bar that can reach both the stop and the next target exits at the stop.
-            if intrabar == IntrabarRule.STOP_FIRST:
-                favor, adverse = (highs[i], lows[i]) if side == Side.LONG else (lows[i], highs[i])
-                if open_trade.stop_between(opened, adverse) and open_trade.target_between(opened, favor):
-                    open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
-                    break
+            if intrabar == IntrabarRule.STOP_FIRST and open_trade.stop_and_target_reachable(opened, highs[i], lows[i]):
+                open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
+                break
 
             for start, end in zip(path, path[1:]):
                 if (end - start) * open_trade.direction > 0:
