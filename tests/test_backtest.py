@@ -587,13 +587,13 @@ def test_calendar_filters_use_actual_entry_timestamp_and_count_discarded(test_as
     )
 
     accepted, trades = run_backtest(**kwargs, days=(5,), months=(2,))
-    rejected_day, _ = run_backtest(**kwargs, days=(4,), months=(2,))
-    rejected_month, _ = run_backtest(**kwargs, days=(5,), months=(1,))
+    discarded_by_day, _ = run_backtest(**kwargs, days=(4,), months=(2,))
+    discarded_by_month, _ = run_backtest(**kwargs, days=(5,), months=(1,))
 
     assert len(trades) == 1
     assert accepted["Discarded"] == 0
-    assert rejected_day["Discarded"] == 1
-    assert rejected_month["Discarded"] == 1
+    assert discarded_by_day["Discarded"] == 1
+    assert discarded_by_month["Discarded"] == 1
 
 
 @pytest.mark.parametrize(("filters", "message"), [({"days": (7,)}, "--days"), ({"months": (0,)}, "--months")])
@@ -1453,8 +1453,8 @@ def test_backtest_rejects_unknown_fill_rules(base_data, test_asset_cfg):
         _run(base_data, signals, test_asset_cfg, intrabar="low_first")
 
 
-# Three UTC market sessions: day 1 has no trade, a 1R winner enters and exits on day 2's first bar,
-# a wider-stop 1R winner enters and exits on day 3's first bar.
+# Three UTC market sessions: day 1 has no trade, a trade enters and exits at its 1R target on day 2's first bar,
+# a wider-stop trade enters and exits at its 1R target on day 3's first bar.
 DAILY_SHARPE_BARS = {
     "2025-01-01 22:00": FLAT,
     "2025-01-01 23:00": FLAT,
