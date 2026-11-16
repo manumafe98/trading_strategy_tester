@@ -17,6 +17,9 @@ from .types import VariantBatchTask
 
 
 def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, str, tuple[str, ...]]:
+    if "contract" in data:
+        # The cache is float-only and a roll needs only contract changes, so contracts become codes.
+        data = data.assign(contract=pd.factorize(data["contract"])[0])
     values_path = Path(cache_dir) / f"{cache_id}_values.npy"
     index_path = Path(cache_dir) / f"{cache_id}_index.npy"
     values = np.lib.format.open_memmap(values_path, mode="w+", dtype="float64", shape=data.shape)
@@ -55,6 +58,8 @@ def _run_variant(
         months=task["months"],
         session_exit=task["session"] if task["session_exit"] else None,
         oos_cutoff=task["oos_cutoff"],
+        target_fill=task["target_fill"],
+        intrabar=task["intrabar"],
     )
     params = {
         "risk_reward_ratio": risk_reward_ratio,

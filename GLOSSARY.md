@@ -82,17 +82,28 @@ How the engine takes profit: fixed (one target), trailing (a stop that follows t
 An exit rule that closes an open trade at the end of its variant's session window.
 _Avoid_: EOD exit, end-of-day exit
 
+**Roll**:
+The first bar of a market session where the chosen contract of a continuous series changes.
+
+**Roll exit**:
+The forced close of a trade at the close of the last bar before a roll.
+
+**End exit**:
+The close of a trade still open on the last bar of the data, at that bar's close.
+
+**Target fill**:
+The rule for when a target counts as reached: touch (price reaches the target) or tick-through (price trades at least one tick beyond it, the default).
+
+**Intrabar rule**:
+The rule for ordering prices inside a bar: path (TradingView's open-high-low-close order, the default) or stop-first (a bar that can reach both the stop and a target exits at the stop).
+
 **Gap exit**:
-An exit filled at a bar's open because the price gapped through the stop or a target.
+An exit filled at a bar's open because the price gapped through the stop or a target; under tick-through, a target gap fills at the target price instead.
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a calendar filter, a fill in the 60 minutes before a roll or across one, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
-
-**Unresolved trade**:
-A trade still open when the data ends; it is excluded from results.
-_Avoid_: open trade
 
 **Variant**:
 One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
@@ -105,6 +116,9 @@ _Avoid_: winner, best variant, optimized variant
 **Walk-forward efficiency (WFE)**:
 A variant's out-of-sample annualized return as a percentage of its in-sample annualized return; blank when the in-sample annualized return is zero or negative.
 _Avoid_: efficiency ratio, robustness score
+
+**Daily Sharpe**:
+The annualized mean over standard deviation of per-market-session equity returns, counting market sessions without trades.
 
 **Result bundle**:
 The output folder of one run, holding the results page, variant pages, and trade charts.
@@ -121,5 +135,5 @@ _Avoid_: max run-up
 The part of a trade's MFE R not kept at exit.
 
 **Continuous series**:
-An unadjusted futures price series that uses, for each market session, the contract with the highest volume in the previous market session.
+An unadjusted futures price series that uses, for each market session, the contract with the highest volume in the previous market session. Roll exits keep the price difference between contracts out of trades; indicators still see it.
 _Avoid_: back-adjusted series, front month

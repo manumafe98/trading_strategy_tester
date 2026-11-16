@@ -8,7 +8,8 @@ import numpy as np
 import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
-from .models import OPERATIONS, AssetConfig, ExitReason, Side
+from .data import session_labels
+from .models import OPERATIONS, AssetConfig, ExitReason, IntrabarRule, Side, TargetFill
 from .sessions import SessionSpec, session_exit_bars
 from .split import entered_in_sample, walk_forward_efficiency
 from .settings import OOS_FINANCIAL_COLUMNS, SPLIT_COLUMNS
@@ -17,8 +18,16 @@ from .utils import csv_items, decimal_places
 
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
+ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
+# Bar length per execution timeframe; a close entry fills at its bar's start plus this.
+BAR_DURATIONS = {
+    timeframe: pd.Timedelta(minutes=minutes)
+    for timeframe, minutes in {"1m": 1, "2m": 2, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.items()
+}
+TARGET_FILLS = tuple(rule.value for rule in TargetFill)
+INTRABAR_RULES = tuple(rule.value for rule in IntrabarRule)
 
-__all__ = ["add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
+__all__ = ["INTRABAR_RULES", "TARGET_FILLS", "add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
 
 
 def risk_reward_ratios(value: str | None) -> list[float]:
@@ -209,6 +218,7 @@ class _OpenTrade:
     trade: dict
     cfg: AssetConfig
     with_costs: bool
+    target_fill: TargetFill = TargetFill.TICK_THROUGH
     stop: float = field(init=False)
     remaining_qty: float = field(init=False)
     direction: int = field(init=False)
@@ -233,16 +243,35 @@ class _OpenTrade:
     def stop_gapped(self, opened: float) -> bool:
         return opened * self.direction <= self.stop * self.direction
 
-    def target_gapped(self, opened: float) -> bool:
+    def _target_reached_at(self) -> float | None:
+        """The price that reaches the next target: the target on a touch, one tick beyond it under tick-through."""
         target = self.target
-        return target is not None and opened * self.direction >= target["price"] * self.direction
+        if target is None:
+            return None
+        if self.target_fill == TargetFill.TOUCH:
+            return target["price"]
+        # Targets are tick-aligned, so adding the tick in Decimal lands exactly on the next tick.
+        return float(Decimal(str(target["price"])) + self.direction * Decimal(str(self.cfg.tick_size)))
+
+    def target_gapped(self, opened: float) -> bool:
+        reached_at = self._target_reached_at()
+        return reached_at is not None and opened * self.direction >= reached_at * self.direction
+
+    def target_gap_price(self, opened: float) -> float:
+        """A gap beyond the target fills at the open on a touch, at the target price under tick-through."""
+        return opened if self.target_fill == TargetFill.TOUCH else self.target["price"]
 
     def target_between(self, start: float, end: float) -> bool:
-        target = self.target
-        return target is not None and start * self.direction < target["price"] * self.direction <= end * self.direction
+        reached_at = self._target_reached_at()
+        return reached_at is not None and start * self.direction < reached_at * self.direction <= end * self.direction
 
     def stop_between(self, start: float, end: float) -> bool:
         return end * self.direction <= self.stop * self.direction <= start * self.direction
+
+    def stop_and_target_reachable(self, opened: float, high: float, low: float) -> bool:
+        """Whether a bar opening at opened can reach both the stop and the next target."""
+        favor, adverse = (high, low) if self.direction > 0 else (low, high)
+        return self.stop_between(opened, adverse) and self.target_between(opened, favor)
 
     def _fill(self, qty: float, raw_exit_price: float, exit_i: int, exit_time, reason: ExitReason, target_r, gap_exit: bool) -> None:
         trade, cfg = self.trade, self.cfg
@@ -362,6 +391,8 @@ def run_backtest(
     months: tuple[int, ...] = (),
     session_exit: SessionSpec | None = None,
     oos_cutoff: int | None = None,
+    target_fill: TargetFill = TargetFill.TICK_THROUGH,
+    intrabar: IntrabarRule = IntrabarRule.PATH,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -369,6 +400,11 @@ def run_backtest(
         raise ValueError(f"Unknown exit mode: {exit_mode}")
     if operation not in OPERATIONS:
         raise ValueError(f"Unknown operation: {operation}")
+    if target_fill not in TARGET_FILLS:
+        raise ValueError(f"--target_fill must be one of {', '.join(TARGET_FILLS)}; got: {target_fill}")
+    if intrabar not in INTRABAR_RULES:
+        raise ValueError(f"--intrabar must be one of {', '.join(INTRABAR_RULES)}; got: {intrabar}")
+    target_fill, intrabar = TargetFill(target_fill), IntrabarRule(intrabar)
     if not math.isfinite(risk_pct) or risk_pct <= 0:
         raise ValueError("--risk must be finite and positive")
     if not math.isfinite(capital) or capital <= 0:
@@ -400,6 +436,11 @@ def run_backtest(
     annualization_timeframe = execution_timeframe or timeframe
     if annualization_timeframe not in asset_cfg.bars_per_year:
         raise ValueError(f"Missing bars_per_year for {asset} {annualization_timeframe}")
+    if "1d" not in asset_cfg.bars_per_year:
+        raise ValueError(f"Missing bars_per_year for {asset} 1d")
+    if annualization_timeframe not in BAR_DURATIONS:
+        raise ValueError(f"Unknown execution timeframe for {asset}: {annualization_timeframe}")
+    bar_duration = BAR_DURATIONS[annualization_timeframe]
 
     bar_count = len(data)
     gross_curve = np.full(bar_count + 1, capital, dtype=float)
@@ -411,11 +452,17 @@ def run_backtest(
     last_bar_idx = 0
     trades = []
     discarded_signals = 0
-    unresolved_trades = 0
     busy_until = -1
     # With a session exit, open trades close at the close of their session window's last bar.
     if session_exit is not None:
         in_window, window_last_bar = session_exit_bars(data.index, session_exit)
+    # A roll is a bar whose contract differs from the previous bar's; open trades close at the bar before it.
+    roll_last_bar = np.zeros(bar_count, dtype=bool)
+    if "contract" in data.columns:
+        contracts = data["contract"].to_numpy()
+        roll_last_bar[:-1] = contracts[1:] != contracts[:-1]
+    roll_last_times = data.index[roll_last_bar]
+    roll_times = data.index[1:][roll_last_bar[:-1]]
     day_filter = set(days)
     month_filter = set(months)
     try:
@@ -432,7 +479,8 @@ def run_backtest(
         signal_entry = signal.get("entry")
         close_entry = pd.notna(signal_entry)
         entry_i = data.index.searchsorted(signal["time"], side="left" if close_entry else "right")
-        if entry_i >= bar_count or entry_i <= busy_until:
+        # A close entry needs a bar after its fill bar.
+        if entry_i + int(close_entry) >= bar_count or entry_i <= busy_until:
             discarded_signals += 1
             continue
         if close_entry and data.index[entry_i] != signal["time"]:
@@ -446,6 +494,17 @@ def run_backtest(
             continue
         # A trade must open inside the window, before the window's last close.
         if session_exit is not None and (not in_window[entry_i] or (close_entry and window_last_bar[entry_i])):
+            discarded_signals += 1
+            continue
+        # No fills in the 60 minutes before the last bar ahead of a roll; a close entry fills at its bar's close.
+        next_roll = roll_last_times.searchsorted(entry_time)
+        fill_time = entry_time + bar_duration if close_entry else entry_time
+        if next_roll < len(roll_last_times) and roll_last_times[next_roll] - fill_time < ROLL_ENTRY_BLOCK:
+            discarded_signals += 1
+            continue
+        # A signal from before a roll carries an old-contract stop, so it never fills on or after the roll bar.
+        roll_after_signal = roll_times.searchsorted(signal["time"], side="right")
+        if roll_after_signal < len(roll_times) and roll_times[roll_after_signal] <= entry_time:
             discarded_signals += 1
             continue
 
@@ -464,7 +523,7 @@ def run_backtest(
             discarded_signals += 1
             continue
 
-        open_trade = _OpenTrade(trade, asset_cfg, with_costs)
+        open_trade = _OpenTrade(trade, asset_cfg, with_costs, target_fill)
         side = trade["side"]
         trailing = exit_mode == "trailing"
         for i in range(start_i, bar_count):
@@ -478,11 +537,16 @@ def run_backtest(
                 break
             open_trade.update_peak(opened)
             while open_trade.target_gapped(opened):
-                open_trade.fill_target(opened, i, bar_time, gap_exit=True)
+                open_trade.fill_target(open_trade.target_gap_price(opened), i, bar_time, gap_exit=True)
             if open_trade.closed:
                 break
             if trailing:
                 open_trade.trail(opened)
+
+            # Stop-first: a bar that can reach both the stop and the next target exits at the stop.
+            if intrabar == IntrabarRule.STOP_FIRST and open_trade.stop_and_target_reachable(opened, highs[i], lows[i]):
+                open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
+                break
 
             for start, end in zip(path, path[1:]):
                 if (end - start) * open_trade.direction > 0:
@@ -504,15 +568,13 @@ def run_backtest(
             if session_exit is not None and window_last_bar[i]:
                 open_trade.close(path[-1], i, bar_time, ExitReason.SESSION)
                 break
+            if roll_last_bar[i]:
+                open_trade.close(path[-1], i, bar_time, ExitReason.ROLL)
+                break
+            if i == bar_count - 1:
+                open_trade.close(path[-1], i, bar_time, ExitReason.END)
+                break
             bar_gross_equity[i], bar_net_equity[i] = open_trade.marked_equity(path[-1], current_gross, current_net)
-
-        if not open_trade.closed:
-            # Unresolved trades are left out of the results; add partial/open-trade accounting only if research needs it.
-            unresolved_trades += 1
-            bar_gross_equity[last_bar_idx:bar_count] = current_gross
-            bar_net_equity[last_bar_idx:bar_count] = current_net
-            busy_until = bar_count - 1
-            continue
 
         trade = open_trade.finalize()
 
@@ -533,14 +595,25 @@ def run_backtest(
         bar_net_equity[last_bar_idx:bar_count] = current_net
 
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
+    market_sessions_per_year = asset_cfg.bars_per_year["1d"]
+    # Curve point i + 1 is the equity at the close of bar i; a market session closes at its last bar.
+    labels = session_labels(data.index, asset_cfg.session_timezone, asset_cfg.session_start)
+    market_session_closes = np.flatnonzero(np.append(labels[1:] != labels[:-1], True)) + 1
     if oos_cutoff is None:
-        return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
+        return make_metrics(
+            asset, timeframe, strategy, gross_curve, net_curve, with_costs, market_session_closes, market_sessions_per_year,
+            discarded_signals,
+        ), trades
     # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
+    # The cutoff is a market session's first bar, so that point is also the last in-sample market session close.
     metrics = make_metrics(
-        asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs, bars_per_year,
-        discarded_signals, unresolved_trades,
+        asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs,
+        market_session_closes[market_session_closes <= oos_cutoff], market_sessions_per_year, discarded_signals,
     )
-    oos = make_metrics(asset, timeframe, strategy, gross_curve[oos_cutoff:], net_curve[oos_cutoff:], with_costs, bars_per_year)
+    oos = make_metrics(
+        asset, timeframe, strategy, gross_curve[oos_cutoff:], net_curve[oos_cutoff:], with_costs,
+        market_session_closes[market_session_closes > oos_cutoff] - oos_cutoff, market_sessions_per_year,
+    )
     metrics.update({column: oos[source] for column, source in OOS_FINANCIAL_COLUMNS.items()})
     metrics["OOS Gross"] = oos["Gross"]
     metrics["OOS Net"] = oos["Net"]
@@ -558,7 +631,11 @@ def validate_calendar_filters(days: tuple[int, ...], months: tuple[int, ...]) ->
         raise ValueError("--months must contain month values from January through December")
 
 
-def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
+def _curve_metrics(equity_curve: np.ndarray, market_session_closes: np.ndarray, market_sessions_per_year: int) -> dict:
+    """Return, Max DD and Return / DD use every curve point; Daily Sharpe uses the start and each market session close.
+
+    `market_session_closes` are the curve positions of each market session's close equity, in order.
+    """
     curve = np.asarray(equity_curve, dtype="float64")
     scratch = np.empty_like(curve)
     np.maximum.accumulate(curve, out=scratch)
@@ -567,14 +644,12 @@ def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
     max_dd = abs(float(np.nanmin(scratch)) * 100)
     total_return = (curve[-1] / curve[0] - 1) * 100
     sharpe = float("nan")
-    returns = scratch[:-1]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        np.divide(curve[1:], curve[:-1], out=returns)
-    returns -= 1
-    if curve.min() > 0 and len(returns) > 1 and np.isfinite(returns).all():
+    daily = curve[np.r_[0, market_session_closes]]
+    if curve.min() > 0 and len(daily) > 2:
+        returns = daily[1:] / daily[:-1] - 1
         std = float(returns.std(ddof=1))
         if math.isfinite(std) and std > 0:
-            sharpe = math.sqrt(bars_per_year) * float(returns.mean() / std)
+            sharpe = math.sqrt(market_sessions_per_year) * float(returns.mean() / std)
     return {
         "Return": round(float(total_return), 2),
         "Max DD": round(max_dd, 2),
@@ -590,18 +665,17 @@ def make_metrics(
     gross_equity_curve: np.ndarray,
     net_equity_curve: np.ndarray,
     with_costs: bool,
-    bars_per_year: int,
+    market_session_closes: np.ndarray,
+    market_sessions_per_year: int,
     discarded_signals: int = 0,
-    unresolved_trades: int = 0,
 ) -> dict:
-    gross = _curve_metrics(gross_equity_curve, bars_per_year)
-    net = _curve_metrics(net_equity_curve, bars_per_year) if with_costs else gross.copy()
+    gross = _curve_metrics(gross_equity_curve, market_session_closes, market_sessions_per_year)
+    net = _curve_metrics(net_equity_curve, market_session_closes, market_sessions_per_year) if with_costs else gross.copy()
     return {
         "Strategy": strategy,
         "Asset": asset,
         "TF": timeframe,
         "Discarded": discarded_signals,
-        "Unresolved": unresolved_trades,
         **(net if with_costs else gross),
         "Gross": gross,
         "Net": net,
@@ -635,7 +709,7 @@ def result_columns(operation: str, include_session: bool = False, split: bool = 
     columns = ["Strategy", "Asset", "TF"]
     if include_session:
         columns.append("Session")
-    columns += ["RR", "Exit Mode", "Trades", "Discarded", "Unresolved"]
+    columns += ["RR", "Exit Mode", "Trades", "Discarded"]
     if operation == "all":
         columns += ["Long", "Short"]
     columns += ["W", "BE", "L", "Win Rate", "Expectancy R", "Avg Duration", "Return", "Max DD", "Sharpe Ratio", "Return / DD"]

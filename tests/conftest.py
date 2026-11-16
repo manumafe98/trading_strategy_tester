@@ -23,7 +23,7 @@ def test_asset_cfg() -> AssetConfig:
         commission_per_side=0.0,
         session_timezone="UTC",
         session_start="00:00",
-        bars_per_year={"1h": 1716},
+        bars_per_year={"1h": 1716, "1d": 252},
     )
 
 
@@ -41,7 +41,7 @@ def cost_asset_cfg() -> AssetConfig:
         commission_per_side=0.1,
         session_timezone="UTC",
         session_start="00:00",
-        bars_per_year={"1h": 1716},
+        bars_per_year={"1h": 1716, "1d": 252},
     )
 
 

@@ -34,6 +34,7 @@ def test_local_timestamp_csv_resamples_within_period_as_naive_utc():
         assert local.iloc[0]["close"] == 21
         assert local.iloc[0]["volume"] == 3
         assert getattr(local.index, "tz", None) is None
+        assert "contract" not in local
 
 
 def test_continuous_futures_use_contract_with_most_previous_session_volume():
@@ -59,6 +60,37 @@ def test_continuous_futures_use_contract_with_most_previous_session_volume():
         assert len(local) == 2
         assert local.index.name == "time"
         assert list(local["close"]) == [101.5, 102.5]
+        assert list(local["contract"]) == ["FUTZ5", "FUTZ5"]
+
+
+@pytest.mark.parametrize("timeframe", ["1h", "1d"])
+def test_continuous_futures_keep_chosen_contract_through_resampling(timeframe):
+    with TemporaryDirectory() as tmp:
+        data_dir = Path(tmp)
+        futures_dir = data_dir / "futures" / "FUT"
+        futures_dir.mkdir(parents=True)
+        (futures_dir / "FUT.csv").write_text(
+            "\n".join(
+                [
+                    "ts_event,open,high,low,close,volume,symbol",
+                    "2025-01-01T00:00:00Z,100,101,99,100.5,10,FUTZ5",
+                    "2025-01-01T00:00:00Z,200,201,199,200.5,5,FUTH6",
+                    "2025-01-02T00:00:00Z,101,102,100,101.5,1,FUTZ5",
+                    "2025-01-02T00:00:00Z,201,202,200,201.5,20,FUTH6",
+                    "2025-01-03T00:00:00Z,202,203,201,202.5,20,FUTH6",
+                    "2025-01-03T00:00:00Z,102,103,101,102.5,1,FUTZ5",
+                ]
+            ),
+            encoding="utf-8",
+        )
+        cfg = AssetConfig(
+            ticker="FUT", point_value=1, tick_size=0.1, qty_step=1, min_qty=1, min_risk_ticks=1,
+            spread_points=0, slippage_points=0, commission_per_side=0,
+            session_timezone="UTC", session_start="00:00", bars_per_year={"1d": 252},
+        )
+        local = load_local_data("FUT", timeframe, "max", data_dir=data_dir, asset_cfg=cfg)
+        assert list(local["contract"]) == ["FUTZ5", "FUTH6"]
+        assert list(local["close"]) == [101.5, 202.5]
 
 
 def test_mixed_case_local_columns():

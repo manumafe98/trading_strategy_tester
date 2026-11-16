@@ -156,10 +156,9 @@ def test_trailing_stop_updates_at_bar_open(test_asset_cfg):
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], [101.5, 102.5, 100.8, 102.0])
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
     _, trailing = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
-    fixed_metrics, fixed = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="fixed")
+    _, fixed = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="fixed")
     assert [(t["exit_reason"], t["exit_i"], t["exit"], t["realized_r"]) for t in trailing] == [(ExitReason.STOP, 2, 101.0, 1.0)]
-    assert fixed == []
-    assert fixed_metrics["Unresolved"] == 1
+    assert [(t["exit_reason"], t["exit_i"], t["exit"], t["realized_r"]) for t in fixed] == [(ExitReason.END, 2, 102.0, 2.0)]
 
 
 def test_short_trailing_stop_follows_low_and_never_loosens(test_asset_cfg):
@@ -362,27 +361,26 @@ def test_empty_signals(base_data, test_asset_cfg):
     assert math.isnan(metrics["Return / DD"])
 
 
-def test_unresolved_trade_discarded(base_data, hourly_index, test_asset_cfg):
-    unresolved = base_data.copy()
-    unresolved.loc[hourly_index[1], ["high", "low", "close"]] = [100.5, 99.5, 100.0]
-    signals = pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}])
-    metrics, trades = run_backtest(
-        unresolved,
-        signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
-    )
-    assert not trades
-    assert metrics["Return"] == 0
-    assert metrics["Unresolved"] == 1
+def test_trade_open_at_data_end_exits_at_last_close_with_costs(cost_asset_cfg):
+    # Entry 100, stop 99, 1R target 101 never reached; the data ends on a 100.5 close.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 100.0, 100.5])
+    metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], cost_asset_cfg, with_costs=True)
+
+    trade = trades[0]
+    # 100 contracts; 0.2 points per side (half spread 0.1 + slippage 0.1); commission 0.1 x 100 x 2.
+    assert (trade["exit_reason"], trade["exit_time"], trade["exit"]) == (ExitReason.END, data.index[-1], 100.5)
+    assert trade["net_exit"] == pytest.approx(100.3)
+    assert trade["gross_pnl"] == pytest.approx(50.0)
+    assert trade["net_pnl"] == pytest.approx(-10.0)
+    assert (metrics["Gross"]["Return"], metrics["Net"]["Return"]) == (0.5, -0.1)
+
+
+def test_close_entry_on_last_bar_is_discarded(test_asset_cfg):
+    # A close entry on the last bar has no bar left to trade on.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0])
+    metrics, trades = _run(data, [{"time": data.index[-1], "side": "long", "stop": 99.0, "entry": 100.0}], test_asset_cfg)
+
+    assert (metrics["Discarded"], trades) == (1, [])
 
 
 def test_gap_stop_fills_at_open(test_asset_cfg):
@@ -414,7 +412,7 @@ def test_gap_stop_fills_at_open(test_asset_cfg):
     assert trades[0]["exit"] == 97.0
 
 
-def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", next_bar=None):
+def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", next_bar=None, target_fill="tick_through"):
     bars = [[100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], gap_bar]
     if next_bar:
         bars.append(next_bar)
@@ -424,7 +422,7 @@ def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", nex
         data,
         pd.DataFrame([{"time": idx[0], "side": side, "stop": stop}]),
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=risk_reward_ratio, exit_mode=exit_mode,
-        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
+        operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg, target_fill=target_fill,
     )
     return trades[0]
 
@@ -439,7 +437,7 @@ def _gap_run(cfg, gap_bar, side, stop, risk_reward_ratio, exit_mode="fixed", nex
     ],
 )
 def test_gap_through_stop_or_target_fills_at_open_as_gap_exit(test_asset_cfg, side, stop, gap_bar, reason, fill):
-    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3)
+    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3, target_fill="touch")
     assert [(f["exit_reason"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [(reason, fill, True)]
     assert trade["exit"] == fill
 
@@ -451,17 +449,44 @@ def test_intrabar_stop_and_target_are_not_gap_exits(test_asset_cfg):
     assert [(f["raw_exit"], f["gap_exit"]) for f in stop["exits"]] == [(99.0, False)]
 
 
-def test_gap_through_partial_targets_fills_each_crossed_target_at_open(test_asset_cfg):
+@pytest.mark.parametrize(
+    ("side", "stop", "gap_bar", "fill"),
+    [
+        ("long", 99.0, [105.0, 106.0, 104.0, 105.0], 103.0),
+        ("short", 101.0, [95.0, 96.0, 94.0, 95.0], 97.0),
+    ],
+)
+def test_tick_through_gap_beyond_target_fills_at_the_target_as_gap_exit(test_asset_cfg, side, stop, gap_bar, fill):
+    trade = _gap_run(test_asset_cfg, gap_bar, side, stop, risk_reward_ratio=3)
+    assert [(f["exit_reason"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [(ExitReason.TARGET, fill, True)]
+
+
+@pytest.mark.parametrize(
+    ("target_fill", "gap_fills"),
+    [("touch", (102.5, 102.5)), ("tick_through", (101.0, 102.0))],
+)
+def test_gap_through_partial_targets_fills_each_crossed_target(test_asset_cfg, target_fill, gap_fills):
     trade = _gap_run(
         test_asset_cfg, [102.5, 102.6, 102.4, 102.5], "long", 99.0, risk_reward_ratio=3, exit_mode="partial",
-        next_bar=[102.5, 103.5, 102.4, 103.0],
+        next_bar=[102.5, 103.5, 102.4, 103.0], target_fill=target_fill,
     )
     assert [(f["target_r"], f["qty"], f["raw_exit"], f["gap_exit"]) for f in trade["exits"]] == [
-        (1.0, 33.0, 102.5, True),
-        (2.0, 33.0, 102.5, True),
+        (1.0, 33.0, gap_fills[0], True),
+        (2.0, 33.0, gap_fills[1], True),
         (3, 34.0, 103.0, False),
     ]
-    assert trade["gross_pnl"] == 33 * 2.5 * 2 + 34 * 3.0
+
+
+def test_partial_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
+    # 2R partial: 50 at the 101 1R target, 50 at the 102 final target.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.5, 100.5], [100.5, 102.1, 100.5, 102.0])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, touched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="partial", target_fill="touch")
+    _, ticked = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="partial")
+
+    assert [(f["target_r"], f["exit_i"]) for f in touched[0]["exits"]] == [(1.0, 1), (2, 2)]
+    assert [(f["target_r"], f["exit_i"]) for f in ticked[0]["exits"]] == [(1.0, 2), (2, 2)]
 
 
 def test_high_first_path_reaches_target_before_stop(test_asset_cfg):
@@ -510,7 +535,7 @@ def test_partial_peak_and_giveback_are_position_weighted(test_asset_cfg):
         data,
         pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
+        risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg, target_fill="touch",
     )
     trade = trades[0]
     assert trade["realized_r"] == 0
@@ -518,21 +543,19 @@ def test_partial_peak_and_giveback_are_position_weighted(test_asset_cfg):
     assert trade["giveback_r"] == 1
 
 
-def test_unresolved_partial_trade_discards_completed_fills(test_asset_cfg):
-    idx = pd.date_range("2025-01-01", periods=3, freq="h")
-    data = pd.DataFrame(
-        {"open": [100, 100, 100.5], "high": [100, 101, 101], "low": [100, 99.5, 100], "close": [100, 100.5, 100.5], "volume": [0, 0, 0]},
-        index=idx,
+def test_partial_remainder_open_at_data_end_exits_at_last_close(test_asset_cfg):
+    # Partial 2R from 100: half fills at the 101 1R target; the other half is still open when the data ends.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.5, 100.5], [100.5, 101.0, 100.0, 100.5])
+    _, trades = _run(
+        data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg,
+        risk_reward_ratio=2, exit_mode="partial", target_fill="touch",
     )
-    metrics, trades = run_backtest(
-        data,
-        pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
-    )
-    assert trades == []
-    assert metrics["Unresolved"] == 1
-    assert metrics["Return"] == 0
+
+    assert [(f["exit_reason"], f["exit_i"], f["raw_exit"]) for f in trades[0]["exits"]] == [
+        (ExitReason.TARGET, 1, 101.0), (ExitReason.END, 2, 100.5),
+    ]
+    assert trades[0]["exit_reason"] == ExitReason.END
+    assert trades[0]["realized_r"] == pytest.approx(0.75)
 
 
 def test_calendar_filters_use_actual_entry_timestamp_and_count_discarded(test_asset_cfg):
@@ -564,13 +587,13 @@ def test_calendar_filters_use_actual_entry_timestamp_and_count_discarded(test_as
     )
 
     accepted, trades = run_backtest(**kwargs, days=(5,), months=(2,))
-    rejected_day, _ = run_backtest(**kwargs, days=(4,), months=(2,))
-    rejected_month, _ = run_backtest(**kwargs, days=(5,), months=(1,))
+    discarded_by_day, _ = run_backtest(**kwargs, days=(4,), months=(2,))
+    discarded_by_month, _ = run_backtest(**kwargs, days=(5,), months=(1,))
 
     assert len(trades) == 1
     assert accepted["Discarded"] == 0
-    assert rejected_day["Discarded"] == 1
-    assert rejected_month["Discarded"] == 1
+    assert discarded_by_day["Discarded"] == 1
+    assert discarded_by_month["Discarded"] == 1
 
 
 @pytest.mark.parametrize(("filters", "message"), [({"days": (7,)}, "--days"), ({"months": (0,)}, "--months")])
@@ -629,13 +652,14 @@ def test_first_bar_return_includes_starting_capital(test_asset_cfg):
 
 
 def test_nonpositive_equity_has_no_sharpe():
-    assert math.isnan(_curve_metrics(np.array([100.0, 0.0, 100.0]), 252)["Sharpe Ratio"])
+    assert math.isnan(_curve_metrics(np.array([100.0, 0.0, 100.0, 100.0]), np.array([1, 2, 3]), 252)["Sharpe Ratio"])
 
 
 def test_curve_metrics_worked_example():
-    # Returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
+    # Market session closes 110, 99, 121 from 100 (105 is inside the first market session):
+    # returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
     # Peak 110 -> trough 99 is a 10% drawdown; 100 -> 121 is a 21% return.
-    assert _curve_metrics(np.array([100.0, 110.0, 99.0, 121.0]), 4) == {
+    assert _curve_metrics(np.array([100.0, 105.0, 110.0, 99.0, 121.0]), np.array([2, 3, 4]), 4) == {
         "Return": 21.0,
         "Max DD": 10.0,
         "Sharpe Ratio": 0.91,
@@ -647,30 +671,13 @@ def test_make_metrics_reports_net_curve_only_with_costs():
     gross = np.array([100.0, 110.0, 99.0, 121.0])
     net = np.array([100.0, 105.0])
 
-    without_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, False, 4)
-    with_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, True, 4)
+    without_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, False, np.array([1]), 4)
+    with_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, True, np.array([1]), 4)
 
     assert without_costs["Net"] == without_costs["Gross"]
     assert without_costs["Return"] == 21.0
     assert with_costs["Gross"]["Return"] == 21.0
     assert with_costs["Net"]["Return"] == with_costs["Return"] == 5.0
-
-
-def test_sharpe_uses_execution_timeframe(test_asset_cfg):
-    cfg = replace(test_asset_cfg, bars_per_year={"1h": 100, "5m": 400})
-    idx = pd.date_range("2025-01-01", periods=3, freq="h")
-    data = pd.DataFrame(
-        {"open": [100, 100, 100], "high": [100, 101.1, 100], "low": [100, 99.5, 100], "close": [100, 101, 100], "volume": [0, 0, 0]},
-        index=idx,
-    )
-    kwargs = dict(
-        data=data, signals=pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
-    )
-    hourly, _ = run_backtest(**kwargs, execution_timeframe="1h")
-    five_minute, _ = run_backtest(**kwargs, execution_timeframe="5m")
-    assert five_minute["Sharpe Ratio"] == pytest.approx(hourly["Sharpe Ratio"] * 2, abs=0.02)
 
 
 def test_result_columns_follow_operation_and_session():
@@ -679,7 +686,7 @@ def test_result_columns_follow_operation_and_session():
     assert "Long" in result_columns("all")
     assert "Long" not in result_columns("long_only")
     assert "Discarded" in result_columns("all")
-    assert "Unresolved" in result_columns("all")
+    assert "Unresolved" not in result_columns("all")
 
 
 def test_result_columns_append_split_columns_only_in_split_mode():
@@ -918,14 +925,6 @@ def test_close_entry_winning_trades_have_no_drawdown(test_asset_cfg):
     assert metrics["Return"] == 2.01
 
 
-def test_close_entry_sharpe_has_no_return_on_entry_bars(test_asset_cfg):
-    metrics, _ = _two_winning_close_entries(test_asset_cfg)
-
-    # Curve 10000, 10000, 10100, 10100, 10201, 10201: bar returns 0, 1%, 0, 1%, 0.
-    # mean 0.004, sample std sqrt(3e-5), so Sharpe = sqrt(1716) * 0.004 / sqrt(3e-5) = 30.25.
-    assert metrics["Sharpe Ratio"] == 30.25
-
-
 def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
     idx = pd.date_range("2025-01-01", periods=3, freq="h")
     data = pd.DataFrame(
@@ -952,7 +951,7 @@ def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
 
 
 def mnq_like_cfg(test_asset_cfg):
-    return replace(test_asset_cfg, point_value=2.0, tick_size=0.25, min_risk_ticks=4, bars_per_year={"1m": 347760})
+    return replace(test_asset_cfg, point_value=2.0, tick_size=0.25, min_risk_ticks=4, bars_per_year={"1m": 347760, "1d": 252})
 
 
 def min_risk_run(data, signals, cfg):
@@ -1134,11 +1133,13 @@ def test_session_exit_discards_trades_that_cannot_open_before_window_close(test_
     assert (metrics["Discarded"], trades) == (1, []), reason
 
 
-def test_session_exit_leaves_trade_unresolved_when_data_ends_inside_window(test_asset_cfg):
-    data = _timed_bars({"2025-01-02 13:00": FLAT, "2025-01-02 14:00": FLAT})
-    metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
+def test_session_exit_closes_trade_at_data_end_inside_window(test_asset_cfg):
+    data = _timed_bars({"2025-01-02 13:00": FLAT, "2025-01-02 14:00": (100.0, 100.5, 100.0, 100.4)})
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
 
-    assert (metrics["Unresolved"], trades) == (1, [])
+    assert [(t["exit_reason"], t["exit_time"], t["exit"]) for t in trades] == [
+        (ExitReason.END, pd.Timestamp("2025-01-02 14:00"), 100.4),
+    ]
 
 
 def _split_run(cfg, **overrides):
@@ -1165,13 +1166,18 @@ def test_split_metrics_are_the_curve_metrics_of_each_slice_gross_and_net(cost_as
     gross = [10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100]
     net = [10000, 10000, 10040, 10040, 9930, 10080, 10080, 9920, 9920]
     assert len(trades) == 3
-    assert metrics["Gross"] == _curve_metrics(np.array(gross[:5], dtype=float), 1716)
-    assert metrics["Net"] == _curve_metrics(np.array(net[:5], dtype=float), 1716)
-    assert metrics["OOS Gross"] == _curve_metrics(np.array(gross[4:], dtype=float), 1716)
-    assert metrics["OOS Net"] == _curve_metrics(np.array(net[4:], dtype=float), 1716)
+    # All bars are one market session, so only the Daily Sharpe is blank; split Sharpe has its own test.
+    def curve_metrics(curve):
+        return {**_curve_metrics(np.array(curve, dtype=float), np.array([], dtype=int), 252), "Sharpe Ratio": None}
+
+    for name in ("Gross", "Net", "OOS Gross", "OOS Net"):
+        assert math.isnan(metrics[name]["Sharpe Ratio"])
+    assert {**metrics["Gross"], "Sharpe Ratio": None} == curve_metrics(gross[:5])
+    assert {**metrics["Net"], "Sharpe Ratio": None} == curve_metrics(net[:5])
+    assert {**metrics["OOS Gross"], "Sharpe Ratio": None} == curve_metrics(gross[4:])
+    assert {**metrics["OOS Net"], "Sharpe Ratio": None} == curve_metrics(net[4:])
     assert metrics["Return"] == metrics["Net"]["Return"] == -0.7
     assert metrics["OOS Return"] == metrics["OOS Net"]["Return"]
-    assert metrics["OOS Sharpe"] == metrics["OOS Net"]["Sharpe Ratio"]
 
 
 def test_split_metrics_carry_walk_forward_efficiency_gross_and_net(cost_asset_cfg):
@@ -1223,3 +1229,303 @@ def test_without_cutoff_metrics_have_no_split_values(test_asset_cfg):
 def test_backtest_rejects_invalid_cutoffs(test_asset_cfg, overrides, message):
     with pytest.raises(ValueError, match=message):
         _split_run(test_asset_cfg, **overrides)
+
+
+def _contract_bars(bars):
+    """Bars keyed by UTC start time: {"2025-01-02 13:00": (open, high, low, close, contract)}."""
+    idx = pd.DatetimeIndex([pd.Timestamp(time) for time in bars])
+    data = pd.DataFrame(list(bars.values()), index=idx, columns=["open", "high", "low", "close", "contract"])
+    return data.astype({column: float for column in ("open", "high", "low", "close")})
+
+
+# FUTH5 trades 50 points above FUTZ4; the roll is the 22:00 bar, after the 21:00-22:00 break.
+ROLL_BARS = {
+    "2025-01-02 17:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
+    "2025-01-02 18:00": (100.0, 100.5, 100.0, 100.5, "FUTZ4"),
+    "2025-01-02 19:00": (100.4, 100.8, 100.2, 100.5, "FUTZ4"),
+    "2025-01-02 22:00": (150.0, 150.0, 150.0, 150.0, "FUTH5"),
+}
+
+
+def test_roll_exit_closes_open_trade_at_last_bar_before_roll(cost_asset_cfg):
+    data = _contract_bars(ROLL_BARS)
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], cost_asset_cfg, with_costs=True)
+
+    (trade,) = trades
+    assert trade["exit_reason"] == ExitReason.ROLL
+    assert trade["exit_time"] == pd.Timestamp("2025-01-02 19:00")
+    # 100 contracts entered at 100 and closed at 100.5; 0.2 points per side and commission 0.1 x 100 x 2.
+    assert trade["exit"] == 100.5
+    assert trade["gross_pnl"] == pytest.approx(50.0)
+    assert trade["net_pnl"] == pytest.approx(-10.0)
+
+
+def test_data_without_contract_column_has_no_roll_exit(test_asset_cfg):
+    data = _contract_bars(ROLL_BARS).drop(columns="contract")
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg)
+
+    # The contract gap reaches the trade as a gap through the 101 target, which fills at the target.
+    (trade,) = trades
+    assert (trade["exit_reason"], trade["exit"]) == (ExitReason.TARGET, 101.0)
+
+
+@pytest.mark.parametrize(("fill", "discarded"), [("20:00", 1), ("19:59", 0)])
+def test_signal_filling_in_last_60_minutes_before_roll_is_discarded(test_asset_cfg, fill, discarded):
+    # 1m bars of FUTZ4 end with the 20:59 bar (closing 21:00); the market reopens on FUTH5 at 22:00.
+    bars = {str(time): (100.0, 100.0, 100.0, 100.0, "FUTZ4") for time in pd.date_range("2025-01-02 19:57", "2025-01-02 20:59", freq="1min")}
+    bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
+    data = _contract_bars(bars)
+    signal_time = pd.Timestamp(f"2025-01-02 {fill}") - pd.Timedelta(minutes=1)
+
+    metrics, trades = _run(data, [{"time": signal_time, "side": "long", "stop": 99.0}], test_asset_cfg)
+
+    assert metrics["Discarded"] == discarded
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)
+
+
+
+@pytest.mark.parametrize(("signal_bar", "discarded"), [("18:00", 0), ("19:00", 1)])
+def test_close_entry_roll_block_measures_from_the_fill_at_the_bar_close(test_asset_cfg, signal_bar, discarded):
+    # 1h FUTZ4 bars end with the 20:00 bar; a close entry on the 19:00 bar fills at 20:00, like a next-open entry.
+    bars = {f"2025-01-02 {hour}:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4") for hour in (17, 18, 19, 20)}
+    bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
+    data = _contract_bars(bars)
+    signal = {"time": pd.Timestamp(f"2025-01-02 {signal_bar}"), "side": "long", "entry": 100.0, "stop": 99.0}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    assert metrics["Discarded"] == discarded
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)
+
+
+@pytest.mark.parametrize(("signal_time", "stop", "discarded"), [("12:00", 99.0, 1), ("22:00", 149.0, 0)])
+def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, signal_time, stop, discarded):
+    # The last FUTZ4 bar starts 6 hours after the previous one, so the 60-minute block alone does not reach its signal.
+    data = _contract_bars(
+        {
+            "2025-01-02 06:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
+            "2025-01-02 12:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
+            "2025-01-02 22:00": (150.0, 150.0, 150.0, 150.0, "FUTH5"),
+            "2025-01-02 23:00": (150.0, 151.1, 150.0, 151.0, "FUTH5"),
+        }
+    )
+    signal = {"time": pd.Timestamp(f"2025-01-02 {signal_time}"), "side": "long", "stop": stop}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    # A signal on the last FUTZ4 bar carries a FUTZ4 stop; one on the roll bar fills on FUTH5 and trades.
+    assert metrics["Discarded"] == discarded
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.TARGET] * (1 - discarded)
+
+
+def test_trade_open_at_data_end_after_a_roll_exits_at_last_close(test_asset_cfg):
+    data = _contract_bars(
+        {
+            **ROLL_BARS,
+            "2025-01-02 23:00": (150.0, 150.5, 150.0, 150.5, "FUTH5"),
+            "2025-01-03 00:00": (150.5, 150.8, 150.2, 150.6, "FUTH5"),
+        }
+    )
+    signal = {"time": pd.Timestamp("2025-01-02 22:00"), "side": "long", "stop": 149.0}
+
+    _, trades = _run(data, [signal], test_asset_cfg)
+
+    assert [(t["exit_reason"], t["exit_time"], t["exit"]) for t in trades] == [
+        (ExitReason.END, pd.Timestamp("2025-01-03 00:00"), 150.6),
+    ]
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "touch_bar"),
+    [
+        ("long", 99.0, [100.0, 101.0, 99.5, 100.5]),
+        ("short", 101.0, [100.0, 100.5, 99.0, 99.5]),
+    ],
+)
+def test_bar_extreme_equal_to_target_fills_on_touch_but_not_tick_through(test_asset_cfg, side, stop, touch_bar):
+    data = _bars([100.0, 100.0, 100.0, 100.0], touch_bar)
+    signals = [{"time": data.index[0], "side": side, "stop": stop}]
+
+    _, touched = _run(data, signals, test_asset_cfg, target_fill="touch")
+    _, untouched = _run(data, signals, test_asset_cfg, target_fill="tick_through")
+
+    assert (touched[0]["exit_reason"], touched[0]["exit"]) == (ExitReason.TARGET, touch_bar[1] if side == "long" else touch_bar[2])
+    assert [t["exit_reason"] for t in untouched] == [ExitReason.END]
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "through_bar", "target"),
+    [
+        ("long", 99.0, [100.0, 101.1, 99.5, 100.5], 101.0),
+        ("short", 101.0, [100.0, 100.5, 98.9, 99.5], 99.0),
+    ],
+)
+def test_tick_through_target_fills_at_the_target_price(test_asset_cfg, side, stop, through_bar, target):
+    data = _bars([100.0, 100.0, 100.0, 100.0], through_bar)
+
+    _, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg)
+
+    assert (trades[0]["exit_reason"], trades[0]["exit"]) == (ExitReason.TARGET, target)
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "both_bar"),
+    [
+        ("long", 99.0, [100.8, 101.5, 98.5, 100.0]),  # open nearer the high: the path reaches the target first
+        ("long", 99.0, [99.2, 101.5, 98.5, 100.0]),  # open nearer the low
+        ("short", 101.0, [99.2, 101.5, 98.5, 100.0]),  # open nearer the low: the path reaches the target first
+        ("short", 101.0, [100.8, 101.5, 98.5, 100.0]),  # open nearer the high
+    ],
+)
+def test_stop_first_exits_at_the_stop_when_stop_and_target_share_a_bar(test_asset_cfg, side, stop, both_bar):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], both_bar)
+    signals = [{"time": data.index[0], "side": side, "stop": stop}]
+
+    _, trades = _run(data, signals, test_asset_cfg, intrabar="stop_first")
+
+    assert [(f["exit_reason"], f["raw_exit"]) for f in trades[0]["exits"]] == [(ExitReason.STOP, stop)]
+
+
+@pytest.mark.parametrize(
+    ("exit_mode", "bar", "path_exits", "stop_first_exits"),
+    [
+        # Partial 2R: 50 at the 101 1R target, 50 at 102; the bar reaches 101.5 then 98.5.
+        ("partial", [100.8, 101.5, 98.5, 100.0], [(ExitReason.TARGET, 101.0), (ExitReason.STOP, 99.0)], [(ExitReason.STOP, 99.0)]),
+        # Trailing 2R: the open trails the stop to 101.4; the bar reaches the 102 target then 100.8.
+        ("trailing", [101.9, 102.5, 100.8, 101.0], [(ExitReason.TARGET, 102.0)], [(ExitReason.STOP, 101.4)]),
+    ],
+)
+def test_managed_exit_modes_follow_the_intrabar_rule(test_asset_cfg, exit_mode, bar, path_exits, stop_first_exits):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], bar)
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, path = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode=exit_mode)
+    _, stop_first = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode=exit_mode, intrabar="stop_first")
+
+    assert [(f["exit_reason"], f["raw_exit"]) for f in path[0]["exits"]] == path_exits
+    assert [(f["exit_reason"], f["raw_exit"]) for f in stop_first[0]["exits"]] == stop_first_exits
+
+
+def test_trailing_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
+    # Trailing 2R: the 102 target is touched; the trailing stop at 101.5 stays below the bar.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 102.0, 100.0, 101.8])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, touched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing", target_fill="touch")
+    _, untouched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing")
+
+    assert (touched[0]["exit_reason"], touched[0]["exit"]) == (ExitReason.TARGET, 102.0)
+    assert [t["exit_reason"] for t in untouched] == [ExitReason.END]
+
+
+def test_stop_first_leaves_a_bar_that_cannot_reach_the_target_to_the_path(test_asset_cfg):
+    # Trailing 3R (target 103): the path reaches 101.6, trails the stop to 101.1, then falls through it.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], [100.2, 101.6, 98.5, 99.0])
+    signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
+
+    _, trades = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing", intrabar="stop_first")
+
+    assert [(f["exit_reason"], f["raw_exit"]) for f in trades[0]["exits"]] == [(ExitReason.STOP, 101.1)]
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "flat", "through_bar", "target"),
+    [
+        # Entry 1.0, R 0.1: 1.1 + 0.1 is 1.2000000000000002 in floats, and the trigger must still be 1.2.
+        ("long", 0.9, 1.0, [1.0, 1.2, 1.0, 1.1], 1.1),
+        # Entry 0.4, R 0.1: 0.3 - 0.1 is 0.19999999999999998 in floats, and the trigger must still be 0.2.
+        ("short", 0.5, 0.4, [0.4, 0.4, 0.2, 0.3], 0.3),
+    ],
+)
+def test_tick_through_trigger_is_exactly_one_tick_beyond_the_target(test_asset_cfg, side, stop, flat, through_bar, target):
+    data = _bars([flat] * 4, [flat] * 4, through_bar)
+
+    _, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg)
+
+    assert (trades[0]["target"], trades[0]["exit_reason"], trades[0]["exit_i"]) == (target, ExitReason.TARGET, 2)
+
+
+def test_backtest_rejects_an_execution_timeframe_without_a_bar_length(base_data, test_asset_cfg):
+    cfg = replace(test_asset_cfg, bars_per_year={**test_asset_cfg.bars_per_year, "4h": 429})
+    with pytest.raises(ValueError, match="Unknown execution timeframe for TEST: 4h"):
+        _run(base_data, [{"time": base_data.index[0], "side": "long", "stop": 99.0}], cfg, timeframe="4h")
+
+
+def test_backtest_rejects_unknown_fill_rules(base_data, test_asset_cfg):
+    signals = [{"time": base_data.index[0], "side": "long", "stop": 99.0}]
+    with pytest.raises(ValueError, match="--target_fill"):
+        _run(base_data, signals, test_asset_cfg, target_fill="near")
+    with pytest.raises(ValueError, match="--intrabar"):
+        _run(base_data, signals, test_asset_cfg, intrabar="low_first")
+
+
+# Three UTC market sessions: day 1 has no trade, a trade enters and exits at its 1R target on day 2's first bar,
+# a wider-stop trade enters and exits at its 1R target on day 3's first bar.
+DAILY_SHARPE_BARS = {
+    "2025-01-01 22:00": FLAT,
+    "2025-01-01 23:00": FLAT,
+    "2025-01-02 00:00": (100.0, 101.5, 100.0, 100.0),
+    "2025-01-02 01:00": FLAT,
+    "2025-01-03 00:00": (100.0, 102.5, 100.0, 100.0),
+    "2025-01-03 01:00": FLAT,
+}
+
+
+def _daily_sharpe_run(cfg, data=None, **overrides):
+    data = _timed_bars(DAILY_SHARPE_BARS) if data is None else data
+    signals = [
+        {"time": pd.Timestamp("2025-01-01 23:55"), "side": "long", "stop": 99.0},
+        {"time": pd.Timestamp("2025-01-02 01:55"), "side": "long", "stop": 98.0},
+    ]
+    return _run(data, signals, cfg, **overrides)
+
+
+def test_sharpe_is_daily_over_market_sessions_counting_sessions_without_trades(test_asset_cfg):
+    metrics, trades = _daily_sharpe_run(test_asset_cfg)
+
+    assert [trade["gross_pnl"] for trade in trades] == [100.0, 100.0]
+    # Market session closes 10000, 10100, 10200 from 10000: returns 0, 1%, 0.99%.
+    # mean 0.00663, sample std 0.00575, so Sharpe = sqrt(252) x 1.1547 = 18.33.
+    assert metrics["Sharpe Ratio"] == 18.33
+
+
+def test_daily_sharpe_uses_the_net_curve_for_the_net_column(cost_asset_cfg):
+    metrics, trades = _daily_sharpe_run(cost_asset_cfg, with_costs=True)
+
+    first, second = (trade["net_pnl"] for trade in trades)
+    # Market session closes 10000, 10000 + first, 10000 + first + second from 10000: returns 0, 0.4%, 0.697%.
+    # mean 0.00366, sample std 0.00350, so Sharpe = sqrt(252) x 1.0454 = 16.59.
+    assert (first, second) == pytest.approx((40.0, 70.0))
+    assert metrics["Net"]["Sharpe Ratio"] == 16.59
+    assert metrics["Gross"]["Sharpe Ratio"] != metrics["Net"]["Sharpe Ratio"]
+
+
+def test_same_trades_on_1h_and_5m_data_give_the_same_sharpe(cost_asset_cfg):
+    # Each hourly bar becomes twelve 5m bars: the first carries its range, the rest stay at its close.
+    hourly = _timed_bars(DAILY_SHARPE_BARS)
+    five_minute = pd.DataFrame(
+        [row if step == 0 else [row[3]] * 4 for row in hourly.to_numpy() for step in range(12)],
+        index=pd.DatetimeIndex([time + pd.Timedelta(minutes=5 * step) for time in hourly.index for step in range(12)]),
+        columns=hourly.columns,
+    )
+    cfg = replace(cost_asset_cfg, bars_per_year={"1h": 1716, "5m": 20592, "1d": 252})
+
+    hourly_metrics, hourly_trades = _daily_sharpe_run(cfg, hourly, with_costs=True)
+    five_minute_metrics, five_minute_trades = _daily_sharpe_run(cfg, five_minute, with_costs=True, execution_timeframe="5m")
+
+    assert [t["net_pnl"] for t in five_minute_trades] == [t["net_pnl"] for t in hourly_trades]
+    assert five_minute_metrics["Gross"]["Sharpe Ratio"] == hourly_metrics["Gross"]["Sharpe Ratio"] == 18.33
+    assert five_minute_metrics["Net"]["Sharpe Ratio"] == hourly_metrics["Net"]["Sharpe Ratio"]
+
+
+def test_split_daily_sharpe_uses_each_period_s_own_market_sessions(test_asset_cfg):
+    later_days = {f"2025-01-0{day} {hour}": FLAT for day in (4, 5) for hour in ("00:00", "01:00")}
+    data = _timed_bars(DAILY_SHARPE_BARS | later_days)
+
+    metrics, _ = _daily_sharpe_run(test_asset_cfg, data, oos_cutoff=4)
+
+    # In sample, market session closes 10000, 10100 from 10000: returns 0, 1%, so Sharpe = sqrt(252) x 0.7071 = 11.22.
+    assert metrics["Sharpe Ratio"] == 11.22
+    # Out of sample, market session closes 10200, 10200, 10200 from 10100: returns 0.99%, 0, 0,
+    # so Sharpe = sqrt(252) x 0.5774 = 9.17.
+    assert metrics["OOS Sharpe"] == 9.17

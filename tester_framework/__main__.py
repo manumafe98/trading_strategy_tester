@@ -13,14 +13,16 @@ from time import perf_counter
 import pandas as pd
 
 from .analytics import format_duration
-from .backtest import result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
+from .backtest import INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
-from .models import OPERATIONS
-from .reports import format_metric, reset_output_dirs, write_results_html
+from .models import OPERATIONS, IntrabarRule, TargetFill
+from .reports import fill_rule_tags, format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
-from .split import SELECT_BY, Split, oos_cutoff, rank_variants, split_tags, validate_selection_args, validate_split_args
+from .split import (
+    SELECT_BY, Split, oos_cutoff, rank_variants, selection_tags, split_tags, validate_selection_args, validate_split_args,
+)
 from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
@@ -236,6 +238,10 @@ def run(config: RunConfig) -> None:
     time_period_args(config.time_period, config.data_source)
     if config.operation not in OPERATIONS:
         raise ValueError(f"--operation must be one of {', '.join(OPERATIONS)}; got: {config.operation}")
+    if config.target_fill not in TARGET_FILLS:
+        raise ValueError(f"--target_fill must be one of {', '.join(TARGET_FILLS)}; got: {config.target_fill}")
+    if config.intrabar not in INTRABAR_RULES:
+        raise ValueError(f"--intrabar must be one of {', '.join(INTRABAR_RULES)}; got: {config.intrabar}")
     validate_calendar_filters(config.days, config.months)
     strategies = {name: load_strategy(name) for name in config.strategies}
     session_specs = parse_sessions(config.sessions)
@@ -361,6 +367,8 @@ def run(config: RunConfig) -> None:
                                     months=config.months,
                                     session_exit=config.session_exit,
                                     oos_cutoff=cutoff,
+                                    target_fill=config.target_fill,
+                                    intrabar=config.intrabar,
                                 )
                             )
                     del data
@@ -420,8 +428,14 @@ def run(config: RunConfig) -> None:
     finally:
         status.close()
 
+    fill_rules = fill_rule_tags(config)
+    if fill_rules:
+        print(" | ".join(fill_rules))
     for split in splits:
         print(" | ".join(split_tags(split)))
+    if splits and not table.empty:
+        for tag in selection_tags(table):
+            print(tag)
     print(console.to_string(index=False))
     print(f"results: {result_path}")
     elapsed = perf_counter() - started
@@ -453,6 +467,18 @@ def parser() -> argparse.ArgumentParser:
         "--session_exit",
         action="store_true",
         help="close open trades at the close of the last bar inside their session window; requires --sessions",
+    )
+    p.add_argument(
+        "--target_fill",
+        default=TargetFill.TICK_THROUGH.value,
+        choices=TARGET_FILLS,
+        help="tick_through: a target fills when price trades one tick beyond it; touch: when price reaches it",
+    )
+    p.add_argument(
+        "--intrabar",
+        default=IntrabarRule.PATH.value,
+        choices=INTRABAR_RULES,
+        help="path: TradingView's open-high-low-close order; stop_first: a bar reaching stop and target exits at the stop",
     )
     p.add_argument("--workers", type=int, help="parallel variant workers, capped at logical CPU count")
     p.add_argument("--max_trades", type=int, default=None, help="diagnostic cap on first N closed trades per variant")
@@ -516,6 +542,8 @@ def main() -> None:
             oos_fraction=args.oos_fraction,
             select_by=args.select_by,
             select_top=args.select_top,
+            target_fill=TargetFill(args.target_fill),
+            intrabar=IntrabarRule(args.intrabar),
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

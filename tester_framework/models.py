@@ -16,9 +16,22 @@ OPERATIONS = ("all", "long_only", "short_only")
 
 
 class ExitReason(StrEnum):
-    STOP = "stop"
+    # Declaration order is the order of the completion counts in analytics and reports.
     TARGET = "target"
+    STOP = "stop"
     SESSION = "session"
+    ROLL = "roll"
+    END = "end"
+
+
+class TargetFill(StrEnum):
+    TICK_THROUGH = "tick_through"
+    TOUCH = "touch"
+
+
+class IntrabarRule(StrEnum):
+    PATH = "path"
+    STOP_FIRST = "stop_first"
 
 
 @dataclass(frozen=True)
@@ -66,4 +79,4 @@ class AssetConfig:
             raise ValueError(f"Invalid session_start: {self.session_start}") from None
 
 
-__all__ = ["OPERATIONS", "AssetConfig", "ExitReason", "Side"]
+__all__ = ["OPERATIONS", "AssetConfig", "ExitReason", "IntrabarRule", "Side", "TargetFill"]

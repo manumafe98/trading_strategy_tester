@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from .models import AssetConfig
+from .models import AssetConfig, IntrabarRule, TargetFill
 from .sessions import SessionSpec
 
 
@@ -27,3 +27,5 @@ class VariantBatchTask(TypedDict):
     months: tuple[int, ...]
     session_exit: bool
     oos_cutoff: int | None
+    target_fill: TargetFill
+    intrabar: IntrabarRule

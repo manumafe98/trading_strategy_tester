@@ -484,6 +484,8 @@ def test_run_rejects_risk_override_for_asset_not_in_run(monkeypatch, test_asset_
         ({"capital": -1}, "--capital"),
         ({"capital": math.nan}, "--capital"),
         ({"max_trades": 0}, "--max_trades"),
+        ({"target_fill": "near"}, "--target_fill"),
+        ({"intrabar": "low_first"}, "--intrabar"),
         ({"exit_mode": "partial", "risk_reward_ratio": "1"}, "No exit modes are compatible"),
     ],
 )
@@ -587,6 +589,22 @@ def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
     cli.main()
 
     assert configs[0].session_exit is True
+
+
+def test_fill_rule_flags_default_to_tick_through_and_path_and_map_to_config(monkeypatch):
+    args = cli.parser().parse_args([])
+    assert (args.target_fill, args.intrabar) == ("tick_through", "path")
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--target_fill", "near"])
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--intrabar", "low_first"])
+    configs = []
+    argv = ["tester_framework", "--strategies", "ema50", "--target_fill", "touch", "--intrabar", "stop_first"]
+    monkeypatch.setattr(sys, "argv", argv)
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert (configs[0].target_fill, configs[0].intrabar) == ("touch", "stop_first")
 
 
 def test_split_flags_default_off_and_map_to_config(monkeypatch):
@@ -704,6 +722,25 @@ def test_run_without_split_flags_sends_no_cutoff_and_shows_no_split_columns(monk
     assert "OOS" not in out and "in-sample" not in out
 
 
+@pytest.mark.parametrize(
+    ("overrides", "header"),
+    [
+        ({}, None),
+        ({"target_fill": "touch"}, "target fill touch"),
+        ({"intrabar": "stop_first"}, "intrabar stop first"),
+        ({"target_fill": "touch", "intrabar": "stop_first"}, "target fill touch | intrabar stop first"),
+    ],
+)
+def test_run_prints_non_default_fill_rules_in_the_console_header(monkeypatch, tmp_path, capsys, test_asset_cfg, overrides, header):
+    _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), **overrides)
+
+    first_line = capsys.readouterr().out.splitlines()[0]
+    if header is None:
+        assert "target fill" not in first_line and "intrabar" not in first_line
+    else:
+        assert first_line == header
+
+
 def test_run_rejects_a_cutoff_that_empties_a_period_with_the_asset_named(monkeypatch, tmp_path, test_asset_cfg):
     with pytest.raises(ValueError, match="TEST 1h: Split cutoff leaves the out-of-sample period with no bars"):
         _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), oos_start="2025-01-03")
@@ -749,7 +786,7 @@ def _ranked_rows(monkeypatch, returns):
             rows.append({
                 "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
                 "Return": ret, "Max DD": 1.0, "Sharpe Ratio": ret, "Return / DD": ret_dd, "_sort_return": ret,
-                "OOS Return": oos, "OOS Max DD": 1.0, "OOS Sharpe": oos, "OOS Return / DD": oos, "WFE": 50.0,
+                "OOS Trades": 1, "OOS Return": oos, "OOS Max DD": 1.0, "OOS Sharpe": oos, "OOS Return / DD": oos, "WFE": 50.0,
             })
         return rows
 
@@ -778,6 +815,8 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     assert list(table["Selected"]) == [True, True, False]
     out = capsys.readouterr().out
     assert "IS Rank" in out and "WFE" in out and "50.00%" in out
+    # OOS Returns 2, 1 and 3 are all above 0 and average to 2.
+    assert "test TEST: Tried 3, OOS profitable 3/3 (100.0%), Equal-weight OOS +2.00%" in out
 
 
 def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_the_top_n(
@@ -795,7 +834,7 @@ def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_
             {
                 "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
                 "Return": 1.0, "Max DD": 1.0, "Sharpe Ratio": 1.0, "Return / DD": ret_dd, "_sort_return": 1.0,
-                "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
+                "OOS Trades": 1, "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
             }
             for (rr, mode), (ret_dd, oos) in zip(task["variants"], values.get((task["strategy"], task["asset"]), []))
         ]

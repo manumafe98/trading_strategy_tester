@@ -19,6 +19,8 @@ __all__ = [
     "entered_in_sample",
     "oos_cutoff",
     "rank_variants",
+    "selection_summary",
+    "selection_tags",
     "split_tags",
     "validate_selection_args",
     "validate_split_args",
@@ -148,3 +150,31 @@ def rank_variants(table: pd.DataFrame, select_by: str, select_top: int) -> pd.Da
     # Groups keep their incoming order; rows sort by IS Rank inside each group.
     group_order = table.groupby(groups, sort=False).ngroup()
     return table.assign(_group=group_order).sort_values(["_group", "IS Rank"], kind="stable").drop(columns="_group")
+
+
+def selection_summary(table: pd.DataFrame) -> list[dict]:
+    """Tried, OOS profitable (a count) and Equal-weight OOS per strategy and asset, on Net OOS Return when it is a Gross / Net pair.
+
+    Curves each rescaled to start at 1 average to a curve that ends at the mean of their ends, so the equal-weight
+    out-of-sample return is the mean OOS Return. A variant with no out-of-sample trades counts as a flat curve.
+    """
+    returns = table["OOS Return"].map(lambda value: float(net_value(value))).where(table["OOS Trades"] > 0, 0.0)
+    return [
+        {
+            "Strategy": strategy,
+            "Asset": asset,
+            "Tried": len(group),
+            "OOS profitable": int((group > 0).sum()),
+            "Equal-weight OOS": float(group.mean()),
+        }
+        for (strategy, asset), group in returns.groupby([table["Strategy"], table["Asset"]], sort=False)
+    ]
+
+
+def selection_tags(table: pd.DataFrame) -> list[str]:
+    return [
+        f"{group['Strategy']} {group['Asset']}: Tried {group['Tried']}, "
+        f"OOS profitable {group['OOS profitable']}/{group['Tried']} ({group['OOS profitable'] / group['Tried'] * 100:.1f}%), "
+        f"Equal-weight OOS {group['Equal-weight OOS']:+.2f}%"
+        for group in selection_summary(table)
+    ]

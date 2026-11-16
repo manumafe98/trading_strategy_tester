@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from dataclasses import dataclass
 
+from .models import IntrabarRule, TargetFill
+
 
 DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 MONTH_NAMES = (
@@ -55,3 +57,5 @@ class RunConfig:
     oos_fraction: float | None = None
     select_by: str | None = None
     select_top: int | None = None
+    target_fill: TargetFill = TargetFill.TICK_THROUGH
+    intrabar: IntrabarRule = IntrabarRule.PATH
