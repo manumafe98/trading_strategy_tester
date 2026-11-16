@@ -239,6 +239,8 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     assert "Trailing summary" not in fixed
     assert "Fixed trades" in fixed
     assert "Trailing summary" in trailing
+    summary_headers = [f"{name} completions" for name in ("Target", "Stop", "Session", "Roll", "End")] + ["Avg realized"]
+    assert sorted(summary_headers, key=trailing.index) == summary_headers
     assert "Trailing trades" in trailing
     assert "No trades" in trailing
     assert 'href="../index.html"' in fixed

@@ -13,7 +13,7 @@ import pandas as pd
 
 from .analytics import decode_analytics
 from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
-from .models import IntrabarRule, Side, TargetFill
+from .models import ExitReason, IntrabarRule, Side, TargetFill
 from .settings import (
     COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
@@ -220,10 +220,10 @@ def _managed_summary(analytics: dict) -> str:
     managed = analytics["managed"]
     mode = str(managed["Mode"]).title()
     summary = _detail_table(
-        ["Target completions", "Stop completions", "Session completions", "Roll completions", "End completions", "Avg realized", "Avg MFE", "Avg giveback"],
+        [*(f"{reason.title()} completions" for reason in ExitReason), "Avg realized", "Avg MFE", "Avg giveback"],
         [[
-            managed["Target Completions"], managed["Stop Completions"], managed["Session Completions"], managed["Roll Completions"],
-            managed["End Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"]),
+            *(managed[f"{reason.title()} Completions"] for reason in ExitReason),
+            _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"]),
         ]],
     )
     return f'<section><h2>{mode} summary</h2>{summary}</section>'

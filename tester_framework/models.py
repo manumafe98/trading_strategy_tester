@@ -16,8 +16,9 @@ OPERATIONS = ("all", "long_only", "short_only")
 
 
 class ExitReason(StrEnum):
-    STOP = "stop"
+    # Declaration order is the order of the completion counts in analytics and reports.
     TARGET = "target"
+    STOP = "stop"
     SESSION = "session"
     ROLL = "roll"
     END = "end"
