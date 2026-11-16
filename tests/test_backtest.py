@@ -652,13 +652,14 @@ def test_first_bar_return_includes_starting_capital(test_asset_cfg):
 
 
 def test_nonpositive_equity_has_no_sharpe():
-    assert math.isnan(_curve_metrics(np.array([100.0, 0.0, 100.0]), 252)["Sharpe Ratio"])
+    assert math.isnan(_curve_metrics(np.array([100.0, 0.0, 100.0, 100.0]), np.array([1, 2, 3]), 252)["Sharpe Ratio"])
 
 
 def test_curve_metrics_worked_example():
-    # Returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
+    # Session closes 110, 99, 121 from 100 (105 is inside the first session):
+    # returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
     # Peak 110 -> trough 99 is a 10% drawdown; 100 -> 121 is a 21% return.
-    assert _curve_metrics(np.array([100.0, 110.0, 99.0, 121.0]), 4) == {
+    assert _curve_metrics(np.array([100.0, 105.0, 110.0, 99.0, 121.0]), np.array([2, 3, 4]), 4) == {
         "Return": 21.0,
         "Max DD": 10.0,
         "Sharpe Ratio": 0.91,
@@ -670,30 +671,13 @@ def test_make_metrics_reports_net_curve_only_with_costs():
     gross = np.array([100.0, 110.0, 99.0, 121.0])
     net = np.array([100.0, 105.0])
 
-    without_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, False, 4)
-    with_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, True, 4)
+    without_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, False, np.array([1]), 4)
+    with_costs = backtest.make_metrics("TEST", "1h", "test", gross, net, True, np.array([1]), 4)
 
     assert without_costs["Net"] == without_costs["Gross"]
     assert without_costs["Return"] == 21.0
     assert with_costs["Gross"]["Return"] == 21.0
     assert with_costs["Net"]["Return"] == with_costs["Return"] == 5.0
-
-
-def test_sharpe_uses_execution_timeframe(test_asset_cfg):
-    cfg = replace(test_asset_cfg, bars_per_year={"1h": 100, "5m": 400})
-    idx = pd.date_range("2025-01-01", periods=3, freq="h")
-    data = pd.DataFrame(
-        {"open": [100, 100, 100], "high": [100, 101.1, 100], "low": [100, 99.5, 100], "close": [100, 101, 100], "volume": [0, 0, 0]},
-        index=idx,
-    )
-    kwargs = dict(
-        data=data, signals=pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=cfg,
-    )
-    hourly, _ = run_backtest(**kwargs, execution_timeframe="1h")
-    five_minute, _ = run_backtest(**kwargs, execution_timeframe="5m")
-    assert five_minute["Sharpe Ratio"] == pytest.approx(hourly["Sharpe Ratio"] * 2, abs=0.02)
 
 
 def test_result_columns_follow_operation_and_session():
@@ -941,14 +925,6 @@ def test_close_entry_winning_trades_have_no_drawdown(test_asset_cfg):
     assert metrics["Return"] == 2.01
 
 
-def test_close_entry_sharpe_has_no_return_on_entry_bars(test_asset_cfg):
-    metrics, _ = _two_winning_close_entries(test_asset_cfg)
-
-    # Curve 10000, 10000, 10100, 10100, 10201, 10201: bar returns 0, 1%, 0, 1%, 0.
-    # mean 0.004, sample std sqrt(3e-5), so Sharpe = sqrt(1716) * 0.004 / sqrt(3e-5) = 30.25.
-    assert metrics["Sharpe Ratio"] == 30.25
-
-
 def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
     idx = pd.date_range("2025-01-01", periods=3, freq="h")
     data = pd.DataFrame(
@@ -975,7 +951,7 @@ def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
 
 
 def mnq_like_cfg(test_asset_cfg):
-    return replace(test_asset_cfg, point_value=2.0, tick_size=0.25, min_risk_ticks=4, bars_per_year={"1m": 347760})
+    return replace(test_asset_cfg, point_value=2.0, tick_size=0.25, min_risk_ticks=4, bars_per_year={"1m": 347760, "1d": 252})
 
 
 def min_risk_run(data, signals, cfg):
@@ -1190,13 +1166,18 @@ def test_split_metrics_are_the_curve_metrics_of_each_slice_gross_and_net(cost_as
     gross = [10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100]
     net = [10000, 10000, 10040, 10040, 9930, 10080, 10080, 9920, 9920]
     assert len(trades) == 3
-    assert metrics["Gross"] == _curve_metrics(np.array(gross[:5], dtype=float), 1716)
-    assert metrics["Net"] == _curve_metrics(np.array(net[:5], dtype=float), 1716)
-    assert metrics["OOS Gross"] == _curve_metrics(np.array(gross[4:], dtype=float), 1716)
-    assert metrics["OOS Net"] == _curve_metrics(np.array(net[4:], dtype=float), 1716)
+    # All bars are one market session, so only the Daily Sharpe is blank; split Sharpe has its own test.
+    def curve_metrics(curve):
+        return {**_curve_metrics(np.array(curve, dtype=float), np.array([], dtype=int), 252), "Sharpe Ratio": None}
+
+    for name in ("Gross", "Net", "OOS Gross", "OOS Net"):
+        assert math.isnan(metrics[name]["Sharpe Ratio"])
+    assert {**metrics["Gross"], "Sharpe Ratio": None} == curve_metrics(gross[:5])
+    assert {**metrics["Net"], "Sharpe Ratio": None} == curve_metrics(net[:5])
+    assert {**metrics["OOS Gross"], "Sharpe Ratio": None} == curve_metrics(gross[4:])
+    assert {**metrics["OOS Net"], "Sharpe Ratio": None} == curve_metrics(net[4:])
     assert metrics["Return"] == metrics["Net"]["Return"] == -0.7
     assert metrics["OOS Return"] == metrics["OOS Net"]["Return"]
-    assert metrics["OOS Sharpe"] == metrics["OOS Net"]["Sharpe Ratio"]
 
 
 def test_split_metrics_carry_walk_forward_efficiency_gross_and_net(cost_asset_cfg):
@@ -1456,3 +1437,73 @@ def test_backtest_rejects_unknown_fill_rules(base_data, test_asset_cfg):
         _run(base_data, signals, test_asset_cfg, target_fill="near")
     with pytest.raises(ValueError, match="--intrabar"):
         _run(base_data, signals, test_asset_cfg, intrabar="low_first")
+
+
+# Three UTC market sessions: day 1 has no trade, a 1R winner enters and exits on day 2's first bar,
+# a wider-stop 1R winner enters and exits on day 3's first bar.
+DAILY_SHARPE_BARS = {
+    "2025-01-01 22:00": FLAT,
+    "2025-01-01 23:00": FLAT,
+    "2025-01-02 00:00": (100.0, 101.5, 100.0, 100.0),
+    "2025-01-02 01:00": FLAT,
+    "2025-01-03 00:00": (100.0, 102.5, 100.0, 100.0),
+    "2025-01-03 01:00": FLAT,
+}
+
+
+def _daily_sharpe_run(cfg, data=None, **overrides):
+    data = _timed_bars(DAILY_SHARPE_BARS) if data is None else data
+    signals = [
+        {"time": pd.Timestamp("2025-01-01 23:55"), "side": "long", "stop": 99.0},
+        {"time": pd.Timestamp("2025-01-02 01:55"), "side": "long", "stop": 98.0},
+    ]
+    return _run(data, signals, cfg, **overrides)
+
+
+def test_sharpe_is_daily_over_market_sessions_counting_sessions_without_trades(test_asset_cfg):
+    metrics, trades = _daily_sharpe_run(test_asset_cfg)
+
+    assert [trade["gross_pnl"] for trade in trades] == [100.0, 100.0]
+    # Session closes 10000, 10100, 10200 from 10000: returns 0, 1%, 0.99%.
+    # mean 0.00663, sample std 0.00575, so Sharpe = sqrt(252) x 1.1547 = 18.33.
+    assert metrics["Sharpe Ratio"] == 18.33
+
+
+def test_daily_sharpe_uses_the_net_curve_for_the_net_column(cost_asset_cfg):
+    metrics, trades = _daily_sharpe_run(cost_asset_cfg, with_costs=True)
+
+    first, second = (trade["net_pnl"] for trade in trades)
+    returns = np.array([0.0, first / 10000, second / (10000 + first)])
+    assert metrics["Net"]["Sharpe Ratio"] == round(math.sqrt(252) * returns.mean() / returns.std(ddof=1), 2)
+    assert metrics["Gross"]["Sharpe Ratio"] != metrics["Net"]["Sharpe Ratio"]
+
+
+def test_same_trades_on_1h_and_5m_data_give_the_same_sharpe(cost_asset_cfg):
+    # Each hourly bar becomes twelve 5m bars: the first carries its range, the rest stay at its close.
+    hourly = _timed_bars(DAILY_SHARPE_BARS)
+    five_minute = pd.DataFrame(
+        [row if step == 0 else [row[3]] * 4 for row in hourly.to_numpy() for step in range(12)],
+        index=pd.DatetimeIndex([time + pd.Timedelta(minutes=5 * step) for time in hourly.index for step in range(12)]),
+        columns=hourly.columns,
+    )
+    cfg = replace(cost_asset_cfg, bars_per_year={"1h": 1716, "5m": 20592, "1d": 252})
+
+    hourly_metrics, hourly_trades = _daily_sharpe_run(cfg, hourly, with_costs=True)
+    five_minute_metrics, five_minute_trades = _daily_sharpe_run(cfg, five_minute, with_costs=True, execution_timeframe="5m")
+
+    assert [t["net_pnl"] for t in five_minute_trades] == [t["net_pnl"] for t in hourly_trades]
+    assert five_minute_metrics["Gross"]["Sharpe Ratio"] == hourly_metrics["Gross"]["Sharpe Ratio"] == 18.33
+    assert five_minute_metrics["Net"]["Sharpe Ratio"] == hourly_metrics["Net"]["Sharpe Ratio"]
+
+
+def test_split_daily_sharpe_uses_each_period_s_own_market_sessions(test_asset_cfg):
+    later_days = {f"2025-01-0{day} {hour}": FLAT for day in (4, 5) for hour in ("00:00", "01:00")}
+    data = _timed_bars(DAILY_SHARPE_BARS | later_days)
+
+    metrics, _ = _daily_sharpe_run(test_asset_cfg, data, oos_cutoff=4)
+
+    # In sample, session closes 10000, 10100 from 10000: returns 0, 1%, so Sharpe = sqrt(252) x 0.7071 = 11.22.
+    assert metrics["Sharpe Ratio"] == 11.22
+    # Out of sample, session closes 10200, 10200, 10200 from 10100: returns 0.99%, 0, 0,
+    # so Sharpe = sqrt(252) x 0.5774 = 9.17.
+    assert metrics["OOS Sharpe"] == 9.17

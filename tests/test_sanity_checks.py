@@ -33,7 +33,7 @@ SANITY_ASSET = AssetConfig(
     commission_per_side=0.125,
     session_timezone="UTC",
     session_start="00:00",
-    bars_per_year={"1h": 8760},
+    bars_per_year={"1h": 8760, "1d": 252},
 )
 
 

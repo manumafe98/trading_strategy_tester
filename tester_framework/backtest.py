@@ -8,6 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
+from .data import session_labels
 from .models import OPERATIONS, AssetConfig, ExitReason, Side
 from .sessions import SessionSpec, session_exit_bars
 from .split import entered_in_sample, walk_forward_efficiency
@@ -424,6 +425,8 @@ def run_backtest(
     annualization_timeframe = execution_timeframe or timeframe
     if annualization_timeframe not in asset_cfg.bars_per_year:
         raise ValueError(f"Missing bars_per_year for {asset} {annualization_timeframe}")
+    if "1d" not in asset_cfg.bars_per_year:
+        raise ValueError(f"Missing bars_per_year for {asset} 1d")
 
     bar_count = len(data)
     gross_curve = np.full(bar_count + 1, capital, dtype=float)
@@ -579,14 +582,25 @@ def run_backtest(
         bar_net_equity[last_bar_idx:bar_count] = current_net
 
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
+    sessions_per_year = asset_cfg.bars_per_year["1d"]
+    # Curve point i + 1 is the equity at the close of bar i; a market session closes at its last bar.
+    labels = session_labels(data.index, asset_cfg.session_timezone, asset_cfg.session_start)
+    session_closes = np.flatnonzero(np.append(labels[1:] != labels[:-1], True)) + 1
     if oos_cutoff is None:
-        return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals), trades
+        return make_metrics(
+            asset, timeframe, strategy, gross_curve, net_curve, with_costs, session_closes, sessions_per_year,
+            discarded_signals,
+        ), trades
     # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
+    # The cutoff is a market session's first bar, so that point is also the last in-sample session close.
     metrics = make_metrics(
-        asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs, bars_per_year,
-        discarded_signals,
+        asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs,
+        session_closes[session_closes <= oos_cutoff], sessions_per_year, discarded_signals,
     )
-    oos = make_metrics(asset, timeframe, strategy, gross_curve[oos_cutoff:], net_curve[oos_cutoff:], with_costs, bars_per_year)
+    oos = make_metrics(
+        asset, timeframe, strategy, gross_curve[oos_cutoff:], net_curve[oos_cutoff:], with_costs,
+        session_closes[session_closes > oos_cutoff] - oos_cutoff, sessions_per_year,
+    )
     metrics.update({column: oos[source] for column, source in OOS_FINANCIAL_COLUMNS.items()})
     metrics["OOS Gross"] = oos["Gross"]
     metrics["OOS Net"] = oos["Net"]
@@ -604,7 +618,11 @@ def validate_calendar_filters(days: tuple[int, ...], months: tuple[int, ...]) ->
         raise ValueError("--months must contain month values from January through December")
 
 
-def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
+def _curve_metrics(equity_curve: np.ndarray, session_closes: np.ndarray, sessions_per_year: int) -> dict:
+    """Return, Max DD and Return / DD use every curve point; Daily Sharpe uses the start and each session close.
+
+    `session_closes` are the curve positions of each market session's close equity, in order.
+    """
     curve = np.asarray(equity_curve, dtype="float64")
     scratch = np.empty_like(curve)
     np.maximum.accumulate(curve, out=scratch)
@@ -613,14 +631,12 @@ def _curve_metrics(equity_curve: np.ndarray, bars_per_year: int) -> dict:
     max_dd = abs(float(np.nanmin(scratch)) * 100)
     total_return = (curve[-1] / curve[0] - 1) * 100
     sharpe = float("nan")
-    returns = scratch[:-1]
-    with np.errstate(divide="ignore", invalid="ignore"):
-        np.divide(curve[1:], curve[:-1], out=returns)
-    returns -= 1
-    if curve.min() > 0 and len(returns) > 1 and np.isfinite(returns).all():
+    daily = curve[np.r_[0, session_closes]]
+    if curve.min() > 0 and len(daily) > 2:
+        returns = daily[1:] / daily[:-1] - 1
         std = float(returns.std(ddof=1))
         if math.isfinite(std) and std > 0:
-            sharpe = math.sqrt(bars_per_year) * float(returns.mean() / std)
+            sharpe = math.sqrt(sessions_per_year) * float(returns.mean() / std)
     return {
         "Return": round(float(total_return), 2),
         "Max DD": round(max_dd, 2),
@@ -636,11 +652,12 @@ def make_metrics(
     gross_equity_curve: np.ndarray,
     net_equity_curve: np.ndarray,
     with_costs: bool,
-    bars_per_year: int,
+    session_closes: np.ndarray,
+    sessions_per_year: int,
     discarded_signals: int = 0,
 ) -> dict:
-    gross = _curve_metrics(gross_equity_curve, bars_per_year)
-    net = _curve_metrics(net_equity_curve, bars_per_year) if with_costs else gross.copy()
+    gross = _curve_metrics(gross_equity_curve, session_closes, sessions_per_year)
+    net = _curve_metrics(net_equity_curve, session_closes, sessions_per_year) if with_costs else gross.copy()
     return {
         "Strategy": strategy,
         "Asset": asset,

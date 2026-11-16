@@ -117,6 +117,9 @@ _Avoid_: winner, best variant, optimized variant
 A variant's out-of-sample annualized return as a percentage of its in-sample annualized return; blank when the in-sample annualized return is zero or negative.
 _Avoid_: efficiency ratio, robustness score
 
+**Daily Sharpe**:
+The annualized mean over standard deviation of per-market-session equity returns, counting market sessions without trades.
+
 **Result bundle**:
 The output folder of one run, holding the results page, variant pages, and trade charts.
 _Avoid_: report
