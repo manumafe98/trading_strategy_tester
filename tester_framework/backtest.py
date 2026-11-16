@@ -244,8 +244,8 @@ class _OpenTrade:
             return None
         if self.target_fill == "touch":
             return target["price"]
-        tick_size = self.cfg.tick_size
-        return tick_price(target["price"] + self.direction * tick_size, tick_size, self.direction)
+        # Targets are tick-aligned, so adding the tick in Decimal lands exactly on the next tick.
+        return float(Decimal(str(target["price"])) + self.direction * Decimal(str(self.cfg.tick_size)))
 
     def target_gapped(self, opened: float) -> bool:
         reached_at = self._target_reached_at()

@@ -1416,3 +1416,28 @@ def test_stop_first_leaves_a_bar_that_cannot_reach_the_target_to_the_path(test_a
     _, trades = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing", intrabar="stop_first")
 
     assert [(f["exit_reason"], f["raw_exit"]) for f in trades[0]["exits"]] == [(ExitReason.STOP, 101.1)]
+
+
+@pytest.mark.parametrize(
+    ("side", "stop", "flat", "through_bar", "target"),
+    [
+        # Entry 1.0, R 0.1: 1.1 + 0.1 is 1.2000000000000002 in floats, and the trigger must still be 1.2.
+        ("long", 0.9, 1.0, [1.0, 1.2, 1.0, 1.1], 1.1),
+        # Entry 0.4, R 0.1: 0.3 - 0.1 is 0.19999999999999998 in floats, and the trigger must still be 0.2.
+        ("short", 0.5, 0.4, [0.4, 0.4, 0.2, 0.3], 0.3),
+    ],
+)
+def test_tick_through_trigger_is_exactly_one_tick_beyond_the_target(test_asset_cfg, side, stop, flat, through_bar, target):
+    data = _bars([flat] * 4, [flat] * 4, through_bar)
+
+    _, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg)
+
+    assert (trades[0]["target"], trades[0]["exit_reason"], trades[0]["exit_i"]) == (target, ExitReason.TARGET, 2)
+
+
+def test_backtest_rejects_unknown_fill_rules(base_data, test_asset_cfg):
+    signals = [{"time": base_data.index[0], "side": "long", "stop": 99.0}]
+    with pytest.raises(ValueError, match="--target_fill"):
+        _run(base_data, signals, test_asset_cfg, target_fill="near")
+    with pytest.raises(ValueError, match="--intrabar"):
+        _run(base_data, signals, test_asset_cfg, intrabar="low_first")

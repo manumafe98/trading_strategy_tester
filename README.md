@@ -88,7 +88,7 @@ The `ny_bank` preset is America/New_York 08:00-17:00, for a true New York bank c
 
 `--target_fill` sets the target fill. The default `tick_through` fills a target only when price trades at least one tick beyond it, and a bar that opens beyond the target fills at the target price, never better. `touch` fills a target when price reaches it and fills a gap at the open, as TradingView does. Both apply to every target, including partial targets (see `docs/adr/0001-tick-through-targets-by-default.md`).
 
-`--intrabar` sets the intrabar rule. The default `path` follows the TradingView path described under Execution Model. `stop_first` exits at the stop on any bar that can reach both the stop and the next target, whatever its open; a bar that can reach only one of them still follows the path. The result report shows either flag when it is not the default. `--target_fill touch --intrabar path` reproduces TradingView's fills.
+`--intrabar` sets the intrabar rule. The default `path` follows the TradingView path described under Execution Model. `stop_first` exits at the stop on any bar that can reach both the stop and the next target, whatever its open; a bar that can reach only one of them still follows the path. A target gap at the open is filled before this rule applies, so it still fills the target. The result report shows either flag when it is not the default. `--target_fill touch --intrabar path` reproduces TradingView's fills.
 
 `--days` and `--months` filter actual filled entries by the normalized data timestamp. Values are case-insensitive full names or three-letter abbreviations, for example `--days monday,wed --months january,sep`. Omit either flag to allow every weekday or month; when both are present, an entry must match both.
 

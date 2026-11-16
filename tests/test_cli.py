@@ -484,6 +484,8 @@ def test_run_rejects_risk_override_for_asset_not_in_run(monkeypatch, test_asset_
         ({"capital": -1}, "--capital"),
         ({"capital": math.nan}, "--capital"),
         ({"max_trades": 0}, "--max_trades"),
+        ({"target_fill": "near"}, "--target_fill"),
+        ({"intrabar": "low_first"}, "--intrabar"),
         ({"exit_mode": "partial", "risk_reward_ratio": "1"}, "No exit modes are compatible"),
     ],
 )
