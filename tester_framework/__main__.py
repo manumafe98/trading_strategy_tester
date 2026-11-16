@@ -17,7 +17,7 @@ from .backtest import INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, ri
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
 from .models import OPERATIONS, IntrabarRule, TargetFill
-from .reports import format_metric, reset_output_dirs, write_results_html
+from .reports import fill_rule_tags, format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
 from .split import (
@@ -428,6 +428,9 @@ def run(config: RunConfig) -> None:
     finally:
         status.close()
 
+    fill_rules = fill_rule_tags(config)
+    if fill_rules:
+        print(" | ".join(fill_rules))
     for split in splits:
         print(" | ".join(split_tags(split)))
     if splits and not table.empty:

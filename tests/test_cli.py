@@ -722,6 +722,25 @@ def test_run_without_split_flags_sends_no_cutoff_and_shows_no_split_columns(monk
     assert "OOS" not in out and "in-sample" not in out
 
 
+@pytest.mark.parametrize(
+    ("overrides", "header"),
+    [
+        ({}, None),
+        ({"target_fill": "touch"}, "target fill touch"),
+        ({"intrabar": "stop_first"}, "intrabar stop first"),
+        ({"target_fill": "touch", "intrabar": "stop_first"}, "target fill touch | intrabar stop first"),
+    ],
+)
+def test_run_prints_non_default_fill_rules_in_the_console_header(monkeypatch, tmp_path, capsys, test_asset_cfg, overrides, header):
+    _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), **overrides)
+
+    first_line = capsys.readouterr().out.splitlines()[0]
+    if header is None:
+        assert "target fill" not in first_line and "intrabar" not in first_line
+    else:
+        assert first_line == header
+
+
 def test_run_rejects_a_cutoff_that_empties_a_period_with_the_asset_named(monkeypatch, tmp_path, test_asset_cfg):
     with pytest.raises(ValueError, match="TEST 1h: Split cutoff leaves the out-of-sample period with no bars"):
         _split_run(monkeypatch, tmp_path, test_asset_cfg, _two_day_data(), oos_start="2025-01-03")

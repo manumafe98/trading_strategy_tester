@@ -46,7 +46,7 @@ VARIANT_TEMPLATE = Path(__file__).resolve().parent / "templates" / "variant.html
 TRADE_ROWS_PER_PAGE = 1_000
 TRADE_CHART_BEFORE_BARS = 20
 TRADE_CHART_AFTER_BARS = 20
-__all__ = ["format_metric", "metric_class", "reset_output_dirs", "write_results_html", "write_trade_html"]
+__all__ = ["fill_rule_tags", "format_metric", "metric_class", "reset_output_dirs", "write_results_html", "write_trade_html"]
 
 
 def reset_output_dirs() -> None:
@@ -435,6 +435,16 @@ def _render_cell(col: str, value, color: str) -> str:
     return f'<td class="c"{sort_attr}><span class="pill {metric_class(col, value)}">{html_escape(format_metric(col, value))}</span></td>'
 
 
+def fill_rule_tags(config: RunConfig) -> list[str]:
+    """The target fill and intrabar rule of a run, each only when it is not the default."""
+    tags = []
+    if config.target_fill != TargetFill.TICK_THROUGH:
+        tags.append(f"target fill {config.target_fill.replace('_', ' ')}")
+    if config.intrabar != IntrabarRule.PATH:
+        tags.append(f"intrabar {config.intrabar.replace('_', ' ')}")
+    return tags
+
+
 def write_results_html(
     table: pd.DataFrame, config: RunConfig, columns: list[str] | None = None, splits: list[Split] | None = None
 ) -> Path:
@@ -484,10 +494,7 @@ def write_results_html(
     ]
     if config.session_exit:
         tags.append('<span class="tag">session exit on</span>')
-    if config.target_fill != TargetFill.TICK_THROUGH:
-        tags.append(f'<span class="tag">target fill {html_escape(config.target_fill.replace("_", " "))}</span>')
-    if config.intrabar != IntrabarRule.PATH:
-        tags.append(f'<span class="tag">intrabar {html_escape(config.intrabar.replace("_", " "))}</span>')
+    tags.extend(f'<span class="tag">{html_escape(tag)}</span>' for tag in fill_rule_tags(config))
     if config.sessions and config.sessions.lower() != "none":
         tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')
     if config.days:
