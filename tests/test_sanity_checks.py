@@ -21,6 +21,10 @@ PEEK_BARS = 60
 STOP_TICKS = 10
 RR = 2.0
 RANDOM_ENTRY_SEEDS = (1, 2, 3, 4, 5)
+# The only signal timeframes a strategy may refuse, with the error it must raise; any other error fails the test.
+UNSUPPORTED_SIGNAL_TIMEFRAMES = {
+    (name, "1d"): "ORB strategies support intraday timeframes only" for name in ("orb_candle", "orb_combined", "orb_fvg")
+}
 SANITY_ASSET = AssetConfig(
     ticker="TEST",
     point_value=1.0,
@@ -63,7 +67,7 @@ def strategy_params(strategy) -> dict:
 
 
 def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, params: dict, seed: int = 0) -> None:
-    """Signals up to each cut bar must equal the full run's signals up to that bar, column for column.
+    """Signals up to each cut bar must equal the signals of the uncut series up to that bar, column for column.
 
     Cuts land on CUTS random bars and on CUTS random signal bars, where a one-bar peek shows.
     """
@@ -99,19 +103,13 @@ def test_strategy_signals_do_not_look_ahead(name):
     strategy = load_strategy(name)
     params = strategy_params(strategy)
     execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
-    checked, rejected = [], {}
     for timeframe in TIMEFRAMES:
-        data_timeframe = execution_timeframe or timeframe
-        df = random_walk(20_000, BAR_SIZES[data_timeframe])
-        try:
-            strategy.generate_signals(df, "TEST", timeframe, params)
-        except ValueError as exc:
-            rejected[timeframe] = str(exc)
+        df = random_walk(20_000, BAR_SIZES[execution_timeframe or timeframe])
+        if (name, timeframe) in UNSUPPORTED_SIGNAL_TIMEFRAMES:
+            with pytest.raises(ValueError, match=UNSUPPORTED_SIGNAL_TIMEFRAMES[name, timeframe]):
+                strategy.generate_signals(df, "TEST", timeframe, params)
             continue
         assert_no_lookahead(strategy.generate_signals, df, timeframe, params)
-        checked.append(timeframe)
-    # A ValueError counts as "signal timeframe not supported" only when another signal timeframe runs.
-    assert checked, f"{name} cannot run on synthetic data: {rejected}"
 
 
 def test_lookahead_check_catches_a_cheat():
