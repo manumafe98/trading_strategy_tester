@@ -797,7 +797,7 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     out = capsys.readouterr().out
     assert "IS Rank" in out and "WFE" in out and "50.00%" in out
     # OOS Returns 2, 1 and 3 are all above 0 and average to 2.
-    assert "test TEST 3 tried, OOS profitable 3/3 (100.0%), equal-weight OOS 2.00%" in out
+    assert "test TEST: Tried 3, OOS profitable 3/3 (100.0%), Equal-weight OOS +2.00%" in out
 
 
 def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_the_top_n(

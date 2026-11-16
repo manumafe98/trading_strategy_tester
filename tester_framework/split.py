@@ -173,8 +173,8 @@ def selection_summary(table: pd.DataFrame) -> list[dict]:
 
 def selection_tags(table: pd.DataFrame) -> list[str]:
     return [
-        f"{group['Strategy']} {group['Asset']} {group['Tried']} tried, "
+        f"{group['Strategy']} {group['Asset']}: Tried {group['Tried']}, "
         f"OOS profitable {round(group['OOS profitable'] * group['Tried'])}/{group['Tried']} ({group['OOS profitable'] * 100:.1f}%), "
-        f"equal-weight OOS {group['Equal-weight OOS']:.2f}%"
+        f"Equal-weight OOS {group['Equal-weight OOS']:+.2f}%"
         for group in selection_summary(table)
     ]
