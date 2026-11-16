@@ -19,6 +19,11 @@ from .utils import csv_items, decimal_places
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
+# Bar length per execution timeframe; a close entry fills at its bar's start plus this.
+BAR_DURATIONS = {
+    timeframe: pd.Timedelta(minutes=minutes)
+    for timeframe, minutes in {"1m": 1, "2m": 2, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.items()
+}
 TARGET_FILLS = tuple(rule.value for rule in TargetFill)
 INTRABAR_RULES = tuple(rule.value for rule in IntrabarRule)
 
@@ -433,6 +438,9 @@ def run_backtest(
         raise ValueError(f"Missing bars_per_year for {asset} {annualization_timeframe}")
     if "1d" not in asset_cfg.bars_per_year:
         raise ValueError(f"Missing bars_per_year for {asset} 1d")
+    if annualization_timeframe not in BAR_DURATIONS:
+        raise ValueError(f"Unknown execution timeframe for {asset}: {annualization_timeframe}")
+    bar_duration = BAR_DURATIONS[annualization_timeframe]
 
     bar_count = len(data)
     gross_curve = np.full(bar_count + 1, capital, dtype=float)
@@ -488,9 +496,10 @@ def run_backtest(
         if session_exit is not None and (not in_window[entry_i] or (close_entry and window_last_bar[entry_i])):
             discarded_signals += 1
             continue
-        # No entries in the 60 minutes before the last bar ahead of a roll closes.
+        # No fills in the 60 minutes before the last bar ahead of a roll; a close entry fills at its bar's close.
         next_roll = roll_last_times.searchsorted(entry_time)
-        if next_roll < len(roll_last_times) and roll_last_times[next_roll] - entry_time < ROLL_ENTRY_BLOCK:
+        fill_time = entry_time + bar_duration if close_entry else entry_time
+        if next_roll < len(roll_last_times) and roll_last_times[next_roll] - fill_time < ROLL_ENTRY_BLOCK:
             discarded_signals += 1
             continue
         # A signal from before a roll carries an old-contract stop, so it never fills on or after the roll bar.

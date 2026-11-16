@@ -1284,6 +1284,20 @@ def test_signal_filling_in_last_60_minutes_before_roll_is_discarded(test_asset_c
 
 
 
+@pytest.mark.parametrize(("signal_bar", "discarded"), [("18:00", 0), ("19:00", 1)])
+def test_close_entry_roll_block_measures_from_the_fill_at_the_bar_close(test_asset_cfg, signal_bar, discarded):
+    # 1h FUTZ4 bars end with the 20:00 bar; a close entry on the 19:00 bar fills at 20:00, like a next-open entry.
+    bars = {f"2025-01-02 {hour}:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4") for hour in (17, 18, 19, 20)}
+    bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
+    data = _contract_bars(bars)
+    signal = {"time": pd.Timestamp(f"2025-01-02 {signal_bar}"), "side": "long", "entry": 100.0, "stop": 99.0}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    assert metrics["Discarded"] == discarded
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)
+
+
 @pytest.mark.parametrize(("signal_time", "stop", "discarded"), [("12:00", 99.0, 1), ("22:00", 149.0, 0)])
 def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, signal_time, stop, discarded):
     # The last FUTZ4 bar starts 6 hours after the previous one, so the 60-minute block alone does not reach its signal.
