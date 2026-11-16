@@ -1445,6 +1445,12 @@ def test_tick_through_trigger_is_exactly_one_tick_beyond_the_target(test_asset_c
     assert (trades[0]["target"], trades[0]["exit_reason"], trades[0]["exit_i"]) == (target, ExitReason.TARGET, 2)
 
 
+def test_backtest_rejects_an_execution_timeframe_without_a_bar_length(base_data, test_asset_cfg):
+    cfg = replace(test_asset_cfg, bars_per_year={**test_asset_cfg.bars_per_year, "4h": 429})
+    with pytest.raises(ValueError, match="Unknown execution timeframe for TEST: 4h"):
+        _run(base_data, [{"time": base_data.index[0], "side": "long", "stop": 99.0}], cfg, timeframe="4h")
+
+
 def test_backtest_rejects_unknown_fill_rules(base_data, test_asset_cfg):
     signals = [{"time": base_data.index[0], "side": "long", "stop": 99.0}]
     with pytest.raises(ValueError, match="--target_fill"):
