@@ -153,7 +153,7 @@ def rank_variants(table: pd.DataFrame, select_by: str, select_top: int) -> pd.Da
 
 
 def selection_summary(table: pd.DataFrame) -> list[dict]:
-    """Tried, OOS profitable and Equal-weight OOS per strategy and asset, on Net OOS Return when it is a Gross / Net pair.
+    """Tried, OOS profitable (a count) and Equal-weight OOS per strategy and asset, on Net OOS Return when it is a Gross / Net pair.
 
     Curves each rescaled to start at 1 average to a curve that ends at the mean of their ends, so the equal-weight
     out-of-sample return is the mean OOS Return. A variant with no out-of-sample trades counts as a flat curve.
@@ -164,7 +164,7 @@ def selection_summary(table: pd.DataFrame) -> list[dict]:
             "Strategy": strategy,
             "Asset": asset,
             "Tried": len(group),
-            "OOS profitable": float((group > 0).mean()),
+            "OOS profitable": int((group > 0).sum()),
             "Equal-weight OOS": float(group.mean()),
         }
         for (strategy, asset), group in returns.groupby([table["Strategy"], table["Asset"]], sort=False)
@@ -174,7 +174,7 @@ def selection_summary(table: pd.DataFrame) -> list[dict]:
 def selection_tags(table: pd.DataFrame) -> list[str]:
     return [
         f"{group['Strategy']} {group['Asset']}: Tried {group['Tried']}, "
-        f"OOS profitable {round(group['OOS profitable'] * group['Tried'])}/{group['Tried']} ({group['OOS profitable'] * 100:.1f}%), "
+        f"OOS profitable {group['OOS profitable']}/{group['Tried']} ({group['OOS profitable'] / group['Tried'] * 100:.1f}%), "
         f"Equal-weight OOS {group['Equal-weight OOS']:+.2f}%"
         for group in selection_summary(table)
     ]

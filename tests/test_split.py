@@ -198,16 +198,16 @@ def _summary_variants(with_costs):
     ("with_costs", "profitable", "equal_weight"),
     [
         # Gross: rescaled ends 1.05, 0.98 and flat 1.00 average to 1.01; only RR 1 is above 0.
-        (False, 1 / 3, 1.0),
+        (False, 1, 1.0),
         # Net: rescaled ends 0.99, 0.96 and flat 1.00 average to 0.98333; none is above 0.
-        (True, 0.0, -5 / 3),
+        (True, 0, -5 / 3),
     ],
 )
-def test_selection_summary_counts_variants_profitable_share_and_equal_weight_oos_return(with_costs, profitable, equal_weight):
+def test_selection_summary_counts_tried_and_oos_profitable_variants_and_equal_weight_oos_return(with_costs, profitable, equal_weight):
     summary = selection_summary(_summary_variants(with_costs))
 
     assert [(group["Strategy"], group["Asset"], group["Tried"]) for group in summary] == [("a", "MGC", 3), ("a", "MNQ", 1)]
-    assert summary[0]["OOS profitable"] == pytest.approx(profitable)
+    assert summary[0]["OOS profitable"] == profitable
     assert summary[0]["Equal-weight OOS"] == pytest.approx(equal_weight)
-    assert summary[1]["OOS profitable"] == 1.0
+    assert summary[1]["OOS profitable"] == 1
     assert summary[1]["Equal-weight OOS"] == pytest.approx(3.0 if with_costs else 4.0)
