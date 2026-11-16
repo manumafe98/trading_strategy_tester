@@ -20,7 +20,9 @@ from .models import OPERATIONS
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
-from .split import SELECT_BY, Split, oos_cutoff, rank_variants, split_tags, validate_selection_args, validate_split_args
+from .split import (
+    SELECT_BY, Split, oos_cutoff, rank_variants, selection_tags, split_tags, validate_selection_args, validate_split_args,
+)
 from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
@@ -428,6 +430,9 @@ def run(config: RunConfig) -> None:
 
     for split in splits:
         print(" | ".join(split_tags(split)))
+    if splits and not table.empty:
+        for tag in selection_tags(table):
+            print(tag)
     print(console.to_string(index=False))
     print(f"results: {result_path}")
     elapsed = perf_counter() - started

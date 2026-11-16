@@ -17,7 +17,7 @@ from .models import Side
 from .settings import (
     COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
-from .split import SELECT_BY, Split, entered_in_sample, split_tags
+from .split import SELECT_BY, Split, entered_in_sample, selection_tags, split_tags
 from .utils import clean_exit_name, net_value
 
 
@@ -509,6 +509,7 @@ def write_results_html(
                 f"{len(table)} variants",
             )
         )
+        tags.extend(f'<span class="tag">{html_escape(tag)}</span>' for tag in selection_tags(table))
     if config.trade_html == 0:
         tags.append('<span class="tag">trade charts off</span>')
     elif config.trade_html is not None:

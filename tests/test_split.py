@@ -7,7 +7,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from tester_framework.split import oos_cutoff, rank_variants, walk_forward_efficiency
+from tester_framework.split import oos_cutoff, rank_variants, selection_summary, walk_forward_efficiency
 
 
 # 48 hourly UTC bars from Monday 2025-01-06 00:00. In New York with an 18:00 session start,
@@ -173,3 +173,41 @@ def test_walk_forward_efficiency_rejects_a_cutoff_outside_the_curve(cutoff):
 )
 def test_walk_forward_efficiency_is_blank_when_equity_at_the_start_or_cutoff_is_not_positive(curve, bars_per_year):
     assert math.isnan(walk_forward_efficiency(np.array(curve), 2, bars_per_year))
+
+
+def _summary_variants(with_costs):
+    # Hand-built out-of-sample curves (gross, net) of three variants of one strategy and asset.
+    # RR 3 entered no out-of-sample trades; its OOS Return comes only from a spanning trade.
+    curves = {
+        "1": ([100, 110, 105], [100, 108, 99], 4),
+        "2": ([200, 190, 196], [200, 188, 192], 2),
+        "3": ([50, 51, 51], [50, 50.5, 50.5], 0),
+    }
+    rows = []
+    for rr, (gross, net, oos_trades) in curves.items():
+        gross_return, net_return = ((curve[-1] / curve[0] - 1) * 100 for curve in (gross, net))
+        rows.append({
+            "Strategy": "a", "Asset": "MGC", "RR": rr, "OOS Trades": oos_trades,
+            "OOS Return": (gross_return, net_return) if with_costs else gross_return,
+        })
+    rows.append({"Strategy": "a", "Asset": "MNQ", "RR": "1", "OOS Trades": 1, "OOS Return": (4.0, 3.0) if with_costs else 4.0})
+    return pd.DataFrame(rows)
+
+
+@pytest.mark.parametrize(
+    ("with_costs", "profitable", "equal_weight"),
+    [
+        # Gross: rescaled ends 1.05, 0.98 and flat 1.00 average to 1.01; only RR 1 is above 0.
+        (False, 1 / 3, 1.0),
+        # Net: rescaled ends 0.99, 0.96 and flat 1.00 average to 0.98333; none is above 0.
+        (True, 0.0, -5 / 3),
+    ],
+)
+def test_selection_summary_counts_variants_profitable_share_and_equal_weight_oos_return(with_costs, profitable, equal_weight):
+    summary = selection_summary(_summary_variants(with_costs))
+
+    assert [(group["Strategy"], group["Asset"], group["Tried"]) for group in summary] == [("a", "MGC", 3), ("a", "MNQ", 1)]
+    assert summary[0]["OOS profitable"] == pytest.approx(profitable)
+    assert summary[0]["Equal-weight OOS"] == pytest.approx(equal_weight)
+    assert summary[1]["OOS profitable"] == 1.0
+    assert summary[1]["Equal-weight OOS"] == pytest.approx(3.0 if with_costs else 4.0)

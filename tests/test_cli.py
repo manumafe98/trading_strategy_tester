@@ -767,7 +767,7 @@ def _ranked_rows(monkeypatch, returns):
             rows.append({
                 "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
                 "Return": ret, "Max DD": 1.0, "Sharpe Ratio": ret, "Return / DD": ret_dd, "_sort_return": ret,
-                "OOS Return": oos, "OOS Max DD": 1.0, "OOS Sharpe": oos, "OOS Return / DD": oos, "WFE": 50.0,
+                "OOS Trades": 1, "OOS Return": oos, "OOS Max DD": 1.0, "OOS Sharpe": oos, "OOS Return / DD": oos, "WFE": 50.0,
             })
         return rows
 
@@ -796,6 +796,8 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     assert list(table["Selected"]) == [True, True, False]
     out = capsys.readouterr().out
     assert "IS Rank" in out and "WFE" in out and "50.00%" in out
+    # OOS Returns 2, 1 and 3 are all above 0 and average to 2.
+    assert "test TEST 3 tried, OOS profitable 3/3 (100.0%), equal-weight OOS 2.00%" in out
 
 
 def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_the_top_n(
@@ -813,7 +815,7 @@ def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_
             {
                 "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
                 "Return": 1.0, "Max DD": 1.0, "Sharpe Ratio": 1.0, "Return / DD": ret_dd, "_sort_return": 1.0,
-                "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
+                "OOS Trades": 1, "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
             }
             for (rr, mode), (ret_dd, oos) in zip(task["variants"], values.get((task["strategy"], task["asset"]), []))
         ]
