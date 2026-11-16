@@ -156,10 +156,9 @@ def test_trailing_stop_updates_at_bar_open(test_asset_cfg):
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], [101.5, 102.5, 100.8, 102.0])
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
     _, trailing = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
-    fixed_metrics, fixed = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="fixed")
+    _, fixed = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="fixed")
     assert [(t["exit_reason"], t["exit_i"], t["exit"], t["realized_r"]) for t in trailing] == [(ExitReason.STOP, 2, 101.0, 1.0)]
-    assert fixed == []
-    assert fixed_metrics["Unresolved"] == 1
+    assert [(t["exit_reason"], t["exit_i"], t["exit"], t["realized_r"]) for t in fixed] == [(ExitReason.END, 2, 102.0, 2.0)]
 
 
 def test_short_trailing_stop_follows_low_and_never_loosens(test_asset_cfg):
@@ -362,27 +361,26 @@ def test_empty_signals(base_data, test_asset_cfg):
     assert math.isnan(metrics["Return / DD"])
 
 
-def test_unresolved_trade_discarded(base_data, hourly_index, test_asset_cfg):
-    unresolved = base_data.copy()
-    unresolved.loc[hourly_index[1], ["high", "low", "close"]] = [100.5, 99.5, 100.0]
-    signals = pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}])
-    metrics, trades = run_backtest(
-        unresolved,
-        signals,
-        strategy="test",
-        asset="TEST",
-        timeframe="1h",
-        risk_reward_ratio=1,
-        exit_mode="fixed",
-        operation="all",
-        risk_pct=1,
-        capital=10000,
-        with_costs=False,
-        asset_cfg=test_asset_cfg,
-    )
-    assert not trades
-    assert metrics["Return"] == 0
-    assert metrics["Unresolved"] == 1
+def test_trade_open_at_data_end_exits_at_last_close_with_costs(cost_asset_cfg):
+    # Entry 100, stop 99, 1R target 101 never reached; the data ends on a 100.5 close.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 100.0, 100.5])
+    metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], cost_asset_cfg, with_costs=True)
+
+    trade = trades[0]
+    # 100 contracts; 0.2 points per side (half spread 0.1 + slippage 0.1); commission 0.1 x 100 x 2.
+    assert (trade["exit_reason"], trade["exit_time"], trade["exit"]) == (ExitReason.END, data.index[-1], 100.5)
+    assert trade["net_exit"] == pytest.approx(100.3)
+    assert trade["gross_pnl"] == pytest.approx(50.0)
+    assert trade["net_pnl"] == pytest.approx(-10.0)
+    assert (metrics["Gross"]["Return"], metrics["Net"]["Return"]) == (0.5, -0.1)
+
+
+def test_close_entry_on_last_bar_is_discarded(test_asset_cfg):
+    # A close entry on the last bar has no bar left to trade on.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0])
+    metrics, trades = _run(data, [{"time": data.index[-1], "side": "long", "stop": 99.0, "entry": 100.0}], test_asset_cfg)
+
+    assert (metrics["Discarded"], trades) == (1, [])
 
 
 def test_gap_stop_fills_at_open(test_asset_cfg):
@@ -545,21 +543,19 @@ def test_partial_peak_and_giveback_are_position_weighted(test_asset_cfg):
     assert trade["giveback_r"] == 1
 
 
-def test_unresolved_partial_trade_discards_completed_fills(test_asset_cfg):
-    idx = pd.date_range("2025-01-01", periods=3, freq="h")
-    data = pd.DataFrame(
-        {"open": [100, 100, 100.5], "high": [100, 101, 101], "low": [100, 99.5, 100], "close": [100, 100.5, 100.5], "volume": [0, 0, 0]},
-        index=idx,
+def test_partial_remainder_open_at_data_end_exits_at_last_close(test_asset_cfg):
+    # Partial 2R from 100: half fills at the 101 1R target; the other half is still open when the data ends.
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.5, 100.5], [100.5, 101.0, 100.0, 100.5])
+    _, trades = _run(
+        data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg,
+        risk_reward_ratio=2, exit_mode="partial", target_fill="touch",
     )
-    metrics, trades = run_backtest(
-        data,
-        pd.DataFrame([{"time": idx[0], "side": "long", "stop": 99}]),
-        strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=2, exit_mode="partial", operation="all",
-        risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
-    )
-    assert trades == []
-    assert metrics["Unresolved"] == 1
-    assert metrics["Return"] == 0
+
+    assert [(f["exit_reason"], f["exit_i"], f["raw_exit"]) for f in trades[0]["exits"]] == [
+        (ExitReason.TARGET, 1, 101.0), (ExitReason.END, 2, 100.5),
+    ]
+    assert trades[0]["exit_reason"] == ExitReason.END
+    assert trades[0]["realized_r"] == pytest.approx(0.75)
 
 
 def test_calendar_filters_use_actual_entry_timestamp_and_count_discarded(test_asset_cfg):
@@ -706,7 +702,7 @@ def test_result_columns_follow_operation_and_session():
     assert "Long" in result_columns("all")
     assert "Long" not in result_columns("long_only")
     assert "Discarded" in result_columns("all")
-    assert "Unresolved" in result_columns("all")
+    assert "Unresolved" not in result_columns("all")
 
 
 def test_result_columns_append_split_columns_only_in_split_mode():
@@ -1161,11 +1157,13 @@ def test_session_exit_discards_trades_that_cannot_open_before_window_close(test_
     assert (metrics["Discarded"], trades) == (1, []), reason
 
 
-def test_session_exit_leaves_trade_unresolved_when_data_ends_inside_window(test_asset_cfg):
-    data = _timed_bars({"2025-01-02 13:00": FLAT, "2025-01-02 14:00": FLAT})
-    metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
+def test_session_exit_closes_trade_at_data_end_inside_window(test_asset_cfg):
+    data = _timed_bars({"2025-01-02 13:00": FLAT, "2025-01-02 14:00": (100.0, 100.5, 100.0, 100.4)})
+    _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg, session_exit=NY_MORNING)
 
-    assert (metrics["Unresolved"], trades) == (1, [])
+    assert [(t["exit_reason"], t["exit_time"], t["exit"]) for t in trades] == [
+        (ExitReason.END, pd.Timestamp("2025-01-02 14:00"), 100.4),
+    ]
 
 
 def _split_run(cfg, **overrides):
@@ -1321,8 +1319,25 @@ def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, sig
     metrics, trades = _run(data, [signal], test_asset_cfg)
 
     # A signal on the last FUTZ4 bar carries a FUTZ4 stop; one on the roll bar fills on FUTH5 and trades.
-    assert (metrics["Discarded"], metrics["Unresolved"]) == (discarded, 0)
+    assert metrics["Discarded"] == discarded
     assert [trade["exit_reason"] for trade in trades] == [ExitReason.TARGET] * (1 - discarded)
+
+
+def test_trade_open_at_data_end_after_a_roll_exits_at_last_close(test_asset_cfg):
+    data = _contract_bars(
+        {
+            **ROLL_BARS,
+            "2025-01-02 23:00": (150.0, 150.5, 150.0, 150.5, "FUTH5"),
+            "2025-01-03 00:00": (150.5, 150.8, 150.2, 150.6, "FUTH5"),
+        }
+    )
+    signal = {"time": pd.Timestamp("2025-01-02 22:00"), "side": "long", "stop": 149.0}
+
+    _, trades = _run(data, [signal], test_asset_cfg)
+
+    assert [(t["exit_reason"], t["exit_time"], t["exit"]) for t in trades] == [
+        (ExitReason.END, pd.Timestamp("2025-01-03 00:00"), 150.6),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -1337,10 +1352,10 @@ def test_bar_extreme_equal_to_target_fills_on_touch_but_not_tick_through(test_as
     signals = [{"time": data.index[0], "side": side, "stop": stop}]
 
     _, touched = _run(data, signals, test_asset_cfg, target_fill="touch")
-    tick_through, untouched = _run(data, signals, test_asset_cfg, target_fill="tick_through")
+    _, untouched = _run(data, signals, test_asset_cfg, target_fill="tick_through")
 
     assert (touched[0]["exit_reason"], touched[0]["exit"]) == (ExitReason.TARGET, touch_bar[1] if side == "long" else touch_bar[2])
-    assert (untouched, tick_through["Unresolved"]) == ([], 1)
+    assert [t["exit_reason"] for t in untouched] == [ExitReason.END]
 
 
 @pytest.mark.parametrize(
@@ -1402,10 +1417,10 @@ def test_trailing_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
 
     _, touched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing", target_fill="touch")
-    tick_through, untouched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing")
+    _, untouched = _run(data, signals, test_asset_cfg, risk_reward_ratio=2, exit_mode="trailing")
 
     assert (touched[0]["exit_reason"], touched[0]["exit"]) == (ExitReason.TARGET, 102.0)
-    assert (untouched, tick_through["Unresolved"]) == ([], 1)
+    assert [t["exit_reason"] for t in untouched] == [ExitReason.END]
 
 
 def test_stop_first_leaves_a_bar_that_cannot_reach_the_target_to_the_path(test_asset_cfg):

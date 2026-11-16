@@ -115,7 +115,6 @@ def test_run_variants_drops_signals_at_or_after_session_window_end(monkeypatch, 
 
     assert row["Session"] == "london=08:00-10:00"
     assert row["Trades"] == 1
-    assert row["Unresolved"] == 0
 
 
 def test_extra_signal_columns_reach_plot_indicators_and_trade_records(

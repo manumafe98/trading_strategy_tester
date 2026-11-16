@@ -435,7 +435,6 @@ def run_backtest(
     last_bar_idx = 0
     trades = []
     discarded_signals = 0
-    unresolved_trades = 0
     busy_until = -1
     # With a session exit, open trades close at the close of their session window's last bar.
     if session_exit is not None:
@@ -463,7 +462,8 @@ def run_backtest(
         signal_entry = signal.get("entry")
         close_entry = pd.notna(signal_entry)
         entry_i = data.index.searchsorted(signal["time"], side="left" if close_entry else "right")
-        if entry_i >= bar_count or entry_i <= busy_until:
+        # A close entry needs a bar after its fill bar.
+        if entry_i + int(close_entry) >= bar_count or entry_i <= busy_until:
             discarded_signals += 1
             continue
         if close_entry and data.index[entry_i] != signal["time"]:
@@ -555,15 +555,10 @@ def run_backtest(
             if roll_last_bar[i]:
                 open_trade.close(path[-1], i, bar_time, ExitReason.ROLL)
                 break
+            if i == bar_count - 1:
+                open_trade.close(path[-1], i, bar_time, ExitReason.END)
+                break
             bar_gross_equity[i], bar_net_equity[i] = open_trade.marked_equity(path[-1], current_gross, current_net)
-
-        if not open_trade.closed:
-            # Unresolved trades are left out of the results; add partial/open-trade accounting only if research needs it.
-            unresolved_trades += 1
-            bar_gross_equity[last_bar_idx:bar_count] = current_gross
-            bar_net_equity[last_bar_idx:bar_count] = current_net
-            busy_until = bar_count - 1
-            continue
 
         trade = open_trade.finalize()
 
@@ -585,11 +580,11 @@ def run_backtest(
 
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
     if oos_cutoff is None:
-        return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals, unresolved_trades), trades
+        return make_metrics(asset, timeframe, strategy, gross_curve, net_curve, with_costs, bars_per_year, discarded_signals), trades
     # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
     metrics = make_metrics(
         asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs, bars_per_year,
-        discarded_signals, unresolved_trades,
+        discarded_signals,
     )
     oos = make_metrics(asset, timeframe, strategy, gross_curve[oos_cutoff:], net_curve[oos_cutoff:], with_costs, bars_per_year)
     metrics.update({column: oos[source] for column, source in OOS_FINANCIAL_COLUMNS.items()})
@@ -643,7 +638,6 @@ def make_metrics(
     with_costs: bool,
     bars_per_year: int,
     discarded_signals: int = 0,
-    unresolved_trades: int = 0,
 ) -> dict:
     gross = _curve_metrics(gross_equity_curve, bars_per_year)
     net = _curve_metrics(net_equity_curve, bars_per_year) if with_costs else gross.copy()
@@ -652,7 +646,6 @@ def make_metrics(
         "Asset": asset,
         "TF": timeframe,
         "Discarded": discarded_signals,
-        "Unresolved": unresolved_trades,
         **(net if with_costs else gross),
         "Gross": gross,
         "Net": net,
@@ -686,7 +679,7 @@ def result_columns(operation: str, include_session: bool = False, split: bool = 
     columns = ["Strategy", "Asset", "TF"]
     if include_session:
         columns.append("Session")
-    columns += ["RR", "Exit Mode", "Trades", "Discarded", "Unresolved"]
+    columns += ["RR", "Exit Mode", "Trades", "Discarded"]
     if operation == "all":
         columns += ["Long", "Short"]
     columns += ["W", "BE", "L", "Win Rate", "Expectancy R", "Avg Duration", "Return", "Max DD", "Sharpe Ratio", "Return / DD"]

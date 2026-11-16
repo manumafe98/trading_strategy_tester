@@ -108,3 +108,16 @@ def test_strategy_metrics_rejects_non_dict():
     hook = SimpleNamespace(calculate_metrics=lambda *args: [])
     with pytest.raises(ValueError):
         strategy_metrics(hook, None, pd.DataFrame(), [], "TEST", "1h", {})
+
+
+def test_analyze_trades_counts_managed_completions_per_exit_reason():
+    reasons = ["target", "stop", "stop", "session", "roll", "end"]
+    trades = [
+        {"side": Side.LONG, "realized_r": 0.0, "entry_time": pd.Timestamp("2025-01-01"), "exits": [], "holding_duration": pd.Timedelta(hours=1),
+         "exit_reason": reason, "mfe_r": 0.0, "giveback_r": 0.0}
+        for reason in reasons
+    ]
+
+    managed = analyze_trades(trades, "trailing")["managed"]
+
+    assert [managed[f"{name} Completions"] for name in ("Target", "Stop", "Session", "Roll", "End")] == [1, 2, 1, 1, 1]

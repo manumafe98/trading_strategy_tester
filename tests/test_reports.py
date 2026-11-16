@@ -57,7 +57,6 @@ def test_results_index_shows_quick_view_headers_sort_buttons_and_run_notes(monke
             "Exit Mode",
             "Trades",
             "Discarded",
-            "Unresolved",
             "Long",
             "Short",
             "W",
@@ -210,7 +209,7 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     table = pd.DataFrame(
         [
             {"Strategy": "ema50", "Asset": "MES", "TF": "5m", "Session": "london", "RR": "1", "Exit Mode": "fixed", "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5, "_risk_pct": 0.5, "_analytics": analytics, "_strategy_metrics": {}},
-            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0}, "trades": []}, "_strategy_metrics": {}},
+            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Roll Completions": 0, "End Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0}, "trades": []}, "_strategy_metrics": {}},
         ]
     )
     config = RunConfig(
@@ -283,6 +282,8 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
             "Target Completions": len(trades),
             "Stop Completions": 0,
             "Session Completions": 0,
+            "Roll Completions": 0,
+            "End Completions": 0,
             "Avg Realized R": 2.0,
             "Avg MFE R": 2.5,
             "Avg Giveback R": 0.5,

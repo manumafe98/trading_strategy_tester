@@ -220,8 +220,11 @@ def _managed_summary(analytics: dict) -> str:
     managed = analytics["managed"]
     mode = str(managed["Mode"]).title()
     summary = _detail_table(
-        ["Target completions", "Stop completions", "Session completions", "Avg realized", "Avg MFE", "Avg giveback"],
-        [[managed["Target Completions"], managed["Stop Completions"], managed["Session Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"])]],
+        ["Target completions", "Stop completions", "Session completions", "Roll completions", "End completions", "Avg realized", "Avg MFE", "Avg giveback"],
+        [[
+            managed["Target Completions"], managed["Stop Completions"], managed["Session Completions"], managed["Roll Completions"],
+            managed["End Completions"], _r(managed["Avg Realized R"]), _r(managed["Avg MFE R"]), _r(managed["Avg Giveback R"]),
+        ]],
     )
     return f'<section><h2>{mode} summary</h2>{summary}</section>'
 

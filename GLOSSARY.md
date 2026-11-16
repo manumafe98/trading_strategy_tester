@@ -88,6 +88,9 @@ The first bar of a market session where the chosen contract of a continuous seri
 **Roll exit**:
 The forced close of a trade at the close of the last bar before a roll.
 
+**End exit**:
+The close of a trade still open on the last bar of the data, at that bar's close.
+
 **Target fill**:
 The rule for when a target counts as reached: touch (price reaches the target) or tick-through (price trades at least one tick beyond it, the default).
 
@@ -99,12 +102,8 @@ An exit filled at a bar's open because the price gapped through the stop or a ta
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a calendar filter, a fill in the 60 minutes before a roll or across one, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a calendar filter, a fill in the 60 minutes before a roll or across one, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
-
-**Unresolved trade**:
-A trade still open when the data ends; it is excluded from results.
-_Avoid_: open trade
 
 **Variant**:
 One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
