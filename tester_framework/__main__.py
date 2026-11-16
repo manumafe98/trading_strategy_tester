@@ -16,7 +16,7 @@ from .analytics import format_duration
 from .backtest import INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
-from .models import OPERATIONS
+from .models import OPERATIONS, IntrabarRule, TargetFill
 from .reports import format_metric, reset_output_dirs, write_results_html
 from .runner import cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions, session_label
@@ -467,13 +467,13 @@ def parser() -> argparse.ArgumentParser:
     )
     p.add_argument(
         "--target_fill",
-        default="tick_through",
+        default=TargetFill.TICK_THROUGH.value,
         choices=TARGET_FILLS,
         help="tick_through: a target fills when price trades one tick beyond it; touch: when price reaches it",
     )
     p.add_argument(
         "--intrabar",
-        default="path",
+        default=IntrabarRule.PATH.value,
         choices=INTRABAR_RULES,
         help="path: TradingView's open-high-low-close order; stop_first: a bar reaching stop and target exits at the stop",
     )
@@ -539,8 +539,8 @@ def main() -> None:
             oos_fraction=args.oos_fraction,
             select_by=args.select_by,
             select_top=args.select_top,
-            target_fill=args.target_fill,
-            intrabar=args.intrabar,
+            target_fill=TargetFill(args.target_fill),
+            intrabar=IntrabarRule(args.intrabar),
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

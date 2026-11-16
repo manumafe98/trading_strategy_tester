@@ -13,7 +13,7 @@ import pandas as pd
 
 from .analytics import decode_analytics
 from .cli import DAY_NAMES, MONTH_NAMES, RunConfig
-from .models import Side
+from .models import IntrabarRule, Side, TargetFill
 from .settings import (
     COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
@@ -484,9 +484,9 @@ def write_results_html(
     ]
     if config.session_exit:
         tags.append('<span class="tag">session exit on</span>')
-    if config.target_fill != "tick_through":
+    if config.target_fill != TargetFill.TICK_THROUGH:
         tags.append(f'<span class="tag">target fill {html_escape(config.target_fill.replace("_", " "))}</span>')
-    if config.intrabar != "path":
+    if config.intrabar != IntrabarRule.PATH:
         tags.append(f'<span class="tag">intrabar {html_escape(config.intrabar.replace("_", " "))}</span>')
     if config.sessions and config.sessions.lower() != "none":
         tags.append(f'<span class="tag">sessions {html_escape(config.sessions)}</span>')

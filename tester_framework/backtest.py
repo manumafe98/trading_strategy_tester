@@ -9,7 +9,7 @@ import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
 from .data import session_labels
-from .models import OPERATIONS, AssetConfig, ExitReason, Side
+from .models import OPERATIONS, AssetConfig, ExitReason, IntrabarRule, Side, TargetFill
 from .sessions import SessionSpec, session_exit_bars
 from .split import entered_in_sample, walk_forward_efficiency
 from .settings import OOS_FINANCIAL_COLUMNS, SPLIT_COLUMNS
@@ -19,8 +19,8 @@ from .utils import csv_items, decimal_places
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
-TARGET_FILLS = ("tick_through", "touch")
-INTRABAR_RULES = ("path", "stop_first")
+TARGET_FILLS = tuple(rule.value for rule in TargetFill)
+INTRABAR_RULES = tuple(rule.value for rule in IntrabarRule)
 
 __all__ = ["INTRABAR_RULES", "TARGET_FILLS", "add_trade_counts", "result_columns", "risk_for", "risk_reward_ratios", "run_backtest"]
 
@@ -213,7 +213,7 @@ class _OpenTrade:
     trade: dict
     cfg: AssetConfig
     with_costs: bool
-    target_fill: str = "tick_through"
+    target_fill: TargetFill = TargetFill.TICK_THROUGH
     stop: float = field(init=False)
     remaining_qty: float = field(init=False)
     direction: int = field(init=False)
@@ -243,7 +243,7 @@ class _OpenTrade:
         target = self.target
         if target is None:
             return None
-        if self.target_fill == "touch":
+        if self.target_fill == TargetFill.TOUCH:
             return target["price"]
         # Targets are tick-aligned, so adding the tick in Decimal lands exactly on the next tick.
         return float(Decimal(str(target["price"])) + self.direction * Decimal(str(self.cfg.tick_size)))
@@ -254,7 +254,7 @@ class _OpenTrade:
 
     def target_gap_price(self, opened: float) -> float:
         """A gap beyond the target fills at the open on a touch, at the target price under tick-through."""
-        return opened if self.target_fill == "touch" else self.target["price"]
+        return opened if self.target_fill == TargetFill.TOUCH else self.target["price"]
 
     def target_between(self, start: float, end: float) -> bool:
         reached_at = self._target_reached_at()
@@ -381,8 +381,8 @@ def run_backtest(
     months: tuple[int, ...] = (),
     session_exit: SessionSpec | None = None,
     oos_cutoff: int | None = None,
-    target_fill: str = "tick_through",
-    intrabar: str = "path",
+    target_fill: TargetFill = TargetFill.TICK_THROUGH,
+    intrabar: IntrabarRule = IntrabarRule.PATH,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -394,6 +394,7 @@ def run_backtest(
         raise ValueError(f"--target_fill must be one of {', '.join(TARGET_FILLS)}; got: {target_fill}")
     if intrabar not in INTRABAR_RULES:
         raise ValueError(f"--intrabar must be one of {', '.join(INTRABAR_RULES)}; got: {intrabar}")
+    target_fill, intrabar = TargetFill(target_fill), IntrabarRule(intrabar)
     if not math.isfinite(risk_pct) or risk_pct <= 0:
         raise ValueError("--risk must be finite and positive")
     if not math.isfinite(capital) or capital <= 0:
@@ -529,7 +530,7 @@ def run_backtest(
                 open_trade.trail(opened)
 
             # Stop-first: a bar that can reach both the stop and the next target exits at the stop.
-            if intrabar == "stop_first":
+            if intrabar == IntrabarRule.STOP_FIRST:
                 favor, adverse = (highs[i], lows[i]) if side == Side.LONG else (lows[i], highs[i])
                 if open_trade.stop_between(opened, adverse) and open_trade.target_between(opened, favor):
                     open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
