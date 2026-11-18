@@ -40,6 +40,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "oos_cutoff": None,
         "target_fill": "tick_through",
         "intrabar": "path",
+        "strategy_params": {},
     }
     task.update(overrides)
     return task
@@ -333,6 +334,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "oos_cutoff": None,
                 "target_fill": "tick_through",
                 "intrabar": "path",
+                "strategy_params": {},
             }
 
             rows = runner.run_variants(task)

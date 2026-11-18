@@ -5,6 +5,7 @@ import types
 from pathlib import Path
 
 from .settings import STRATEGY_DIR
+from .strategy_params import check_declared_params
 
 
 __all__ = ["load_strategy"]
@@ -28,4 +29,5 @@ def load_strategy(name: str) -> types.ModuleType:
     spec.loader.exec_module(module)
     if not callable(getattr(module, "generate_signals", None)):
         raise ValueError(f"{path} must define generate_signals(df, asset, timeframe, params)")
+    check_declared_params(module, name)
     return module

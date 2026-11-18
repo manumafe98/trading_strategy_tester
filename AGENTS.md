@@ -23,6 +23,7 @@ def generate_signals(df, asset, timeframe, params):
 - `timeframe` is the high timeframe. A strategy can load a smaller low timeframe by setting `LOW_TIMEFRAME = "5m"`; `df` then holds low-timeframe bars.
 - An optional `setup_time` column marks the start of the latest bar a signal's setup depends on (no later than `time`); the engine discards a signal whose setup time is before the first high-timeframe bar after the previous trade's exit.
 - Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
+- A strategy can declare tunable parameters as `PARAMS = {"name": default}` (int, float, bool, str or `None`), plus `PARAM_TYPES = {"name": int}` for `None` defaults. Every key the engine puts in `params` (`tick_size`, `pip_size`, `session`, `trade`, `capital`, `exit_mode`, ...; see `RESERVED_PARAMS` in `tester_framework/strategy_params.py`) is reserved. `--strategy_params "name=value;..."` overrides them, and `params` in every hook holds every declared parameter, defaults filled in.
 
 Optional hooks:
 
@@ -32,6 +33,9 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 def calculate_metrics(data, signals, trades, asset, timeframe, params):
     return {"My metric": value}  # flat dict of scalars
+
+def validate_params(params):
+    raise ValueError("...")  # runs before data loads; params holds every declared parameter
 ```
 
 Strategies own indicators and stops. The framework owns data loading, fills, exits, risk sizing, costs, result HTML, and trade HTML.
