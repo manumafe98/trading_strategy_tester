@@ -2,7 +2,7 @@
 
 Keep changes small, boring, and runnable.
 
-Domain terms (session window, signal timeframe, R, variant, ...) are defined in `GLOSSARY.md`; use them as written there.
+Domain terms (session window, high timeframe, R, variant, ...) are defined in `GLOSSARY.md`; use them as written there.
 
 Review-time coding standards live in `docs/CODING_STANDARDS.md`.
 
@@ -19,7 +19,7 @@ def generate_signals(df, asset, timeframe, params):
 - `params["tick_size"]` contains the configured asset price tick.
 - The input `df` is shared across timeframes; strategies must not mutate it.
 - Local futures `df` also carries a numeric `contract` column: one code per contract, changing at each roll.
-- A strategy can load data at a different execution timeframe by setting `EXECUTION_TIMEFRAME = "5m"`.
+- `timeframe` is the high timeframe. A strategy can load a smaller low timeframe by setting `LOW_TIMEFRAME = "5m"`; `df` then holds low-timeframe bars.
 - An optional `setup_time` column marks the start of the latest bar a signal's setup depends on (no later than `time`); the engine discards a signal whose setup time is before the first high-timeframe bar after the previous trade's exit.
 - Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
 
@@ -50,7 +50,7 @@ Run the smallest useful checks after changes:
 ```bash
 PY="$(git rev-parse --path-format=absolute --git-common-dir)/../.venv/Scripts/python.exe"
 "$PY" -m pytest -q
-"$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
+"$PY" -m tester_framework --strategies ema50 --asset MGC --high_timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
 ```
 
 The smoke run takes about 20 seconds and prints 139 trades, Avg Duration 8h 10m and Return -5.75% / -15.05% (gross / net); adding `--target_fill touch --intrabar path` prints the same trades and returns with Avg Duration 8h 9m. A different result signals a behaviour change. It reads `data/` from the checkout it runs in, and local `data/` only exists on the machine that holds it; agents elsewhere skip the smoke run, and a linked worktree should point at the main checkout's `data/` or run the smoke command there.

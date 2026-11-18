@@ -25,7 +25,7 @@ The local smoke run and its expected result are documented in `AGENTS.md`.
 `PY` is defined in Checks.
 
 ```bash
-"$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
+"$PY" -m tester_framework --strategies ema50 --asset MGC --high_timeframe 1h --time_period 60d --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs
 ```
 
 Each normal run clears `results/` and `trades/` first, then writes a result bundle with `index.html`, paginated variant pages, and trade charts. Move or share the result folder as a unit. Use `--trade_html N` to limit charts per variant, or `--trade_html 0` to disable them. Omitting the flag writes every chart.
@@ -39,8 +39,8 @@ Asset aliases, tick/point values, trading-session boundaries, annualization fact
 Multiple values are comma-separated, without spaces:
 
 ```bash
-"$PY" -m tester_framework --strategies ema50 --asset MGC,MNQ --timeframe 1h,30m --risk_reward_ratio 1,2
-"$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
+"$PY" -m tester_framework --strategies ema50 --asset MGC,MNQ --high_timeframe 1h,30m --risk_reward_ratio 1,2
+"$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --high_timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
 ```
 
 `--strategies` accepts a comma-separated list of strategy modules. Each strategy runs independently with its own signal generation; results include a `Strategy` column for side-by-side comparison. Each asset/timeframe/RR/exit/strategy variant runs in parallel up to the machine's logical CPU count. Use `--workers 1` for a sequential comparison or a smaller positive value to limit CPU usage. The command prints total elapsed time after writing the result report.
@@ -48,10 +48,10 @@ Multiple values are comma-separated, without spaces:
 For quick diagnostic samples, `--max_trades N` stops each variant after its first N closed trades and records the cap in the result report. These truncated metrics are not a substitute for a full strategy study. `--trade_html N` keeps the full backtest but writes only the first N trade charts per variant; `--trade_html 0` keeps the result report and trade ledger without chart files.
 
 ```bash
-"$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --time_period 5d --max_trades 3 --trade_html 0 --workers 1
+"$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --high_timeframe 5m --sessions ny=09:30-12:00 --time_period 5d --max_trades 3 --trade_html 0 --workers 1
 ```
 
-Use all configured assets by omitting `--asset`; use the default timeframe list by omitting `--timeframe`:
+Use all configured assets by omitting `--asset`; use the default timeframe list by omitting `--high_timeframe`:
 
 ```bash
 "$PY" -m tester_framework --strategies ema50 --risk_reward_ratio 1
@@ -112,7 +112,7 @@ The series is not back-adjusted, so prices match TradingView's default continuou
 
 ## Metrics
 
-- **Sharpe Ratio** is the Daily Sharpe, using a 0% risk-free rate: one point per market session in the loaded period, including market sessions without trades. Each point is the return of the equity (net for the Net value, gross for the Gross value) from one market session's close to the next, starting from the initial capital, with open trades marked at the close. It is annualized with the asset's `bars_per_year["1d"]` (252 for futures; the configured value for crypto and forex), so the same trades give the same Sharpe on any execution timeframe. A period needs at least two market sessions for a Sharpe.
+- **Sharpe Ratio** is the Daily Sharpe, using a 0% risk-free rate: one point per market session in the loaded period, including market sessions without trades. Each point is the return of the equity (net for the Net value, gross for the Gross value) from one market session's close to the next, starting from the initial capital, with open trades marked at the close. It is annualized with the asset's `bars_per_year["1d"]` (252 for futures; the configured value for crypto and forex), so the same trades give the same Sharpe on any low timeframe. A period needs at least two market sessions for a Sharpe.
 - **Return**, **Max DD**, and **Return / DD** use the bar-level equity curve.
 - **MFE R** is the position-weighted peak trade value: banked partial fills plus the remaining position's favorable value.
 - **Giveback R** is favorable peak profit not retained at exit; straight losses that were never profitable have zero giveback.
@@ -121,14 +121,14 @@ Undefined Sharpe and Return/DD values display as `N/A`. With `--with_costs`, out
 
 ### Out-of-sample split
 
-`--oos_start YYYY-MM-DD` or `--oos_fraction F` (one of them, `0 < F < 1`) cuts the loaded `--time_period` into an in-sample period and an out-of-sample period. The cutoff is the first bar of a market session, in the asset's session timezone: the first market session starting on or after the date, or the bar at `ceil((1 - F) x bars)` moved forward to the next market session start. It is computed per asset and execution timeframe, and the result header lists both date ranges. Each variant is still backtested once over the whole period, with no capital reset at the cutoff; its equity curve is then split so the out-of-sample period starts from the equity at the close of the last in-sample bar. Trades belong to the period of their entry bar. The usual trade-count and financial columns describe the in-sample period, followed by `OOS Trades`, `OOS Return`, `OOS Max DD`, `OOS Sharpe` (the Daily Sharpe of the out-of-sample market sessions; the in-sample `Sharpe Ratio` uses only in-sample ones, and the cutoff keeps every market session in one period), `OOS Return / DD` and `Spanning` (trades entered in sample that exit at or after the cutoff; their P&L lands in the out-of-sample curve). `Discarded` is the exception: it stays a whole-period count, not an in-sample one. `--max_trades` cannot be combined with a split.
+`--oos_start YYYY-MM-DD` or `--oos_fraction F` (one of them, `0 < F < 1`) cuts the loaded `--time_period` into an in-sample period and an out-of-sample period. The cutoff is the first bar of a market session, in the asset's session timezone: the first market session starting on or after the date, or the bar at `ceil((1 - F) x bars)` moved forward to the next market session start. It is computed per asset and low timeframe, and the result header lists both date ranges. Each variant is still backtested once over the whole period, with no capital reset at the cutoff; its equity curve is then split so the out-of-sample period starts from the equity at the close of the last in-sample bar. Trades belong to the period of their entry bar. The usual trade-count and financial columns describe the in-sample period, followed by `OOS Trades`, `OOS Return`, `OOS Max DD`, `OOS Sharpe` (the Daily Sharpe of the out-of-sample market sessions; the in-sample `Sharpe Ratio` uses only in-sample ones, and the cutoff keeps every market session in one period), `OOS Return / DD` and `Spanning` (trades entered in sample that exit at or after the cutoff; their P&L lands in the out-of-sample curve). `Discarded` is the exception: it stays a whole-period count, not an in-sample one. `--max_trades` cannot be combined with a split.
 
-In split mode the variants of each strategy and asset are ranked on an in-sample metric, `--select_by return_dd|sharpe|return` (default `return_dd`), using Net values with `--with_costs` and Gross without. Higher is better, a missing (N/A) value ranks last and ties keep the table order. The top `--select_top N` (default 5) are marked `Selected`, the table sorts by `IS Rank` within each strategy and asset, and `OOS Rank` ranks the same metric on the out-of-sample period. `WFE` is the out-of-sample annualized return divided by the in-sample annualized return, as a percentage, where annualized return is `(1 + Return) ^ (bars_per_year / bars in the period) - 1` for the execution timeframe; it is blank when the in-sample annualized return is zero or negative. Both selection flags require `--oos_start` or `--oos_fraction`.
+In split mode the variants of each strategy and asset are ranked on an in-sample metric, `--select_by return_dd|sharpe|return` (default `return_dd`), using Net values with `--with_costs` and Gross without. Higher is better, a missing (N/A) value ranks last and ties keep the table order. The top `--select_top N` (default 5) are marked `Selected`, the table sorts by `IS Rank` within each strategy and asset, and `OOS Rank` ranks the same metric on the out-of-sample period. `WFE` is the out-of-sample annualized return divided by the in-sample annualized return, as a percentage, where annualized return is `(1 + Return) ^ (bars_per_year / bars in the period) - 1` for the low timeframe; it is blank when the in-sample annualized return is zero or negative. Both selection flags require `--oos_start` or `--oos_fraction`.
 
 The result header (console and results page) also shows, for each strategy and asset, how the whole population of variants did out of sample, so the selected variants can be judged against it. `Tried` is the number of variants. `OOS profitable` is the share of variants with an OOS Return above 0. `Equal-weight OOS` is the out-of-sample return of the average of every variant's out-of-sample equity curve, each first rescaled to start at 1, which equals the mean OOS Return. Both use Net with `--with_costs` and Gross without, from the OOS Return as shown (rounded to 2 decimals). A variant with no `OOS Trades` counts as not profitable and contributes a flat curve, even when a spanning trade gives it a non-zero OOS Return.
 
 ```bash
-"$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --oos_start 2021-07-01 --with_costs
+"$PY" -m tester_framework --strategies ema50 --asset MGC --high_timeframe 1h --time_period 2021 --data_source local --oos_start 2021-07-01 --with_costs
 ```
 
 A trade still open on the last bar of the loaded data closes at that bar's close with exit reason `end`, after any partial fills it already banked; costs apply as for any exit, and it counts like any other trade. Signals skipped due to invalid stops, bad entries, a close entry on the last bar, minimum risk, overlap, a setup time before the first high-timeframe bar after the previous exit, a fill in the 60 minutes before a roll or across one, or minimum-quantity filters are reported in `Discarded`.
@@ -148,10 +148,10 @@ def generate_signals(df, asset, timeframe, params):
 
 The input `df` is shared across timeframes; strategies **must not mutate** it. Copy inside the strategy if needed.
 
-A strategy can request a different execution timeframe than the signal timeframe by setting a module-level constant:
+`timeframe` is the high timeframe. A strategy can read a smaller low timeframe by setting a module-level constant; `df` then holds low-timeframe bars, which the engine also fills on:
 
 ```python
-EXECUTION_TIMEFRAME = "5m"  # data loaded at 5m, signals generated per --timeframe
+LOW_TIMEFRAME = "5m"  # data loaded at 5m, signals generated per --high_timeframe
 ```
 
 Strategies can add indicators to trade charts with an optional hook:
@@ -163,7 +163,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
-A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. High-timeframe bars are clock-aligned, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
+A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--high_timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. High-timeframe bars are clock-aligned, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
 
 Any extra signal column beyond `time`, `side`, `stop`, `entry`, and `setup_time` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
 
@@ -184,10 +184,10 @@ Three Opening Range Breakout strategies share common logic in `strategy/utils/`:
 - **`orb_fvg`** — SL from a Fair Value Gap boundary (FVG bottom - tick for long, FVG top + tick for short). Only trades when a directional FVG exists at breakout time.
 - **`orb_combined`** — SL from the FVG extension line (ext price - tick for long, ext price + tick for short). Only trades when a directional FVG with an extension line exists.
 
-All three use 1-minute execution data (`EXECUTION_TIMEFRAME = "1m"`). For these strategies, `--timeframe` is the opening-range duration rather than the execution-bar size; every configured intraday duration from 1 minute through 1 hour is supported. They require `--sessions` and build the ORB from that session's local start time, then look for breakouts until the session window ends. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
+All three use a 1-minute low timeframe (`LOW_TIMEFRAME = "1m"`). For these strategies, `--high_timeframe` is the opening-range duration rather than the bar size they trade on; every configured intraday duration from 1 minute through 1 hour is supported. They require `--sessions` and build the ORB from that session's local start time, then look for breakouts until the session window ends. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
 
 ```bash
-"$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
+"$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --high_timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs
 ```
 
 ### Differences From Pine

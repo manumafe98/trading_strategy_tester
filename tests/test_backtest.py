@@ -1445,9 +1445,9 @@ def test_tick_through_trigger_is_exactly_one_tick_beyond_the_target(test_asset_c
     assert (trades[0]["target"], trades[0]["exit_reason"], trades[0]["exit_i"]) == (target, ExitReason.TARGET, 2)
 
 
-def test_backtest_rejects_an_execution_timeframe_without_a_bar_length(base_data, test_asset_cfg):
+def test_backtest_rejects_an_low_timeframe_without_a_bar_length(base_data, test_asset_cfg):
     cfg = replace(test_asset_cfg, bars_per_year={**test_asset_cfg.bars_per_year, "4h": 429})
-    with pytest.raises(ValueError, match="Unknown execution timeframe for TEST: 4h"):
+    with pytest.raises(ValueError, match="Unknown low timeframe for TEST: 4h"):
         _run(base_data, [{"time": base_data.index[0], "side": "long", "stop": 99.0}], cfg, timeframe="4h")
 
 
@@ -1511,7 +1511,7 @@ def test_same_trades_on_1h_and_5m_data_give_the_same_sharpe(cost_asset_cfg):
     cfg = replace(cost_asset_cfg, bars_per_year={"1h": 1716, "5m": 20592, "1d": 252})
 
     hourly_metrics, hourly_trades = _daily_sharpe_run(cfg, hourly, with_costs=True)
-    five_minute_metrics, five_minute_trades = _daily_sharpe_run(cfg, five_minute, with_costs=True, execution_timeframe="5m")
+    five_minute_metrics, five_minute_trades = _daily_sharpe_run(cfg, five_minute, with_costs=True, low_timeframe="5m")
 
     assert [t["net_pnl"] for t in five_minute_trades] == [t["net_pnl"] for t in hourly_trades]
     assert five_minute_metrics["Gross"]["Sharpe Ratio"] == hourly_metrics["Gross"]["Sharpe Ratio"] == 18.33
@@ -1552,7 +1552,7 @@ def test_setup_before_first_high_timeframe_bar_after_exit_is_discarded(test_asse
         {"time": data.index[0], "side": "long", "stop": 99.0, "setup_time": data.index[0]},
         {"time": data.index[4], "side": "long", "stop": 99.0, "setup_time": setup_time and pd.Timestamp(setup_time)},
     ]
-    metrics, trades = _run(data, signals, _quarter_hour_cfg(test_asset_cfg), execution_timeframe="15m")
+    metrics, trades = _run(data, signals, _quarter_hour_cfg(test_asset_cfg), low_timeframe="15m")
     assert [t["entry_i"] for t in trades] == ([1, 5] if accepted else [1])
     assert metrics["Discarded"] == (0 if accepted else 1)
 
@@ -1569,8 +1569,8 @@ def test_setup_time_rule_uses_each_risk_reward_ratio_s_own_exit(test_asset_cfg):
         {"time": data.index[5], "side": "long", "stop": 99.0, "setup_time": data.index[4]},
     ]
     cfg = _quarter_hour_cfg(test_asset_cfg)
-    _, rr1 = _run(data, signals, cfg, execution_timeframe="15m", risk_reward_ratio=1)
-    _, rr3 = _run(data, signals, cfg, execution_timeframe="15m", risk_reward_ratio=3)
+    _, rr1 = _run(data, signals, cfg, low_timeframe="15m", risk_reward_ratio=1)
+    _, rr3 = _run(data, signals, cfg, low_timeframe="15m", risk_reward_ratio=3)
     assert [(t["entry_i"], t["exit_i"]) for t in rr1] == [(1, 1), (6, 7)]
     assert [(t["entry_i"], t["exit_i"]) for t in rr3] == [(1, 4)]
 
