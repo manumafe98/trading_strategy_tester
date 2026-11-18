@@ -154,7 +154,7 @@ The input `df` is shared across timeframes; strategies **must not mutate** it. C
 LOW_TIMEFRAME = "5m"  # data loaded at 5m, signals generated per --high_timeframe
 ```
 
-`LOW_TIMEFRAME` is the default; `--low_timeframe 1m,5m` runs a declaring strategy on each listed low timeframe as its own variants. Each listed value must be a configured timeframe with `bars_per_year` for every asset, strictly smaller than each high timeframe, and divide it evenly. A strategy without `LOW_TIMEFRAME` rejects the flag. The results table shows `High TF` and `Low TF`, and variant labels, page titles and trade chart file names name both.
+`LOW_TIMEFRAME` is the default; `--low_timeframe 1m,5m` runs a declaring strategy on each listed low timeframe as its own variants. Each listed value, and the `LOW_TIMEFRAME` default, must be a configured timeframe with `bars_per_year` for every asset, no larger than each high timeframe, and divide it evenly. A low timeframe equal to the high timeframe is a single-timeframe run. A strategy without `LOW_TIMEFRAME` rejects the flag. The results table shows `High TF` and `Low TF`, and variant labels, page titles and trade chart file names name both.
 
 Strategies can add indicators to trade charts with an optional hook:
 

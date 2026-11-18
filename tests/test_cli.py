@@ -146,17 +146,31 @@ def test_main_maps_low_timeframe_to_config(monkeypatch):
     [
         (SimpleNamespace(), {"low_timeframe": "1h"}, "test does not declare LOW_TIMEFRAME"),
         (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "7m"}, "Unknown low timeframe 7m"),
-        (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "1h"}, "low timeframe 1h must be smaller than high timeframe 1h"),
-        (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "1d"}, "low timeframe 1d must be smaller than high timeframe 1h"),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"low_timeframe": "1d"},
+            "--low_timeframe: low timeframe 1d must not exceed high timeframe 1h",
+        ),
         (
             SimpleNamespace(LOW_TIMEFRAME="5m"),
             {"high_timeframe": "5m", "low_timeframe": "10m"},
-            "low timeframe 10m must be smaller than high timeframe 5m",
+            "--low_timeframe: low timeframe 10m must not exceed high timeframe 5m",
         ),
         (
             SimpleNamespace(LOW_TIMEFRAME="5m"),
             {"high_timeframe": "5m", "low_timeframe": "2m"},
-            "low timeframe 2m must divide high timeframe 5m evenly",
+            "--low_timeframe: low timeframe 2m must divide high timeframe 5m evenly",
+        ),
+        # The rule applies to the declared default as well, and the message names it.
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"high_timeframe": "2m"},
+            "test LOW_TIMEFRAME: low timeframe 5m must not exceed high timeframe 2m",
+        ),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="2m"),
+            {"high_timeframe": "5m"},
+            "test LOW_TIMEFRAME: low timeframe 2m must divide high timeframe 5m evenly",
         ),
         (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "15m"}, "Missing bars_per_year for TEST 15m"),
     ],
@@ -170,6 +184,24 @@ def test_run_rejects_invalid_low_timeframes_before_loading_data(monkeypatch, tes
 
     with pytest.raises(ValueError, match=message):
         cli.run(_config(**overrides))
+
+
+@pytest.mark.parametrize("overrides", [{"low_timeframe": "1h"}, {}])
+def test_low_timeframe_equal_to_the_high_timeframe_is_a_single_timeframe_run(monkeypatch, test_asset_cfg, overrides):
+    loaded = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(LOW_TIMEFRAME="1h", generate_signals=None))
+
+    def load_data(_asset, _cfg, timeframe, *_args):
+        loaded.append(timeframe)
+        raise RuntimeError("stop after validation")
+
+    monkeypatch.setattr(cli, "load_data", load_data)
+
+    with pytest.raises(RuntimeError, match="stop after validation"):
+        cli.run(_config(**overrides))
+
+    assert loaded == ["1h"]
 
 
 def test_timeframe_flag_is_rejected_with_a_message_naming_high_timeframe(capsys):

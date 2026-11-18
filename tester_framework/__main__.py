@@ -296,12 +296,13 @@ def run(config: RunConfig) -> None:
                 for asset in assets:
                     if low_timeframe not in asset_configs[asset].bars_per_year:
                         raise ValueError(f"Missing bars_per_year for {asset} {low_timeframe}")
-                if low_timeframe_flags:
-                    low, high = BAR_DURATIONS[low_timeframe], BAR_DURATIONS[timeframe]
-                    if low >= high:
-                        raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must be smaller than high timeframe {timeframe}")
-                    if high % low:
-                        raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
+                # An equal low timeframe is a single-timeframe run.
+                source = "--low_timeframe" if low_timeframe_flags else f"{strategy_name} LOW_TIMEFRAME"
+                low, high = BAR_DURATIONS[low_timeframe], BAR_DURATIONS[timeframe]
+                if low > high:
+                    raise ValueError(f"{source}: low timeframe {low_timeframe} must not exceed high timeframe {timeframe}")
+                if high % low:
+                    raise ValueError(f"{source}: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
                 strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
     batch_count = sum(len(strategy_params[name]) for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
     task_count = batch_count * len(variant_pairs)
