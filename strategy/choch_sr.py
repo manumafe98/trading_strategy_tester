@@ -2,8 +2,7 @@
 
 A setup is a touch on a support/resistance channel on the high timeframe followed by the first CHoCH the
 opposite way on the low timeframe: a support touch then a bullish CHoCH is a long, a resistance touch then
-a bearish CHoCH a short. Entries are close entries on the CHoCH bar, or with `entry_mode=break` stop entries
-one tick beyond the broken swing.
+a bearish CHoCH a short. Entries are close entries on the CHoCH bar.
 
 The strategy ignores positions: it never clears touches or waits after its own signals. Each signal carries
 `setup_time`, the latest contact bar of its touch, and the engine's setup-time rule discards retests that
@@ -224,14 +223,9 @@ def segment_signals(df, rule, tick_size, params):
 
     confirmation = "wick" if params["entry_mode"] == "break" else "close"
     structure = market_structure(df, params["swing_length"], confirmation)
-    bullish_choch = structure["bullish_choch"].to_numpy()
-    bearish_choch = structure["bearish_choch"].to_numpy()
-    if confirmation == "wick":
-        low_broken_first = structure["low_broken_first"].to_numpy()
-        broke_both = (structure["bullish_break_price"].notna() & structure["bearish_break_price"].notna()).to_numpy()
-        high_broken_first = broke_both & ~low_broken_first
-        bullish_choch = bullish_choch & ~low_broken_first
-        bearish_choch = bearish_choch & ~high_broken_first
+    choch_suffix = "_choch_at_open" if confirmation == "wick" else "_choch"
+    bullish_choch = structure[f"bullish{choch_suffix}"].to_numpy()
+    bearish_choch = structure[f"bearish{choch_suffix}"].to_numpy()
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)

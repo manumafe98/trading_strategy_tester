@@ -23,15 +23,13 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
     A swing is a `swing_length`-bar pivot and appears on its confirmation bar, `swing_length` bars after
     its own bar. Breaking a swing high is bullish, breaking a swing low bearish; `confirmation="close"`
     needs a close beyond the swing, `"wick"` the high or low. Each swing breaks at most once. On one bar
-    the high side is processed before the low side, as in the Pine, except that with `"wick"` the low side
-    comes first when the open is below the swing low, or not above the swing high and strictly nearer the low.
+    the high side is processed before the low side, as in the Pine.
 
     Returned columns, indexed like `df` (`*_time` columns are bar times, NaT when absent):
     - `swing_high_price/label/time`, `swing_low_price/label/time`: a swing confirmed on this bar, its
       label (HH/LH, HL/LL) and its own bar.
     - `bullish_break_price/swing_time`, `bearish_break_price/swing_time`: the swing broken on this bar
-      and its own bar; `bullish_choch`, `bearish_choch`: whether that break is a CHoCH;
-      `low_broken_first`: whether a bar breaking both swings broke the low first.
+      and its own bar; `bullish_choch`, `bearish_choch`: whether that break is a CHoCH.
     - `last_hh_price/time`, `last_ll_price/time`: the last marked HH/LL and the bar that confirmed it.
     - `last_swing_high_price/time`, `last_swing_low_price/time`: the most recent confirmed swing of
       any label and its own bar, kept after it breaks.
@@ -71,7 +69,8 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
         "bearish_break_price": prices(),
         "bearish_break_swing_time": bar_positions(),
         "bearish_choch": np.zeros(n, dtype=bool),
-        "low_broken_first": np.zeros(n, dtype=bool),
+        "bullish_choch_at_open": np.zeros(n, dtype=bool),
+        "bearish_choch_at_open": np.zeros(n, dtype=bool),
         "last_hh_price": prices(),
         "last_hh_time": bar_positions(),
         "last_ll_price": prices(),
@@ -125,7 +124,8 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
         path_reaches_low_first = by_wick and (
             opens[i] < previous_low or (opens[i] <= previous_high and opens[i] - lows[i] < highs[i] - opens[i])
         )
-        out["low_broken_first"][i] = high_broken and low_broken and path_reaches_low_first
+        out["bullish_choch_at_open"][i] = high_broken and previous_break_direction == -1
+        out["bearish_choch_at_open"][i] = low_broken and previous_break_direction == 1
         for direction in (-1, 1) if path_reaches_low_first else (1, -1):
             if direction == 1 and high_broken:
                 out["bullish_choch"][i] = previous_break_direction == -1

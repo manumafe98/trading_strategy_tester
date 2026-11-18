@@ -161,14 +161,14 @@ def _choch_bar_breaking_both_swings(opened, high=100.56):
     ("opened", "high", "reflect", "sides"),
     [
         (100.45, 100.56, False, ["long"]),
-        (100.20, 100.56, False, []),
+        (100.20, 100.56, False, ["long"]),
         (100.60, 101.50, False, ["long"]),
         (100.45, 100.56, True, ["short"]),
-        (100.20, 100.56, True, []),
+        (100.20, 100.56, True, ["short"]),
         (100.60, 101.50, True, ["short"]),
     ],
 )
-def test_double_wick_break_fills_only_the_level_the_path_reaches_first(opened, high, reflect, sides):
+def test_double_wick_break_fills_the_choch_that_rested_before_the_bar_opened(opened, high, reflect, sides):
     df = _choch_bar_breaking_both_swings(opened, high)
     params = {**choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "entry_mode": "break"}
 
@@ -177,8 +177,48 @@ def test_double_wick_break_fills_only_the_level_the_path_reaches_first(opened, h
     assert list(signals["side"]) == sides
 
 
-def test_double_wick_break_opening_nearer_the_low_breaks_the_low_first_as_a_bos():
-    choch_bar = market_structure(_choch_bar_breaking_both_swings(100.20), 2, "wick").iloc[-1]
+@pytest.mark.parametrize("reflect", [False, True])
+def test_double_wick_break_records_both_breaks_in_path_order(reflect):
+    df = _choch_bar_breaking_both_swings(100.20)
+    choch_bar = market_structure(mirror(df) if reflect else df, 2, "wick").iloc[-1]
+    first, second = ("bullish", "bearish") if reflect else ("bearish", "bullish")
 
-    assert (choch_bar["bearish_break_price"], choch_bar["bearish_choch"]) == (100.13, False)
-    assert (choch_bar["bullish_break_price"], choch_bar["bullish_choch"]) == (100.52, True)
+    assert (choch_bar[f"{first}_choch"], choch_bar[f"{first}_choch_at_open"]) == (False, False)
+    assert (choch_bar[f"{second}_choch"], choch_bar[f"{second}_choch_at_open"]) == (True, True)
+
+
+@pytest.mark.parametrize("reflect", [False, True])
+@pytest.mark.parametrize(("opened", "high"), [(100.45, 100.56), (100.60, 101.50)])
+def test_a_break_that_becomes_a_choch_only_inside_the_bar_is_not_a_choch_at_open(opened, high, reflect):
+    df = _choch_bar_breaking_both_swings(opened, high)
+    choch_bar = market_structure(mirror(df) if reflect else df, 2, "wick").iloc[-1]
+    first, second = ("bearish", "bullish") if reflect else ("bullish", "bearish")
+
+    assert (choch_bar[f"{first}_choch"], choch_bar[f"{first}_choch_at_open"]) == (True, True)
+    assert (choch_bar[f"{second}_choch"], choch_bar[f"{second}_choch_at_open"]) == (True, False)
+
+
+def _in_bar_choch_after_a_bullish_break():
+    df = long_setup().iloc[:-1]
+    rows = [
+        [100.40, 100.60, 100.38, 100.55, 1.0],
+        [100.55, 100.70, 100.60, 100.65, 1.0],
+        [100.65, 100.66, 100.55, 100.60, 1.0],
+        [100.60, 100.62, 100.52, 100.58, 1.0],
+        [100.20, 100.75, 100.10, 100.40, 1.0],
+    ]
+    times = pd.date_range(df.index[-1] + pd.Timedelta(minutes=1), periods=len(rows), freq="1min")
+    return pd.concat([df, pd.DataFrame(rows, columns=df.columns, index=times)])
+
+
+@pytest.mark.parametrize(("reflect", "side"), [(False, "long"), (True, "short")])
+def test_a_choch_made_by_an_earlier_break_inside_the_same_bar_never_fills(reflect, side):
+    df = _in_bar_choch_after_a_bullish_break()
+    params = {
+        **choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "entry_mode": "break", "stop_max": 1.0,
+    }
+
+    signals = choch_sr.generate_signals(mirror(df) if reflect else df, asset="TEST", timeframe="5m", params=params)
+
+    assert list(signals["time"]) == [pd.Timestamp("2025-01-06 04:35")]
+    assert list(signals["side"]) == [side]
