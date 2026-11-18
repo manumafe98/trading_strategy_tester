@@ -6,7 +6,7 @@ import pytest
 from strategy import choch_sr
 from strategy.choch_sr import generate_signals
 from strategy.utils.market_structure import market_structure
-from tests.choch_sr_bars import long_setup, mirror, repeated_setup, role_flip_setup, shifted_trigger
+from tests.choch_sr_bars import long_setup, mirror, repeated_setup, role_flip_setup, shifted_trigger, two_channel_setup
 from tester_framework.sessions import parse_sessions
 from tester_framework.strategy_loader import load_strategy
 
@@ -100,6 +100,17 @@ def test_signals_keep_coming_after_an_earlier_signal():
     second = signals.iloc[1]
     assert second["touch_time"] == at("04:32")  # the first touch was never cleared
     assert second["setup_time"] == at("05:54")  # its latest contact is the retest
+
+
+def test_choch_uses_the_matching_touch_with_the_latest_contact():
+    signals = run(two_channel_setup())
+
+    assert list(signals["time"]) == [at("08:15"), at("09:37")]
+    second = signals.iloc[1]
+    # The lower channel's touch from 08:12 is still pending, but the dip into the upper channel is fresher.
+    assert (second["zone_top"], second["zone_bottom"]) == (101.7, 101.5)
+    assert second["touch_time"] == at("09:34")
+    assert second["setup_time"] == at("09:34")
 
 
 def test_session_window_does_not_gate_channels_or_touches():

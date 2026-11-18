@@ -21,6 +21,18 @@ WARM_UP_MIDS = (
     + [100.3 + (103 - 100.3) * step / 11 for step in range(11)]
     + [103.0] * 8
 )
+
+
+
+def leg(start: float, end: float) -> list[float]:
+    return [start + (end - start) * step / 11 for step in range(11)]
+
+
+# Adds 5-minute pivot lows at 101.5 and 101.7 between the others: a second support channel [101.5, 101.7].
+TWO_CHANNEL_MIDS = (
+    leg(104, 100.1) + leg(100.1, 104) + leg(104, 101.6) + leg(101.6, 104)
+    + leg(104, 100.3) + leg(100.3, 104) + leg(104, 101.8) + leg(101.8, 103) + [103.0] * 8
+)
 WARM_UP_SPREAD = 0.1
 TRIGGER_SPREAD = 0.02
 # One-minute closes from the flat 103 into the channel and back above the last swing high (100.52).
@@ -40,9 +52,9 @@ def bars(closes: list[float], spread: float, start: pd.Timestamp) -> pd.DataFram
     )
 
 
-def warm_up() -> pd.DataFrame:
+def warm_up(mids: list[float] = WARM_UP_MIDS) -> pd.DataFrame:
     """Each 5-minute bar as five equal one-minute bars, so it resamples to itself."""
-    closes = [round(mid, 4) for mid in WARM_UP_MIDS for _ in range(HIGH_BAR_MINUTES)]
+    closes = [round(mid, 4) for mid in mids for _ in range(HIGH_BAR_MINUTES)]
     return bars(closes, WARM_UP_SPREAD, START)
 
 
@@ -81,12 +93,23 @@ def shifted_trigger(choch_low: float | None = None) -> pd.DataFrame:
 def role_flip_setup(flip_close: float) -> pd.DataFrame:
     """After the touch the 04:35 five-minute bar closes at `flip_close`, then a bullish CHoCH at 04:41.
 
-    Below 100.0 the channel's role flips to resistance; inside the channel its role is neither.
+    Below 100.0 the channel's role flips to resistance; inside the channel it is an in-price channel.
     """
     return append(long_setup().iloc[:-1], [100.25, 100.2, 100.1, 100.0, flip_close, 100.3, 100.55])
 
 
+RECOVERY_CLOSES = [100.8, 101.2, 101.6, 102.0, 102.4, 102.8] + [103.0] * 60
+
+
 def repeated_setup() -> pd.DataFrame:
     """The long setup, a recovery to 103 for an hour, then the same trigger again."""
-    recovery = [100.8, 101.2, 101.6, 102.0, 102.4, 102.8] + [103.0] * 60
-    return append(long_setup(), recovery + TRIGGER_CLOSES)
+    return append(long_setup(), RECOVERY_CLOSES + TRIGGER_CLOSES)
+
+
+def two_channel_setup() -> pd.DataFrame:
+    """Two support channels: a long off the lower one, then a dip into the upper one only and a CHoCH.
+
+    The second trigger is the first lifted by 1.5 from its sixth bar, so its dip bottoms at 101.63.
+    """
+    upper_trigger = TRIGGER_CLOSES[:5] + [round(close + 1.5, 4) for close in TRIGGER_CLOSES[5:]]
+    return append(append(warm_up(TWO_CHANNEL_MIDS), TRIGGER_CLOSES), RECOVERY_CLOSES + upper_trigger)

@@ -182,8 +182,11 @@ def generate_signals(df, asset, timeframe, params):
         for is_choch, role, side in ((bullish_choch, SUPPORT, "long"), (bearish_choch, RESISTANCE, "short")):
             if not is_choch[bar]:
                 continue
-            touch = next((t for t in touches if t.role == role and t.first_bar < bar), None)
-            if touch is not None:
+            # Any channel with the matching role counts. Touches are never cleared, so the Pine's first pending
+            # touch could be a stale one; the latest contact is the one the setup-time rule can accept.
+            usable = [t for t in touches if t.role == role and t.first_bar < bar]
+            if usable:
+                touch = max(usable, key=lambda t: t.latest_bar)
                 row = setup_row(structure, bar, side, touch, closes[bar], reference_close, times, params)
                 if row is not None:
                     rows.append(row)
