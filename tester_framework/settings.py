@@ -14,6 +14,7 @@ SPLIT_COLUMNS = ("OOS Trades", *OOS_FINANCIAL_COLUMNS, "IS Rank", "OOS Rank", "W
 COST_PAIR_COLUMNS = ("W", "BE", "L", "Win Rate", "Expectancy R", *FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS, "WFE")
 DEFAULT_SELECT_BY = "return_dd"
 DEFAULT_SELECT_TOP = 5
+DEFAULT_MAX_VARIANTS = 2000
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config"
 RESULTS_DIR = ROOT / "results"
@@ -78,6 +79,7 @@ def load_assets() -> dict[str, AssetConfig]:
 
 __all__ = [
     "CONFIG_DIR",
+    "DEFAULT_MAX_VARIANTS",
     "DEFAULT_SELECT_BY",
     "DEFAULT_SELECT_TOP",
     "DEFAULT_TIMEFRAMES",

@@ -193,15 +193,20 @@ def validate_params(params):  # optional
 
 Defaults must be int, float, bool, str or `None`, and `PARAM_TYPES` types one of int, float, bool or str. The names the engine puts in `params` are reserved: `tick_size`, `pip_size`, `session`, `trade` and the `calculate_metrics` keys `risk_reward_ratio`, `exit_mode`, `operation`, `risk_pct`, `capital`, `with_costs`, `time_period` and `data_source`. Declaring one fails when the strategy loads.
 
-`--strategy_params` overrides one value per parameter, as `;`-separated `name=value` items:
+`--strategy_params` sets parameter values as `;`-separated `name=value` items. A `,`-separated list runs every value:
 
 ```bash
 "$PY" -m tester_framework --strategies my_strategy --strategy_params "swing_length=10;entry_mode=break;max_touch_minutes=none"
+"$PY" -m tester_framework --strategies my_strategy --strategy_params "swing_length=10,20;max_touch_minutes=15,30"
 ```
 
-Values are parsed to the default's type: whole numbers for int, finite numbers for float, `true`/`false` for bool, and text for str. `none` is accepted only for a `None` default. With a `PARAM_TYPES` entry, any other value must parse to that type; without one, it stays text. String values must not contain `,` or `;`. An undeclared name, a value that does not parse, a name given twice, or a name some strategy in `--strategies` does not declare fails before data loads. `validate_params` then receives every declared parameter, defaults filled in, also when the flag is omitted; a `ValueError` it raises is reported with the strategy name before data loads.
+Each combination of the listed values, the cartesian product in the order the names were given, is a separate set of variants; the second command runs four. A value listed twice runs once. Signals are generated once per combination and shared across its RR and exit-mode variants.
 
-`params` in `generate_signals`, `plot_indicators` and `calculate_metrics` holds every declared parameter with defaults filled in. Each variant page lists every parameter value, and the progress display's variant labels show the values that differ from their defaults. A strategy without `PARAMS` behaves as before.
+Values are parsed to the default's type: whole numbers for int, finite numbers for float, `true`/`false` for bool, and text for str. `none` is accepted only for a `None` default. With a `PARAM_TYPES` entry, any other value must parse to that type; without one, it stays text. String values must not contain `,` or `;`. An undeclared name, a value that does not parse, a name given twice, or a name some strategy in `--strategies` does not declare fails before data loads. `validate_params` then receives every declared parameter of each combination, defaults filled in, also when the flag is omitted; a `ValueError` it raises is reported with the strategy name before data loads.
+
+The run prints its variant count, RR and exit modes included, to stderr before data loads, and refuses more than 2,000 variants unless `--max_variants N` raises the cap.
+
+`params` in `generate_signals`, `plot_indicators` and `calculate_metrics` holds every declared parameter with defaults filled in. Each variant page lists every parameter value. The results table's Params column and the progress display's variant labels show the values that differ from their defaults; the column is hidden when no variant has one. In split mode, parameter combinations are ranked with the other variants of their strategy and asset. A strategy without `PARAMS` behaves as before.
 
 ## ORB Strategies
 

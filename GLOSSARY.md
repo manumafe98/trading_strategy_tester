@@ -118,7 +118,7 @@ A signal that never became a trade, because of an invalid stop or entry, R below
 _Avoid_: skipped signal, rejected signal
 
 **Variant**:
-One combination of strategy, asset, high timeframe, low timeframe, RR, exit mode, and session window, backtested independently.
+One combination of strategy, asset, high timeframe, low timeframe, RR, exit mode, session window, and strategy parameter values, backtested independently.
 _Avoid_: run, scenario
 
 **Strategy parameter**:
