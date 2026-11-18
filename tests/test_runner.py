@@ -86,6 +86,21 @@ def test_trade_html_limit_charts_first_trades_and_keeps_all_trades(monkeypatch, 
     assert len(list(trades_dir.glob("*.html"))) == 2
 
 
+def test_variant_row_and_trade_chart_name_both_timeframes(monkeypatch, tmp_path, test_asset_cfg):
+    trades_dir = tmp_path / "trades"
+    monkeypatch.setattr(reports, "TRADES_DIR", trades_dir)
+    data = _target_bars([100.0, 102.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    (row,) = runner.run_variants(_task(data, tmp_path, test_asset_cfg, low_timeframe="1d", trade_html=None))
+
+    assert (row["High TF"], row["Low TF"]) == ("1h", "1d")
+    (chart,) = trades_dir.glob("*.html")
+    assert chart.name.startswith("ema50_TEST_1h_1d_1rr_fixed_")
+    assert "ema50 TEST 1h 1d long fixed" in chart.read_text(encoding="utf-8")
+
+
 def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
     generated = []
     monkeypatch.setattr(

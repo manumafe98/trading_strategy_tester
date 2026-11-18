@@ -78,6 +78,7 @@ def _run_variant(
     charted = 0
     try:
         for chart_number, trade in enumerate(trades, 1):
+            trade["low_timeframe"] = task["low_timeframe"]
             if session:
                 trade["session"] = session
             if task["trade_html"] is None or chart_number <= task["trade_html"]:
@@ -101,6 +102,7 @@ def _run_variant(
         if task["oos_cutoff"] is not None:
             for column, source in OOS_FINANCIAL_COLUMNS.items():
                 row[column] = (metrics["OOS Gross"][source], metrics["OOS Net"][source])
+    row["Low TF"] = task["low_timeframe"]
     row["RR"] = f"{risk_reward_ratio:g}"
     row["Exit Mode"] = exit_mode
     if session:
@@ -117,7 +119,7 @@ def _run_variant(
 def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
     values = index_values = data = signals = None
     session = session_label(task["session"])
-    batch_parts = [task["strategy"], task["asset"], task["timeframe"]]
+    batch_parts = [task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"]]
     if session:
         batch_parts.append(session)
     batch_label = " ".join(batch_parts)
