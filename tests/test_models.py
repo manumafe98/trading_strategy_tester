@@ -49,3 +49,10 @@ def test_asset_config_rejects_invalid_annualization():
 def test_asset_config_rejects_invalid_min_risk_ticks(value):
     with pytest.raises(ValueError, match="min_risk_ticks"):
         replace(config(), min_risk_ticks=value)
+
+
+def test_asset_config_pip_size_defaults_to_tick_size():
+    assert config().pip_size == 0.1
+    assert replace(config(), pip_size=0.0001).pip_size == 0.0001
+    with pytest.raises(ValueError):
+        replace(config(), pip_size=0)

@@ -21,10 +21,10 @@ PEEK_BARS = 60
 STOP_TICKS = 10
 RR = 2.0
 RANDOM_ENTRY_SEEDS = (1, 2, 3, 4, 5)
-# The only signal timeframes a strategy may refuse, with the error it must raise; any other error fails the test.
+# The only high timeframes a strategy may refuse, with the error it must raise; any other error fails the test.
 UNSUPPORTED_SIGNAL_TIMEFRAMES = {
     (name, "1d"): "ORB strategies support intraday timeframes only" for name in ("orb_candle", "orb_combined", "orb_fvg")
-}
+} | {("choch_sr", "1d"): "choch_sr supports intraday high timeframes only"}
 SANITY_ASSET = AssetConfig(
     ticker="TEST",
     point_value=1.0,
@@ -61,9 +61,14 @@ def random_walk(bars: int, bar_size: str, seed: int = 0) -> pd.DataFrame:
 
 
 def strategy_params(strategy) -> dict:
-    """The params the runner passes, with the ny session window for strategies that require --sessions."""
+    """The params the runner passes: declared defaults, ticks, and the ny session window for strategies that require --sessions."""
     needs_session = "sessions" in getattr(strategy, "REQUIRED_FLAGS", {})
-    return {"tick_size": TICK, "session": parse_sessions("ny")[0] if needs_session else None}
+    return {
+        **getattr(strategy, "PARAMS", {}),
+        "tick_size": TICK,
+        "pip_size": TICK,
+        "session": parse_sessions("ny")[0] if needs_session else None,
+    }
 
 
 def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, params: dict, seed: int = 0) -> None:
@@ -72,7 +77,7 @@ def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, para
     Cuts land on CUTS random bars and on CUTS random signal bars, where a one-bar peek shows.
     """
     full = generate_signals(df, "TEST", timeframe, params).reset_index(drop=True)
-    assert not full.empty, f"No signals on the synthetic series for signal timeframe {timeframe}; the check would be vacuous"
+    assert not full.empty, f"No signals on the synthetic series for high timeframe {timeframe}; the check would be vacuous"
     signal_bars = np.unique(df.index.searchsorted(pd.to_datetime(full["time"])))
     signal_bars = signal_bars[signal_bars < len(df) - 1]
     rng = np.random.default_rng(seed)
@@ -82,7 +87,7 @@ def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, para
         cut_time = df.index[cut]
         expected = full[pd.to_datetime(full["time"]) <= cut_time].reset_index(drop=True)
         actual = generate_signals(df.iloc[: cut + 1], "TEST", timeframe, params).reset_index(drop=True)
-        pd.testing.assert_frame_equal(actual, expected, obj=f"signals cut at {cut_time} (signal timeframe {timeframe})")
+        pd.testing.assert_frame_equal(actual, expected, obj=f"signals cut at {cut_time} (high timeframe {timeframe})")
 
 
 def peek_signals(df, asset, timeframe, params):
@@ -102,9 +107,9 @@ def test_every_strategy_module_is_covered():
 def test_strategy_signals_do_not_look_ahead(name):
     strategy = load_strategy(name)
     params = strategy_params(strategy)
-    execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
+    low_timeframe = getattr(strategy, "LOW_TIMEFRAME", None)
     for timeframe in TIMEFRAMES:
-        df = random_walk(20_000, BAR_SIZES[execution_timeframe or timeframe])
+        df = random_walk(20_000, BAR_SIZES[low_timeframe or timeframe])
         if (name, timeframe) in UNSUPPORTED_SIGNAL_TIMEFRAMES:
             with pytest.raises(ValueError, match=UNSUPPORTED_SIGNAL_TIMEFRAMES[name, timeframe]):
                 strategy.generate_signals(df, "TEST", timeframe, params)

@@ -14,6 +14,7 @@ SPLIT_COLUMNS = ("OOS Trades", *OOS_FINANCIAL_COLUMNS, "IS Rank", "OOS Rank", "W
 COST_PAIR_COLUMNS = ("W", "BE", "L", "Win Rate", "Expectancy R", *FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS, "WFE")
 DEFAULT_SELECT_BY = "return_dd"
 DEFAULT_SELECT_TOP = 5
+DEFAULT_MAX_VARIANTS = 2000
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG_DIR = ROOT / "config"
 RESULTS_DIR = ROOT / "results"
@@ -40,7 +41,7 @@ def load_assets() -> dict[str, AssetConfig]:
     if not isinstance(raw_assets, dict):
         raise ValueError(f"{path} must contain an object of asset configurations")
     assets = {}
-    required = set(AssetConfig.__dataclass_fields__)
+    required = set(AssetConfig.__dataclass_fields__) - {"pip_size"}
     for name, raw in raw_assets.items():
         if not isinstance(raw, dict):
             raise ValueError(f"{name} asset config must be an object")
@@ -69,6 +70,7 @@ def load_assets() -> dict[str, AssetConfig]:
                 session_timezone=str(raw["session_timezone"]),
                 session_start=str(raw["session_start"]),
                 bars_per_year={str(tf): value for tf, value in raw_bars.items()},
+                pip_size=float(raw["pip_size"]) if "pip_size" in raw else None,
             )
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{name} invalid asset config: {exc}") from exc
@@ -77,6 +79,7 @@ def load_assets() -> dict[str, AssetConfig]:
 
 __all__ = [
     "CONFIG_DIR",
+    "DEFAULT_MAX_VARIANTS",
     "DEFAULT_SELECT_BY",
     "DEFAULT_SELECT_TOP",
     "DEFAULT_TIMEFRAMES",

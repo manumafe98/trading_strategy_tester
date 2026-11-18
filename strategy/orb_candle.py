@@ -11,7 +11,7 @@ from strategy.utils.orb import (
 )
 
 
-EXECUTION_TIMEFRAME = "1m"
+LOW_TIMEFRAME = "1m"
 OUTPUT_COLUMNS = ["time", "side", "stop", "entry", "reason", "plot_start_time", "orb_high", "orb_low"]
 REQUIRED_FLAGS = {"sessions": REQUIRED_SESSION_MESSAGE}
 

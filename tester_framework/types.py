@@ -13,7 +13,7 @@ class VariantBatchTask(TypedDict):
     asset: str
     asset_cfg: AssetConfig
     timeframe: str
-    execution_timeframe: str
+    low_timeframe: str
     operation: str
     risk_pct: float
     capital: float
@@ -29,3 +29,5 @@ class VariantBatchTask(TypedDict):
     oos_cutoff: int | None
     target_fill: TargetFill
     intrabar: IntrabarRule
+    strategy_params: dict[str, object]
+    params_label: str

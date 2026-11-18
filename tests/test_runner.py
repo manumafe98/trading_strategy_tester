@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "asset": "TEST",
         "asset_cfg": asset_cfg,
         "timeframe": "1h",
-        "execution_timeframe": "1h",
+        "low_timeframe": "1h",
         "operation": "all",
         "risk_pct": 1,
         "capital": 10_000,
@@ -39,6 +40,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "oos_cutoff": None,
         "target_fill": "tick_through",
         "intrabar": "path",
+        "strategy_params": {}, "params_label": "",
     }
     task.update(overrides)
     return task
@@ -83,6 +85,35 @@ def test_trade_html_limit_charts_first_trades_and_keeps_all_trades(monkeypatch, 
     assert row["Trades"] == 3
     assert [trade["chart_path"] is not None for trade in trades] == [True, True, False]
     assert len(list(trades_dir.glob("*.html"))) == 2
+
+
+def test_variant_row_and_trade_chart_name_both_timeframes(monkeypatch, tmp_path, test_asset_cfg):
+    trades_dir = tmp_path / "trades"
+    monkeypatch.setattr(reports, "TRADES_DIR", trades_dir)
+    data = _target_bars([100.0, 102.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    (row,) = runner.run_variants(_task(data, tmp_path, test_asset_cfg, low_timeframe="1d", trade_html=None))
+
+    assert (row["High TF"], row["Low TF"]) == ("1h", "1d")
+    (chart,) = trades_dir.glob("*.html")
+    assert chart.name.startswith("ema50_TEST_1h_1d_1rr_fixed_")
+    assert "ema50 TEST 1h 1d long fixed" in chart.read_text(encoding="utf-8")
+
+
+def test_trade_chart_names_the_changed_parameters(monkeypatch, tmp_path, test_asset_cfg):
+    trades_dir = tmp_path / "trades"
+    monkeypatch.setattr(reports, "TRADES_DIR", trades_dir)
+    data = _target_bars([100.0, 102.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    runner.run_variants(_task(data, tmp_path, test_asset_cfg, params_label="swing_length=10", trade_html=None))
+
+    (chart,) = trades_dir.glob("*.html")
+    assert chart.name.startswith("ema50_TEST_1h_1h_swing_length_10_1rr_fixed_")
+    assert "ema50 TEST 1h 1h swing_length=10 long fixed" in chart.read_text(encoding="utf-8")
 
 
 def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
@@ -301,7 +332,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "asset": "TEST",
                 "asset_cfg": asset_cfg,
                 "timeframe": "1h",
-                "execution_timeframe": "1h",
+                "low_timeframe": "1h",
                 "operation": "all",
                 "risk_pct": 1,
                 "capital": 10_000,
@@ -317,6 +348,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "oos_cutoff": None,
                 "target_fill": "tick_through",
                 "intrabar": "path",
+                "strategy_params": {}, "params_label": "",
             }
 
             rows = runner.run_variants(task)
@@ -350,3 +382,25 @@ def test_run_variants_closes_trades_at_roll_on_cached_contract_data(monkeypatch,
 
     (trade,) = decode_analytics(row["_analytics"])["trades"]
     assert (trade["exit_reason"], trade["exit_time"]) == ("roll", pd.Timestamp("2025-01-02 10:00"))
+
+
+def test_strategy_hooks_receive_the_asset_pip_size(monkeypatch, tmp_path, base_data, test_asset_cfg):
+    received = []
+
+    def generate_signals(data, asset, timeframe, params):
+        received.append(params["pip_size"])
+        return pd.DataFrame()
+
+    def calculate_metrics(data, signals, trades, asset, timeframe, params):
+        received.append(params["pip_size"])
+        return {}
+
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(generate_signals=generate_signals, calculate_metrics=calculate_metrics),
+    )
+
+    runner.run_variants(_task(base_data, tmp_path, replace(test_asset_cfg, pip_size=0.5)))
+
+    assert received == [0.5, 0.5]

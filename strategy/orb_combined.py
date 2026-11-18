@@ -4,6 +4,7 @@ import pandas as pd
 
 from strategy.utils.fvg import find_qualifying_fvg, track_fvgs_to_bar
 from strategy.utils.orb import (
+    bars_after,
     decimal_places,
     find_breakouts,
     OPENING_RANGE_PLOT_KEYS,
@@ -14,7 +15,7 @@ from strategy.utils.orb import (
 )
 
 
-EXECUTION_TIMEFRAME = "1m"
+LOW_TIMEFRAME = "1m"
 FVG_BOX_BARS = 22
 EXT_LINE_BARS = 22
 REQUIRED_FLAGS = {"sessions": REQUIRED_SESSION_MESSAGE}
@@ -89,7 +90,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
     line_color = "green" if is_bull else "red"
 
     form_time = pd.Timestamp(trade["fvg_form_time"])
-    box_end = form_time + pd.Timedelta(minutes=FVG_BOX_BARS)
+    box_end = bars_after(form_time, FVG_BOX_BARS, trade)
     fig.add_shape(
         type="rect",
         x0=form_time,
@@ -102,7 +103,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
     )
 
     ext_time = pd.Timestamp(trade["fvg_ext_time"])
-    ext_end = ext_time + pd.Timedelta(minutes=EXT_LINE_BARS)
+    ext_end = bars_after(ext_time, EXT_LINE_BARS, trade)
     fig.add_shape(
         type="line",
         x0=ext_time,

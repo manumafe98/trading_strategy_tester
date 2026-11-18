@@ -18,7 +18,8 @@ from .settings import (
     COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
 from .split import SELECT_BY, Split, entered_in_sample, selection_tags, split_tags
-from .utils import clean_exit_name, net_value
+from .strategy_params import format_param_value
+from .utils import clean_exit_name, net_value, variant_count, variant_parts
 
 
 MetricValue: TypeAlias = float | int | tuple[float | int, ...] | list[float | int] | str
@@ -30,14 +31,16 @@ SORTABLE_COLUMNS = (*FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS)
 FILTER_SPECS = (
     ("strategy", "Strategy", "Strategy"),
     ("asset", "Asset", "Asset"),
-    ("timeframe", "Timeframe", "TF"),
+    ("high-timeframe", "High TF", "High TF"),
+    ("low-timeframe", "Low TF", "Low TF"),
     ("session", "Session", "Session"),
     ("rr", "RR", "RR"),
     ("exit-mode", "Exit Mode", "Exit Mode"),
     ("risk", "Risk", "_risk_pct"),
 )
 FILTER_ORDERS = {
-    "timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
+    "high-timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
+    "low-timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
     "session": {value: index for index, value in enumerate(("asia", "london", "ny"))},
     "exit-mode": {value: index for index, value in enumerate(("fixed", "trailing", "partial"))},
 }
@@ -60,7 +63,7 @@ def reset_output_dirs() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
-def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType) -> Path | None:
+def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType, strategy_params: dict) -> Path | None:
     # Keep plotly lazy so tests avoid chart dependencies.
     import plotly.graph_objects as go
 
@@ -92,7 +95,7 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
             view=view,
             asset=trade["asset"],
             timeframe=trade["timeframe"],
-            params={"trade": trade, "tick_size": trade["tick_size"]},
+            params={**strategy_params, "trade": trade, "tick_size": trade["tick_size"]},
         )
     color = "green" if trade["side"] == Side.LONG else "red"
     fig.add_trace(go.Scatter(x=[trade["entry_time"]], y=[trade["entry"]], mode="markers", name="entry", marker={"color": color, "size": 10}))
@@ -103,20 +106,16 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     for target in trade["targets"]:
         fig.add_hline(y=target["price"], line_dash="dot", line_color="green", annotation_text=f'{target["r"]:g}R target')
-    title = f"{trade['strategy']} {trade['asset']} {trade['timeframe']}"
-    if trade.get("session"):
-        title = f"{title} {trade['session']}"
-    title = f"{title} {trade['side']} {trade['exit_mode']}"
+    labels = (trade["strategy"], trade["asset"], trade["timeframe"], trade["low_timeframe"])
+    params_label = trade.get("params_label", "")
+    title = " ".join([*variant_parts(*labels, trade.get("session"), params_label), str(trade["side"]), trade["exit_mode"]])
     fig.update_layout(title=title, xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
     session = clean_exit_name(str(trade["session"])) if trade.get("session") else None
-    parts = [trade["strategy"], trade["asset"], trade["timeframe"]]
-    if session:
-        parts.append(session)
-    parts.extend([rr, trade["exit_mode"], stamp, str(trade["side"])])
-    base = "_".join(parts)
+    params = clean_exit_name(params_label)
+    base = "_".join([*variant_parts(*labels, session, params), rr, trade["exit_mode"], stamp, str(trade["side"])])
     path = TRADES_DIR / f"{base}.html"
     n = 2
     while path.exists():
@@ -293,6 +292,10 @@ def _variant_sections(row: pd.Series, analytics: dict) -> str:
     custom_metrics = row.get("_strategy_metrics", {})
     if custom_metrics:
         sections.append(f'<section><h2>Strategy metrics</h2>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
+    strategy_params = row.get("_strategy_params", {})
+    if strategy_params:
+        param_rows = [[name, format_param_value(value)] for name, value in strategy_params.items()]
+        sections.append(f'<section><h2>Strategy parameters</h2>{_detail_table(["Parameter", "Value"], param_rows)}</section>')
     return "".join(sections)
 
 
@@ -328,7 +331,7 @@ def _write_variant_pages(
     overall = analytics["outcomes"][0]
     session = row.get("Session")
     session_text = f' {session}' if pd.notna(session) else ""
-    title = f'{row["Strategy"]} {row["Asset"]} {row["TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
+    title = f'{row["Strategy"]} {row["Asset"]} {row["High TF"]} {row["Low TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     trades = analytics["trades"]
     # Rows carry their asset's cutoff only in split mode.
@@ -426,7 +429,9 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td class="c"><span class="strategy-badge">{html_escape(str(value))}</span></td>'
     if col == "Asset":
         return f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(value))}</span></div></td>'
-    if col == "TF":
+    if col == "Params" and not value:
+        return '<td class="c"></td>'
+    if col in {"High TF", "Low TF"}:
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
     sort_attr = ""
     if col in SORTABLE_COLUMNS:
@@ -450,7 +455,7 @@ def write_results_html(
 ) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
-    shown = ("Strategy", "Asset", "TF", "Session", "RR", "Exit Mode", *FINANCIAL_COLUMNS, *SPLIT_COLUMNS)
+    shown = ("Strategy", "Asset", "High TF", "Low TF", "Session", "Params", "RR", "Exit Mode", *FINANCIAL_COLUMNS, *SPLIT_COLUMNS)
     columns = [column for column in shown if column in columns]
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -513,7 +518,7 @@ def write_results_html(
             for tag in (
                 f"ranked by in-sample {SELECT_BY[config.select_by]}",
                 f"top {config.select_top} selected per strategy and asset",
-                f"{len(table)} variants",
+                variant_count(len(table)),
             )
         )
         tags.extend(f'<span class="tag">{html_escape(tag)}</span>' for tag in selection_tags(table))

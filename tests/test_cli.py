@@ -52,6 +52,12 @@ def test_status_lines():
     ]
 
 
+def test_variant_label_names_both_timeframes():
+    task = {"strategy": "orb_candle", "asset": "MGC", "timeframe": "15m", "low_timeframe": "5m", "session": None, "params_label": "", "variants": ((1, "fixed"),)}
+
+    assert cli.variant_label(task) == "orb_candle MGC 15m 5m 1 variant"
+
+
 def test_main_maps_new_cli_flags(monkeypatch):
     configs = []
     monkeypatch.setattr(
@@ -116,6 +122,95 @@ def test_trade_html_rejects_negative_count():
         cli.parser().parse_args(["--trade_html", "-1"])
 
 
+def test_main_maps_high_timeframe_to_config(monkeypatch):
+    configs = []
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--high_timeframe", "15m,1h"])
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert configs[0].high_timeframe == "15m,1h"
+
+
+def test_main_maps_low_timeframe_to_config(monkeypatch):
+    configs = []
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "orb_candle", "--low_timeframe", "1m,5m"])
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert configs[0].low_timeframe == "1m,5m"
+    assert cli.parser().parse_args([]).low_timeframe is None
+
+
+@pytest.mark.parametrize(
+    ("strategy", "overrides", "message"),
+    [
+        (SimpleNamespace(), {"low_timeframe": "1h"}, "test does not declare LOW_TIMEFRAME"),
+        (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "7m"}, "Unknown low timeframe 7m"),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"low_timeframe": "1d"},
+            "--low_timeframe: low timeframe 1d must not exceed high timeframe 1h",
+        ),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"high_timeframe": "5m", "low_timeframe": "10m"},
+            "--low_timeframe: low timeframe 10m must not exceed high timeframe 5m",
+        ),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"high_timeframe": "5m", "low_timeframe": "2m"},
+            "--low_timeframe: low timeframe 2m must divide high timeframe 5m evenly",
+        ),
+        # The rule applies to the declared default as well, and the message names it.
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"high_timeframe": "2m"},
+            "test LOW_TIMEFRAME: low timeframe 5m must not exceed high timeframe 2m",
+        ),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="2m"),
+            {"high_timeframe": "5m"},
+            "test LOW_TIMEFRAME: low timeframe 2m must divide high timeframe 5m evenly",
+        ),
+        (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "15m"}, "Missing bars_per_year for TEST 15m"),
+    ],
+)
+def test_run_rejects_invalid_low_timeframes_before_loading_data(monkeypatch, test_asset_cfg, strategy, overrides, message):
+    test_asset_cfg = replace(test_asset_cfg, bars_per_year={**test_asset_cfg.bars_per_year, "2m": 1, "5m": 1, "10m": 1})
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=None, **vars(strategy)))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match=message):
+        cli.run(_config(**overrides))
+
+
+@pytest.mark.parametrize("overrides", [{"low_timeframe": "1h"}, {}])
+def test_low_timeframe_equal_to_the_high_timeframe_is_a_single_timeframe_run(monkeypatch, test_asset_cfg, overrides):
+    loaded = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(LOW_TIMEFRAME="1h", generate_signals=None))
+
+    def load_data(_asset, _cfg, timeframe, *_args):
+        loaded.append(timeframe)
+        raise RuntimeError("stop after validation")
+
+    monkeypatch.setattr(cli, "load_data", load_data)
+
+    with pytest.raises(RuntimeError, match="stop after validation"):
+        cli.run(_config(**overrides))
+
+    assert loaded == ["1h"]
+
+
+def test_timeframe_flag_is_rejected_with_a_message_naming_high_timeframe(capsys):
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--timeframe", "1h"])
+
+    assert "--high_timeframe" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("flag", ["--strategy", "--exit-mode", "--no_trade_html"])
 def test_old_cli_flags_are_rejected(flag):
     with pytest.raises(SystemExit):
@@ -132,7 +227,7 @@ def test_run_rejects_negative_trade_html(monkeypatch, test_asset_cfg):
             RunConfig(
                 strategies=("test",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -155,7 +250,7 @@ def test_run_rejects_invalid_calendar_filters(monkeypatch, test_asset_cfg, field
     config = RunConfig(
         strategies=("test",),
         asset="TEST",
-        timeframe="1h",
+        high_timeframe="1h",
         sessions=None,
         time_period="1d",
         data_source="local",
@@ -173,7 +268,7 @@ def test_run_rejects_invalid_calendar_filters(monkeypatch, test_asset_cfg, field
         cli.run(config)
 
 
-def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
+def test_run_loads_low_timeframe_once_for_all_high_timeframes(
     monkeypatch, tmp_path, test_asset_cfg, base_data
 ):
     load_calls = []
@@ -181,7 +276,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
     test_asset_cfg = replace(test_asset_cfg, bars_per_year={"1h": 1716, "15m": 6864, "5m": 20592})
 
     def load_strategy(_name):
-        return SimpleNamespace(EXECUTION_TIMEFRAME="5m", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
+        return SimpleNamespace(LOW_TIMEFRAME="5m", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
 
     def load_data(asset, _asset_cfg, timeframe, _period, _source):
         load_calls.append((asset, timeframe))
@@ -223,7 +318,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
         lambda task: submitted.append(task) or [{
             "Strategy": task["strategy"],
             "Asset": task["asset"],
-            "TF": task["timeframe"],
+            "High TF": task["timeframe"],
             "_sort_return": 0,
         }],
     )
@@ -233,7 +328,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
         RunConfig(
             strategies=("one", "two"),
             asset="TEST",
-            timeframe="1h,15m",
+            high_timeframe="1h,15m",
             sessions=None,
             time_period="1d",
             data_source="local",
@@ -248,7 +343,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
     )
 
     assert load_calls == [("TEST", "5m")]
-    assert [(task["strategy"], task["timeframe"], task["execution_timeframe"]) for task in submitted] == [
+    assert [(task["strategy"], task["timeframe"], task["low_timeframe"]) for task in submitted] == [
         ("one", "1h", "5m"),
         ("one", "15m", "5m"),
         ("two", "1h", "5m"),
@@ -258,9 +353,35 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
     assert all(task["variants"] == ((1.0, "fixed"),) for task in submitted)
 
 
+def test_each_listed_low_timeframe_gets_its_own_variants_on_its_own_bars(monkeypatch, tmp_path, test_asset_cfg, base_data):
+    submitted = []
+    test_asset_cfg = replace(test_asset_cfg, bars_per_year={"1h": 1716, "1m": 411840, "5m": 82368})
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(LOW_TIMEFRAME="1m", generate_signals=None))
+    monkeypatch.setattr(cli, "load_data", lambda _asset, _cfg, timeframe, *_args: base_data.assign(bars=timeframe))
+    monkeypatch.setattr(cli, "cache_data", lambda data, _dir, cache_id: (data["bars"].iloc[0], cache_id))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(
+        cli,
+        "run_variants",
+        lambda task: submitted.append(task) or [{"Strategy": task["strategy"], "Asset": task["asset"], "_sort_return": 0}],
+    )
+    monkeypatch.setattr(cli, "write_results_html", lambda *_args: tmp_path / "results.html")
+
+    cli.run(_config(low_timeframe="1m,5m,1m", exit_mode="fixed,trailing", risk_reward_ratio="2"))
+
+    assert [(task["timeframe"], task["low_timeframe"], task["data_cache"][0]) for task in submitted] == [
+        ("1h", "1m", "1m"),
+        ("1h", "5m", "5m"),
+    ]
+    assert all(len(task["variants"]) == 2 for task in submitted)
+
+
 def test_run_waits_for_executor_before_temp_cleanup_on_failure(monkeypatch, tmp_path, test_asset_cfg, base_data):
     events = []
-    strategy = SimpleNamespace(EXECUTION_TIMEFRAME="1h", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
+    strategy = SimpleNamespace(LOW_TIMEFRAME="1h", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
 
     class TempDir:
         def __enter__(self):
@@ -306,7 +427,7 @@ def test_run_waits_for_executor_before_temp_cleanup_on_failure(monkeypatch, tmp_
             RunConfig(
                 strategies=("test",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -405,7 +526,7 @@ def test_run_requires_strategy_owned_sessions(monkeypatch, test_asset_cfg):
             RunConfig(
                 strategies=("orb_candle",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -430,7 +551,7 @@ def test_run_rejects_unknown_required_flag(monkeypatch, test_asset_cfg):
             RunConfig(
                 strategies=("test",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -449,7 +570,7 @@ def _config(**overrides) -> RunConfig:
     values = dict(
         strategies=("test",),
         asset="TEST",
-        timeframe="1h",
+        high_timeframe="1h",
         sessions=None,
         time_period="1d",
         data_source="local",
@@ -479,7 +600,7 @@ def test_run_rejects_risk_override_for_asset_not_in_run(monkeypatch, test_asset_
     ("overrides", "message"),
     [
         ({"asset": "NOPE"}, "Unknown asset NOPE"),
-        ({"timeframe": "7h"}, "Unknown timeframe 7h"),
+        ({"high_timeframe": "7h"}, "Unknown timeframe 7h"),
         ({"capital": 0}, "--capital"),
         ({"capital": -1}, "--capital"),
         ({"capital": math.nan}, "--capital"),
@@ -704,7 +825,7 @@ def test_split_run_sends_cutoff_to_workers_and_shows_split_columns_and_ranges(mo
         "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected"
     ]
     (split,) = args[3]
-    assert (split.asset, split.execution_timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
+    assert (split.asset, split.low_timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
     out = capsys.readouterr().out
     assert "TEST 1h in-sample 2025-01-01 00:00 to 2025-01-01 23:00 UTC" in out
     assert "TEST 1h out-of-sample 2025-01-02 00:00 to 2025-01-02 23:00 UTC" in out
@@ -784,7 +905,7 @@ def _ranked_rows(monkeypatch, returns):
         rows = []
         for (rr, mode), (ret, ret_dd, oos) in zip(task["variants"], returns):
             rows.append({
-                "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
+                "Strategy": task["strategy"], "Asset": task["asset"], "High TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
                 "Return": ret, "Max DD": 1.0, "Sharpe Ratio": ret, "Return / DD": ret_dd, "_sort_return": ret,
                 "OOS Trades": 1, "OOS Return": oos, "OOS Max DD": 1.0, "OOS Sharpe": oos, "OOS Return / DD": oos, "WFE": 50.0,
             })
@@ -832,7 +953,7 @@ def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_
     def fake_run_variants(task):
         return [
             {
-                "Strategy": task["strategy"], "Asset": task["asset"], "TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
+                "Strategy": task["strategy"], "Asset": task["asset"], "High TF": task["timeframe"], "RR": f"{rr:g}", "Exit Mode": mode,
                 "Return": 1.0, "Max DD": 1.0, "Sharpe Ratio": 1.0, "Return / DD": ret_dd, "_sort_return": 1.0,
                 "OOS Trades": 1, "OOS Return": 1.0, "OOS Max DD": 1.0, "OOS Sharpe": 1.0, "OOS Return / DD": oos, "WFE": 10.0 * rr,
             }

@@ -11,6 +11,9 @@ The first break of an active swing in the direction opposite to the previous bre
 A price band built from pivots. It is called support when it lies below the reference price, resistance when it lies above it, and an in-price channel when the price is inside the band.
 _Avoid_: S/R zone, level
 
+**Touch**:
+A low-timeframe price range overlapping a support/resistance channel: the developing high-timeframe bar's range, assembled from closed low-timeframe bars, reaching into a support or resistance channel. A pending touch keeps the first and latest bar of its current contact; a high-timeframe bar that opens clear of the channel interrupts the contact, and the next contact starts a new one.
+
 **Fair value gap (FVG)**:
 A three-bar price gap where the first bar's high stays below the third bar's low (bullish), or the first bar's low stays above the third bar's high (bearish).
 _Avoid_: imbalance, gap
@@ -18,8 +21,14 @@ _Avoid_: imbalance, gap
 ## Strategies
 
 **Opening Range Breakout (ORB)**:
-A strategy family that marks the high and low of the opening range, the first signal timeframe of a session window, and trades the first close beyond it.
+A strategy family that marks the high and low of the opening range, the first high-timeframe bar of a session window, and trades the first close beyond it.
 _Avoid_: ORB as a name for the range itself
+
+**`choch_sr`**:
+A strategy that trades a setup: long after a touch on a support channel, short after a touch on a resistance channel.
+
+**Setup**:
+A touch followed by the first CHoCH in the opposite direction: a bullish CHoCH after a support touch, a bearish CHoCH after a resistance touch.
 
 ## Time
 
@@ -31,16 +40,16 @@ _Avoid_: session, trading day
 A named local time range that limits entries for a variant and, for ORB strategies, anchors the opening range.
 _Avoid_: session, trading hours
 
-**Signal timeframe**:
-The bar size a strategy reads to produce signals, selected per variant.
-_Avoid_: timeframe, interval
+**High timeframe**:
+The bar size a strategy builds its context on, selected per variant.
+_Avoid_: signal timeframe, timeframe, interval
 
-**Execution timeframe**:
-The bar size the engine uses to simulate fills and exits; a strategy may request one different from its signal timeframe.
-_Avoid_: timeframe, base timeframe
+**Low timeframe**:
+The bar size the strategy reads for its triggers and the engine uses to simulate fills and exits; it equals the high timeframe unless the strategy declares `LOW_TIMEFRAME`.
+_Avoid_: execution timeframe, timeframe, base timeframe
 
 **Cutoff**:
-The first bar of the out-of-sample period, always the first bar of a market session; it is set per asset and execution timeframe by `--oos_start` or `--oos_fraction`.
+The first bar of the out-of-sample period, always the first bar of a market session; it is set per asset and low timeframe by `--oos_start` or `--oos_fraction`.
 _Avoid_: split date, holdout start
 
 **In-sample period**:
@@ -59,10 +68,13 @@ _Avoid_: straddling trade, crossover trade
 
 **Signal**:
 A strategy's request to enter: a time, a side, and a stop.
-_Avoid_: setup, order
+_Avoid_: order
 
 **Close entry**:
 A signal that fills at a given price on its own bar instead of at the next bar's open.
+
+**Setup time**:
+The start of the latest bar a signal's setup depends on; a signal whose setup time is before the first high-timeframe bar after the previous trade's exit is discarded.
 
 **Trade**:
 A filled signal, from entry to its final exit.
@@ -102,12 +114,15 @@ An exit filled at a bar's open because the price gapped through the stop or a ta
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a calendar filter, a fill in the 60 minutes before a roll or across one, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a calendar filter, a fill in the 60 minutes before a roll or across one, a setup time before the first high-timeframe bar after the previous trade's exit, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
 
 **Variant**:
-One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
+One combination of strategy, asset, high timeframe, low timeframe, RR, exit mode, session window, and strategy parameter values, backtested independently.
 _Avoid_: run, scenario
+
+**Strategy parameter**:
+A setting a strategy declares with a default and the framework can sweep per variant.
 
 **Selected variant**:
 One of the top N variants of a strategy and asset, ranked on an in-sample metric (`--select_by`, `--select_top`) in split mode.

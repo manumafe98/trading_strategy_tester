@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 
 from .models import IntrabarRule, TargetFill
+from .settings import DEFAULT_MAX_VARIANTS
 
 
 DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -37,7 +38,7 @@ def months_arg(value: str) -> tuple[int, ...]:
 class RunConfig:
     strategies: tuple[str, ...]
     asset: str | None
-    timeframe: str | None
+    high_timeframe: str | None
     sessions: str | None
     time_period: str
     data_source: str
@@ -59,3 +60,6 @@ class RunConfig:
     select_top: int | None = None
     target_fill: TargetFill = TargetFill.TICK_THROUGH
     intrabar: IntrabarRule = IntrabarRule.PATH
+    strategy_params: str | None = None
+    low_timeframe: str | None = None
+    max_variants: int = DEFAULT_MAX_VARIANTS
