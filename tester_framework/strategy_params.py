@@ -15,8 +15,21 @@ __all__ = [
 ]
 
 
-# Keys the framework itself puts in a strategy's params.
-RESERVED_PARAMS = ("tick_size", "pip_size", "session", "trade")
+# Every key the engine puts in a hook's params; a strategy parameter may not use one.
+RESERVED_PARAMS = (
+    "tick_size",
+    "pip_size",
+    "session",
+    "trade",
+    "risk_reward_ratio",
+    "exit_mode",
+    "operation",
+    "risk_pct",
+    "capital",
+    "with_costs",
+    "time_period",
+    "data_source",
+)
 PARAM_VALUE_TYPES = (int, float, bool, str)
 
 

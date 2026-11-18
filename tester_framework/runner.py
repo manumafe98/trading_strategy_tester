@@ -61,7 +61,6 @@ def _run_variant(
         target_fill=task["target_fill"],
         intrabar=task["intrabar"],
     )
-    # Engine keys win over a same-named strategy parameter.
     params = {
         **task["strategy_params"],
         "risk_reward_ratio": risk_reward_ratio,

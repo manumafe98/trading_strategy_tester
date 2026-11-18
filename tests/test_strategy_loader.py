@@ -50,7 +50,7 @@ def _write_strategy(tmp_path, monkeypatch, body):
     monkeypatch.setattr(strategy_loader, "STRATEGY_DIR", tmp_path)
 
 
-@pytest.mark.parametrize("name", ["tick_size", "pip_size", "session", "trade"])
+@pytest.mark.parametrize("name", ["tick_size", "pip_size", "session", "trade", "capital", "exit_mode"])
 def test_declaring_a_reserved_parameter_name_fails_at_load(monkeypatch, tmp_path, name):
     _write_strategy(tmp_path, monkeypatch, f"PARAMS = {{'{name}': 1}}\n")
 

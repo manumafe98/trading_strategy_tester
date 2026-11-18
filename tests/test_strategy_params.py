@@ -12,6 +12,7 @@ import tester_framework.reports as reports
 import tester_framework.runner as runner
 import tester_framework.strategy_loader as strategy_loader
 from tester_framework.analytics import decode_analytics
+from tester_framework.strategy_params import RESERVED_PARAMS
 from tests.test_cli import _InlineExecutor, _config, _two_day_data
 from tests.test_runner import _task
 
@@ -158,6 +159,9 @@ def test_strategy_params_reach_signals_charts_and_metrics(monkeypatch, tmp_path,
     runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, trade_html=None, strategy_params={"swing_length": 10}))
 
     assert {hook: params["swing_length"] for hook, params in seen.items()} == {"signals": 10, "chart": 10, "metrics": 10}
+    # Every key the engine adds is reserved, so a strategy parameter can never be overwritten.
+    engine_keys = {key for params in seen.values() for key in params} - {"swing_length"}
+    assert engine_keys <= set(RESERVED_PARAMS)
     assert seen["chart"]["tick_size"] == test_asset_cfg.tick_size
     assert seen["chart"]["trade"]["side"] == "long"
 

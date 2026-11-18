@@ -23,7 +23,7 @@ def generate_signals(df, asset, timeframe, params):
 - `timeframe` is the high timeframe. A strategy can load a smaller low timeframe by setting `LOW_TIMEFRAME = "5m"`; `df` then holds low-timeframe bars.
 - An optional `setup_time` column marks the start of the latest bar a signal's setup depends on (no later than `time`); the engine discards a signal whose setup time is before the first high-timeframe bar after the previous trade's exit.
 - Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
-- A strategy can declare tunable parameters as `PARAMS = {"name": default}` (int, float, bool, str or `None`), plus `PARAM_TYPES = {"name": int}` for `None` defaults. `tick_size`, `pip_size`, `session` and `trade` are reserved names. `--strategy_params "name=value;..."` overrides them, and `params` in every hook holds every declared parameter, defaults filled in.
+- A strategy can declare tunable parameters as `PARAMS = {"name": default}` (int, float, bool, str or `None`), plus `PARAM_TYPES = {"name": int}` for `None` defaults. Every key the engine puts in `params` (`tick_size`, `pip_size`, `session`, `trade`, `capital`, `exit_mode`, ...; see `RESERVED_PARAMS` in `tester_framework/strategy_params.py`) is reserved. `--strategy_params "name=value;..."` overrides them, and `params` in every hook holds every declared parameter, defaults filled in.
 
 Optional hooks:
 
