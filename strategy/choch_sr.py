@@ -36,7 +36,7 @@ PARAMS = {
     "stop_unit": "%",
     "stop_source": "last_ll_hh",
     "max_touch_minutes": None,
-    "touch_buckets": "0-5,5-15,15-30,30-60,60+",
+    "touch_buckets": "0-5|5-15|15-30|30-60|60+",
 }
 PARAM_TYPES = {"max_touch_minutes": int}
 STOP_SOURCES = ("last_ll_hh", "last_swing")
@@ -92,7 +92,7 @@ def validate_params(params):
 def touch_bands(text: str) -> list[tuple[float, float, str]]:
     bands = []
     previous_high = 0.0
-    for band in text.split(","):
+    for band in text.split("|"):
         band = band.strip()
         try:
             if band.endswith("+"):

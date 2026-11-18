@@ -25,6 +25,7 @@ from tests.choch_sr_bars import (
 from tester_framework.backtest import run_backtest
 from tester_framework.sessions import parse_sessions
 from tester_framework.strategy_loader import load_strategy
+from tester_framework.strategy_params import expand_strategy_params, strategy_param_values
 
 
 def at(clock: str) -> pd.Timestamp:
@@ -285,15 +286,15 @@ def test_input_is_not_mutated():
         ({"stop_source": "last_hl"}, "stop_source"),
         ({"max_touch_minutes": 0}, "max_touch_minutes"),
         ({"touch_buckets": ""}, "touch_buckets"),
-        ({"touch_buckets": "0-5,five-15"}, "touch_buckets"),
-        ({"touch_buckets": "0-5,5"}, "touch_buckets"),
-        ({"touch_buckets": "1-5,5+"}, "touch_buckets"),
-        ({"touch_buckets": "0-5,10+"}, "touch_buckets"),
-        ({"touch_buckets": "0-10,5-15"}, "touch_buckets"),
-        ({"touch_buckets": "0-5,5-5,5+"}, "touch_buckets"),
-        ({"touch_buckets": "0-15,15-5"}, "touch_buckets"),
-        ({"touch_buckets": "0-5,5+,10+"}, "touch_buckets"),
-        ({"touch_buckets": "0+,0-5"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|five-15"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5"}, "touch_buckets"),
+        ({"touch_buckets": "1-5|5+"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|10+"}, "touch_buckets"),
+        ({"touch_buckets": "0-10|5-15"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5-5|5+"}, "touch_buckets"),
+        ({"touch_buckets": "0-15|15-5"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5+|10+"}, "touch_buckets"),
+        ({"touch_buckets": "0+|0-5"}, "touch_buckets"),
     ],
 )
 def test_validate_params_rejects_bad_settings(overrides, message):
@@ -312,7 +313,7 @@ def test_defaults_are_the_pine_defaults():
         "stop_unit": "%",
         "stop_source": "last_ll_hh",
         "max_touch_minutes": None,
-        "touch_buckets": "0-5,5-15,15-30,30-60,60+",
+        "touch_buckets": "0-5|5-15|15-30|30-60|60+",
     }
     assert choch_sr.LOW_TIMEFRAME == "1m"
     choch_sr.validate_params(dict(choch_sr.PARAMS))
@@ -353,7 +354,7 @@ BAND_TRADES = [band_trade(0.0, 2.0, 1.9), band_trade(4.0, -1.0, -1.1), band_trad
 
 
 def band_metrics(trades, with_costs):
-    params = {**choch_sr.PARAMS, "touch_buckets": "0-5,5-15,15-60,60+", "with_costs": with_costs}
+    params = {**choch_sr.PARAMS, "touch_buckets": "0-5|5-15|15-60|60+", "with_costs": with_costs}
     return choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", params)
 
 
@@ -377,3 +378,15 @@ def test_metrics_use_gross_r_without_costs_and_handle_no_trades():
     assert (gross["Win rate 5-15m"], gross["Avg R 5-15m"]) == (100.0, 0.05)
     assert gross["Avg R 0-5m"] == 0.5
     assert empty["Trades 0-5m"] == 0 and math.isnan(empty["Avg R 60+m"])
+
+
+def test_multi_band_touch_buckets_round_trip_through_strategy_params():
+    strategies = {"choch_sr": load_strategy("choch_sr")}
+    values = strategy_param_values(strategies, "touch_buckets=0-10|10+,0-30|30+")
+
+    (first, second) = expand_strategy_params(strategies, values)["choch_sr"]
+
+    assert (first["touch_buckets"], second["touch_buckets"]) == ("0-10|10+", "0-30|30+")
+    trades = [band_trade(12.0, 1.0, 1.0)]
+    metrics = choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", {**first, "with_costs": False})
+    assert (metrics["Trades 0-10m"], metrics["Trades 10+m"]) == (0, 1)
