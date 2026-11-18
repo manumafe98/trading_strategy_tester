@@ -131,7 +131,7 @@ The result header (console and results page) also shows, for each strategy and a
 "$PY" -m tester_framework --strategies ema50 --asset MGC --timeframe 1h --time_period 2021 --data_source local --oos_start 2021-07-01 --with_costs
 ```
 
-A trade still open on the last bar of the loaded data closes at that bar's close with exit reason `end`, after any partial fills it already banked; costs apply as for any exit, and it counts like any other trade. Signals skipped due to invalid stops, bad entries, a close entry on the last bar, minimum risk, overlap, a fill in the 60 minutes before a roll or across one, or minimum-quantity filters are reported in `Discarded`.
+A trade still open on the last bar of the loaded data closes at that bar's close with exit reason `end`, after any partial fills it already banked; costs apply as for any exit, and it counts like any other trade. Signals skipped due to invalid stops, bad entries, a close entry on the last bar, minimum risk, overlap, a setup time before the first high-timeframe bar after the previous exit, a fill in the 60 minutes before a roll or across one, or minimum-quantity filters are reported in `Discarded`.
 
 ## Strategy API
 
@@ -163,7 +163,9 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
-Any extra signal column beyond `time`, `side`, `stop`, and `entry` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
+A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. High-timeframe bars are clock-aligned, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
+
+Any extra signal column beyond `time`, `side`, `stop`, `entry`, and `setup_time` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
 
 Strategies can also add scalar metrics to each expanded result variant:
 

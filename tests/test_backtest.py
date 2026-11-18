@@ -1529,3 +1529,55 @@ def test_split_daily_sharpe_uses_each_period_s_own_market_sessions(test_asset_cf
     # Out of sample, market session closes 10200, 10200, 10200 from 10100: returns 0.99%, 0, 0,
     # so Sharpe = sqrt(252) x 0.5774 = 9.17.
     assert metrics["OOS Sharpe"] == 9.17
+
+
+def _quarter_hour_bars(*bars):
+    idx = pd.date_range("2025-01-01", periods=len(bars), freq="15min")
+    return pd.DataFrame(bars, index=idx, columns=["open", "high", "low", "close"], dtype=float)
+
+
+def _quarter_hour_cfg(cfg):
+    return replace(cfg, bars_per_year=cfg.bars_per_year | {"15m": 1716 * 4})
+
+
+@pytest.mark.parametrize(
+    ("setup_time", "accepted"),
+    [("2025-01-01 00:45", False), ("2025-01-01 01:00", True), (None, True)],
+)
+def test_setup_before_first_high_timeframe_bar_after_exit_is_discarded(test_asset_cfg, setup_time, accepted):
+    # The first trade enters at 00:15 and hits its target in that bar; the next 1h bar opens at 01:00.
+    flat = [100.0, 100.0, 100.0, 100.0]
+    data = _quarter_hour_bars(flat, [100.0, 101.5, 100.0, 101.0], flat, flat, flat, flat, flat)
+    signals = [
+        {"time": data.index[0], "side": "long", "stop": 99.0, "setup_time": data.index[0]},
+        {"time": data.index[4], "side": "long", "stop": 99.0, "setup_time": setup_time and pd.Timestamp(setup_time)},
+    ]
+    metrics, trades = _run(data, signals, _quarter_hour_cfg(test_asset_cfg), execution_timeframe="15m")
+    assert [t["entry_i"] for t in trades] == ([1, 5] if accepted else [1])
+    assert metrics["Discarded"] == (0 if accepted else 1)
+
+
+def test_setup_time_rule_uses_each_risk_reward_ratio_s_own_exit(test_asset_cfg):
+    # RR 1 exits at 00:15 (fresh from 01:00); RR 3 exits at 01:00 (fresh from 02:00).
+    data = _quarter_hour_bars(
+        [100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 100.0, 101.0], [101.0, 101.0, 100.0, 101.0],
+        [101.0, 101.0, 100.0, 101.0], [101.0, 103.5, 101.0, 103.0], [103.0, 103.0, 103.0, 103.0],
+        [103.0, 103.0, 103.0, 103.0], [103.0, 103.0, 103.0, 103.0],
+    )
+    signals = [
+        {"time": data.index[0], "side": "long", "stop": 99.0},
+        {"time": data.index[5], "side": "long", "stop": 99.0, "setup_time": data.index[4]},
+    ]
+    cfg = _quarter_hour_cfg(test_asset_cfg)
+    _, rr1 = _run(data, signals, cfg, execution_timeframe="15m", risk_reward_ratio=1)
+    _, rr3 = _run(data, signals, cfg, execution_timeframe="15m", risk_reward_ratio=3)
+    assert [(t["entry_i"], t["exit_i"]) for t in rr1] == [(1, 1), (6, 7)]
+    assert [(t["entry_i"], t["exit_i"]) for t in rr3] == [(1, 4)]
+
+
+def test_setup_time_after_signal_time_is_an_error():
+    signals = pd.DataFrame(
+        [{"time": pd.Timestamp("2025-01-01 01:00"), "side": "long", "stop": 99, "setup_time": pd.Timestamp("2025-01-01 01:15")}]
+    )
+    with pytest.raises(ValueError, match="setup_time"):
+        normalize_signals(signals)
