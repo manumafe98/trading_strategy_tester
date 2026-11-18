@@ -52,7 +52,7 @@ def _run_variant(
         capital=task["capital"],
         with_costs=task["with_costs"],
         asset_cfg=task["asset_cfg"],
-        execution_timeframe=task["execution_timeframe"],
+        low_timeframe=task["low_timeframe"],
         max_trades=task["max_trades"],
         days=task["days"],
         months=task["months"],

@@ -1445,9 +1445,9 @@ def test_tick_through_trigger_is_exactly_one_tick_beyond_the_target(test_asset_c
     assert (trades[0]["target"], trades[0]["exit_reason"], trades[0]["exit_i"]) == (target, ExitReason.TARGET, 2)
 
 
-def test_backtest_rejects_an_execution_timeframe_without_a_bar_length(base_data, test_asset_cfg):
+def test_backtest_rejects_an_low_timeframe_without_a_bar_length(base_data, test_asset_cfg):
     cfg = replace(test_asset_cfg, bars_per_year={**test_asset_cfg.bars_per_year, "4h": 429})
-    with pytest.raises(ValueError, match="Unknown execution timeframe for TEST: 4h"):
+    with pytest.raises(ValueError, match="Unknown low timeframe for TEST: 4h"):
         _run(base_data, [{"time": base_data.index[0], "side": "long", "stop": 99.0}], cfg, timeframe="4h")
 
 
@@ -1511,7 +1511,7 @@ def test_same_trades_on_1h_and_5m_data_give_the_same_sharpe(cost_asset_cfg):
     cfg = replace(cost_asset_cfg, bars_per_year={"1h": 1716, "5m": 20592, "1d": 252})
 
     hourly_metrics, hourly_trades = _daily_sharpe_run(cfg, hourly, with_costs=True)
-    five_minute_metrics, five_minute_trades = _daily_sharpe_run(cfg, five_minute, with_costs=True, execution_timeframe="5m")
+    five_minute_metrics, five_minute_trades = _daily_sharpe_run(cfg, five_minute, with_costs=True, low_timeframe="5m")
 
     assert [t["net_pnl"] for t in five_minute_trades] == [t["net_pnl"] for t in hourly_trades]
     assert five_minute_metrics["Gross"]["Sharpe Ratio"] == hourly_metrics["Gross"]["Sharpe Ratio"] == 18.33

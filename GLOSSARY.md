@@ -18,7 +18,7 @@ _Avoid_: imbalance, gap
 ## Strategies
 
 **Opening Range Breakout (ORB)**:
-A strategy family that marks the high and low of the opening range, the first signal timeframe of a session window, and trades the first close beyond it.
+A strategy family that marks the high and low of the opening range, the first high-timeframe bar of a session window, and trades the first close beyond it.
 _Avoid_: ORB as a name for the range itself
 
 ## Time
@@ -31,16 +31,16 @@ _Avoid_: session, trading day
 A named local time range that limits entries for a variant and, for ORB strategies, anchors the opening range.
 _Avoid_: session, trading hours
 
-**Signal timeframe**:
-The bar size a strategy reads to produce signals, selected per variant.
-_Avoid_: timeframe, interval
+**High timeframe**:
+The bar size a strategy builds its context on, selected per variant.
+_Avoid_: signal timeframe, timeframe, interval
 
-**Execution timeframe**:
-The bar size the engine uses to simulate fills and exits; a strategy may request one different from its signal timeframe.
-_Avoid_: timeframe, base timeframe
+**Low timeframe**:
+The bar size the strategy reads for its triggers and the engine uses to simulate fills and exits; it equals the high timeframe unless the strategy declares `LOW_TIMEFRAME`.
+_Avoid_: execution timeframe, timeframe, base timeframe
 
 **Cutoff**:
-The first bar of the out-of-sample period, always the first bar of a market session; it is set per asset and execution timeframe by `--oos_start` or `--oos_fraction`.
+The first bar of the out-of-sample period, always the first bar of a market session; it is set per asset and low timeframe by `--oos_start` or `--oos_fraction`.
 _Avoid_: split date, holdout start
 
 **In-sample period**:
@@ -106,7 +106,7 @@ A signal that never became a trade, because of an invalid stop or entry, R below
 _Avoid_: skipped signal, rejected signal
 
 **Variant**:
-One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
+One combination of strategy, asset, high timeframe, RR, exit mode, and session window, backtested independently.
 _Avoid_: run, scenario
 
 **Selected variant**:

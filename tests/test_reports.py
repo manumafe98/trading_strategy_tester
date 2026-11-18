@@ -143,7 +143,7 @@ def test_gap_exits_are_marked_in_exit_cell_and_counted_per_variant(monkeypatch, 
         {
             "strategy": "ema50", "data_cache": cache_data(data, str(tmp_path), 0),
             "variants": ((3, "fixed"), (3, "trailing")), "asset": "TEST", "asset_cfg": test_asset_cfg,
-            "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
+            "timeframe": "1h", "low_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 0,
             "session": None, "days": (), "months": (), "session_exit": False, "oos_cutoff": None,
             "target_fill": "tick_through", "intrabar": "path",
@@ -179,7 +179,7 @@ def test_trade_chart_marks_gap_exit(monkeypatch, tmp_path, test_asset_cfg):
         {
             "strategy": "ema50", "data_cache": cache_data(data, str(tmp_path), 0),
             "variants": ((3, "fixed"),), "asset": "TEST", "asset_cfg": test_asset_cfg,
-            "timeframe": "1h", "execution_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
+            "timeframe": "1h", "low_timeframe": "1h", "operation": "all", "risk_pct": 1, "capital": 10_000,
             "with_costs": False, "time_period": "1d", "data_source": "local", "max_trades": None, "trade_html": 1,
             "session": None, "days": (), "months": (), "session_exit": False, "oos_cutoff": None,
             "target_fill": "tick_through", "intrabar": "path",
