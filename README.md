@@ -154,6 +154,8 @@ The input `df` is shared across timeframes; strategies **must not mutate** it. C
 LOW_TIMEFRAME = "5m"  # data loaded at 5m, signals generated per --high_timeframe
 ```
 
+`LOW_TIMEFRAME` is the default; `--low_timeframe 1m,5m` runs a declaring strategy on each listed low timeframe as its own variants. Each listed value must be a configured timeframe with `bars_per_year` for every asset, strictly smaller than each high timeframe, and divide it evenly. A strategy without `LOW_TIMEFRAME` rejects the flag. The results table shows `High TF` and `Low TF`, and variant labels, page titles and trade chart file names name both.
+
 Strategies can add indicators to trade charts with an optional hook:
 
 ```python
@@ -209,7 +211,7 @@ Three Opening Range Breakout strategies share common logic in `strategy/utils/`:
 - **`orb_fvg`** — SL from a Fair Value Gap boundary (FVG bottom - tick for long, FVG top + tick for short). Only trades when a directional FVG exists at breakout time.
 - **`orb_combined`** — SL from the FVG extension line (ext price - tick for long, ext price + tick for short). Only trades when a directional FVG with an extension line exists.
 
-All three use a 1-minute low timeframe (`LOW_TIMEFRAME = "1m"`). For these strategies, `--high_timeframe` is the opening-range duration rather than the bar size they trade on; every configured intraday duration from 1 minute through 1 hour is supported. They require `--sessions` and build the ORB from that session's local start time, then look for breakouts until the session window ends. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
+All three use a 1-minute low timeframe (`LOW_TIMEFRAME = "1m"`). For these strategies, `--high_timeframe` is the opening-range duration rather than the bar size they trade on; every configured intraday duration from 1 minute through 1 hour is supported. `--low_timeframe 1m,5m` compares 1-minute and 5-minute triggers and fills. They require `--sessions` and build the ORB from that session's local start time, then look for breakouts until the session window ends. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
 
 ```bash
 "$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --high_timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs

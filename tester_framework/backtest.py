@@ -690,7 +690,7 @@ def make_metrics(
     return {
         "Strategy": strategy,
         "Asset": asset,
-        "TF": timeframe,
+        "High TF": timeframe,
         "Discarded": discarded_signals,
         **(net if with_costs else gross),
         "Gross": gross,
@@ -722,7 +722,7 @@ def add_trade_counts(metrics: dict, trades: list[dict], operation: str, with_cos
 
 
 def result_columns(operation: str, include_session: bool = False, split: bool = False) -> list[str]:
-    columns = ["Strategy", "Asset", "TF"]
+    columns = ["Strategy", "Asset", "High TF", "Low TF"]
     if include_session:
         columns.append("Session")
     columns += ["RR", "Exit Mode", "Trades", "Discarded"]

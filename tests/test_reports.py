@@ -52,7 +52,8 @@ def test_results_index_shows_quick_view_headers_sort_buttons_and_run_notes(monke
     table = pd.DataFrame(
         columns=[
             "Asset",
-            "TF",
+            "High TF",
+            "Low TF",
             "RR",
             "Exit Mode",
             "Trades",
@@ -83,7 +84,8 @@ def test_results_index_shows_quick_view_headers_sort_buttons_and_run_notes(monke
     headers = [re.sub(r"<[^>]+>", "", value) for value in re.findall(r"<th[^>]*>(.*?)</th>", header_row.group(1))]
     assert headers == [
         "Asset",
-        "TF",
+        "High TF",
+        "Low TF",
         "RR",
         "Exit Mode",
         "Return",
@@ -208,8 +210,8 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     }
     table = pd.DataFrame(
         [
-            {"Strategy": "ema50", "Asset": "MES", "TF": "5m", "Session": "london", "RR": "1", "Exit Mode": "fixed", "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5, "_risk_pct": 0.5, "_analytics": analytics, "_strategy_metrics": {}},
-            {"Strategy": "orb_candle", "Asset": "MNQ", "TF": "10m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Roll Completions": 0, "End Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0}, "trades": []}, "_strategy_metrics": {}},
+            {"Strategy": "ema50", "Asset": "MES", "High TF": "5m", "Low TF": "1m", "Session": "london", "RR": "1", "Exit Mode": "fixed", "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5, "_risk_pct": 0.5, "_analytics": analytics, "_strategy_metrics": {}},
+            {"Strategy": "orb_candle", "Asset": "MNQ", "High TF": "10m", "Low TF": "5m", "Session": "ny", "RR": "2", "Exit Mode": "trailing", "Return": 2.0, "Max DD": 1.0, "Sharpe Ratio": 1.5, "Return / DD": 2.0, "_risk_pct": 1.0, "_analytics": {**analytics, "managed": {"Mode": "trailing", "Target Completions": 0, "Stop Completions": 0, "Session Completions": 0, "Roll Completions": 0, "End Completions": 0, "Avg Realized R": 0, "Avg MFE R": 0, "Avg Giveback R": 0}, "trades": []}, "_strategy_metrics": {}},
         ]
     )
     config = RunConfig(
@@ -222,7 +224,7 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     trailing = (path.parent / "variants" / "000001.html").read_text(encoding="utf-8")
 
     assert path.name == "index.html"
-    for key in ("strategy", "asset", "timeframe", "session", "rr", "exit-mode", "risk"):
+    for key in ("strategy", "asset", "high-timeframe", "low-timeframe", "session", "rr", "exit-mode", "risk"):
         assert f'data-filter-menu="{key}"' in html
     assert 'data-variant-id="0" data-original-order="0"' in html
     assert 'data-risk="0.5%"' in html
@@ -238,6 +240,8 @@ def test_write_results_html_creates_filterable_static_bundle(monkeypatch, tmp_pa
     assert "Managed trades" not in fixed
     assert "Trailing summary" not in fixed
     assert "Fixed trades" in fixed
+    assert "<title>ema50 MES 5m 1m london | 1R | fixed" in fixed
+    assert '<span class="tf-badge">1m</span>' in html
     assert "Trailing summary" in trailing
     summary_headers = [f"{name} completions" for name in ("Target", "Stop", "Session", "Roll", "End")] + ["Avg realized"]
     assert sorted(summary_headers, key=trailing.index) == summary_headers
@@ -295,7 +299,7 @@ def test_variant_trade_history_is_paginated_without_data_loss(monkeypatch, tmp_p
     table = pd.DataFrame(
         [
             {
-                "Strategy": "ema50", "Asset": "M&ES", "TF": "5m", "RR": "2", "Exit Mode": "partial",
+                "Strategy": "ema50", "Asset": "M&ES", "High TF": "5m", "Low TF": "5m", "RR": "2", "Exit Mode": "partial",
                 "Return": 1.0, "Max DD": 2.0, "Sharpe Ratio": 0.5, "Return / DD": 0.5,
                 "_analytics": analytics, "_strategy_metrics": {"<metric>": "<value>"},
             }
@@ -345,7 +349,7 @@ def test_write_results_html_replaces_same_named_bundle(monkeypatch, tmp_path):
         "datetime",
         SimpleNamespace(now=lambda: pd.Timestamp("2025-01-02 03:04:05")),
     )
-    table = pd.DataFrame(columns=["Asset", "TF", "RR", "Exit Mode", *reports.FINANCIAL_COLUMNS])
+    table = pd.DataFrame(columns=["Asset", "High TF", "Low TF", "RR", "Exit Mode", *reports.FINANCIAL_COLUMNS])
     config = RunConfig(
         ("ema50",), None, None, None, "60d", "local", "all", "1", "fixed", "1", 10_000,
         False, None,
@@ -365,7 +369,8 @@ def test_filter_options_use_domain_order():
         {
             "Strategy": ["orb_fvg", "ema50", "orb_candle", "ema50", "ema50"],
             "Asset": ["MNQ", "MES", "MGC", "MES", "MES"],
-            "TF": ["15m", "10m", "30m", "5m", "1h"],
+            "High TF": ["15m", "10m", "30m", "5m", "1h"],
+            "Low TF": ["1m", "5m", "1m", "1m", "2m"],
             "Session": ["ny", "london", "asia", "ny", "ny"],
             "RR": ["5", "4", "3", "1", "2"],
             "Exit Mode": ["partial", "trailing", "fixed", "fixed", "fixed"],
@@ -382,7 +387,8 @@ def test_filter_options_use_domain_order():
 
     assert options("strategy") == ["ema50", "orb_candle", "orb_fvg"]
     assert options("asset") == ["MES", "MGC", "MNQ"]
-    assert options("timeframe") == ["5m", "10m", "15m", "30m", "1h"]
+    assert options("high-timeframe") == ["5m", "10m", "15m", "30m", "1h"]
+    assert options("low-timeframe") == ["1m", "2m", "5m"]
     assert options("session") == ["asia", "london", "ny"]
     assert options("rr") == ["1", "2", "3", "4", "5"]
     assert options("exit-mode") == ["fixed", "trailing", "partial"]
@@ -396,7 +402,8 @@ def test_results_index_shows_session_column_and_gross_net_pairs(monkeypatch, tmp
             {
                 "Strategy": "orb_candle",
                 "Asset": "MNQ",
-                "TF": "5m",
+                "High TF": "5m",
+                "Low TF": "1m",
                 "Session": "ny=09:30-12:00",
                 "RR": "2",
                 "Exit Mode": "fixed",
@@ -413,7 +420,7 @@ def test_results_index_shows_session_column_and_gross_net_pairs(monkeypatch, tmp
         ("orb_candle",), "MNQ", "5m", "ny=09:30-12:00", "5d", "local", "all", "2", "fixed", "1", 10_000, True, None
     )
 
-    path = reports.write_results_html(table, config, columns=["Strategy", "Asset", "TF", "Session", "RR", "Exit Mode", "Return", "Max DD", "Sharpe Ratio", "Return / DD"])
+    path = reports.write_results_html(table, config, columns=["Strategy", "Asset", "High TF", "Low TF", "Session", "RR", "Exit Mode", "Return", "Max DD", "Sharpe Ratio", "Return / DD"])
     html = path.read_text(encoding="utf-8")
     details = (path.parent / "variants" / "000000.html").read_text(encoding="utf-8")
 
@@ -433,7 +440,7 @@ def _split_table():
     return pd.DataFrame(
         [
             {
-                "Strategy": "ema50", "Asset": "MGC", "TF": "1h", "RR": "1", "Exit Mode": "fixed",
+                "Strategy": "ema50", "Asset": "MGC", "High TF": "1h", "Low TF": "1h", "RR": "1", "Exit Mode": "fixed",
                 "Return": (2.0, 1.5), "Max DD": (1.0, 1.25), "Sharpe Ratio": (0.5, 0.25), "Return / DD": (2.0, 1.2),
                 "OOS Trades": 7, "OOS Return": (-3.0, -4.5), "OOS Max DD": (5.0, 6.0), "OOS Sharpe": (math.nan, -1.0),
                 "OOS Return / DD": (-0.6, -0.75), "Spanning": 2, "WFE": (120.5, math.nan),

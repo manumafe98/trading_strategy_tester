@@ -173,8 +173,8 @@ def test_variant_labels_show_only_non_default_parameter_values(monkeypatch, tmp_
     (task,) = _run(monkeypatch, tmp_path, test_asset_cfg, {"test": strategy}, strategy_params="mode=break;swing_length=20")
     (plain_task,) = _run(monkeypatch, tmp_path, test_asset_cfg, {"test": plain})
 
-    assert cli.variant_label(task) == "test TEST 1h mode=break 1 variants"
-    assert cli.variant_label(plain_task) == "test TEST 1h 1 variants"
+    assert cli.variant_label(task) == "test TEST 1h 1h mode=break 1 variants"
+    assert cli.variant_label(plain_task) == "test TEST 1h 1h 1 variants"
 
 
 def test_variant_pages_list_every_parameter_value(monkeypatch, tmp_path, base_data, test_asset_cfg):
