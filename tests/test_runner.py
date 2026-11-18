@@ -102,6 +102,20 @@ def test_variant_row_and_trade_chart_name_both_timeframes(monkeypatch, tmp_path,
     assert "ema50 TEST 1h 1d long fixed" in chart.read_text(encoding="utf-8")
 
 
+def test_trade_chart_names_the_changed_parameters(monkeypatch, tmp_path, test_asset_cfg):
+    trades_dir = tmp_path / "trades"
+    monkeypatch.setattr(reports, "TRADES_DIR", trades_dir)
+    data = _target_bars([100.0, 102.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    runner.run_variants(_task(data, tmp_path, test_asset_cfg, params_label="swing_length=10", trade_html=None))
+
+    (chart,) = trades_dir.glob("*.html")
+    assert chart.name.startswith("ema50_TEST_1h_1h_swing_length_10_1rr_fixed_")
+    assert "ema50 TEST 1h 1h swing_length=10 long fixed" in chart.read_text(encoding="utf-8")
+
+
 def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
     generated = []
     monkeypatch.setattr(

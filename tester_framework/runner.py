@@ -100,6 +100,7 @@ def _run_variant(
     try:
         for chart_number, trade in enumerate(trades, 1):
             trade["low_timeframe"] = task["low_timeframe"]
+            trade["params_label"] = task["params_label"]
             if session:
                 trade["session"] = session
             if task["trade_html"] is None or chart_number <= task["trade_html"]:

@@ -11,6 +11,7 @@ from strategy.choch_sr import generate_signals, plot_indicators
 from strategy.utils.market_structure import market_structure
 from tests.choch_sr_bars import (
     RECOVERY_CLOSES,
+    TRIGGER_CLOSES,
     append,
     long_setup,
     mirror,
@@ -129,6 +130,34 @@ def test_signals_keep_coming_after_an_earlier_signal():
     assert second["touch_time"] == at("05:54")  # the touch is still pending, but its current contact started at the retest
     assert second["setup_time"] == at("05:54")  # its latest contact is the retest
     assert second["plot_start_time"] == at("05:52")  # the retest's chart opens on its own swing, not at 04:32
+
+
+def test_channels_are_built_once_per_data_and_channel_settings(monkeypatch):
+    calls = []
+    build = choch_sr.build_channels
+    monkeypatch.setattr(choch_sr, "build_channels", lambda *args: calls.append(args[1:]) or build(*args))
+    monkeypatch.setattr(choch_sr, "CHANNEL_CACHE", {})
+    df = long_setup()
+
+    first = run(df)
+    assert run(df, swing_length=3, stop_max=1.0) is not None  # a sweep over settings channels ignore
+    assert run(df).equals(first)
+    run(df, channel_max_width=0.5)
+
+    assert len(calls) == 2
+
+
+def test_contact_on_the_choch_bar_is_not_the_setup_time():
+    # A pending touch from the first setup, no contact during the recovery, then a CHoCH whose wick is its only contact.
+    lifted = TRIGGER_CLOSES[:7] + [round(close + 0.5, 4) for close in TRIGGER_CLOSES[7:]]
+    df = append(long_setup(), RECOVERY_CLOSES + lifted)
+    df.iloc[-1, df.columns.get_loc("low")] = 100.15
+
+    second = run(df).iloc[1]
+
+    assert second["time"] == at("05:57")
+    assert second["setup_time"] < second["time"]
+    assert second["setup_time"] < at("04:45")  # the contact before the recovery, so a retest after an exit is not met
 
 
 def test_choch_uses_the_matching_touch_with_the_latest_contact():

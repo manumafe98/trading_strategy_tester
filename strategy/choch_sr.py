@@ -36,6 +36,8 @@ PARAMS = {
     "stop_unit": "%",
 }
 EPSILON = 1e-8
+CHANNEL_CACHE: dict[tuple, pd.DataFrame] = {}
+CHANNEL_CACHE_SIZE = 32
 SUPPORT, RESISTANCE = 1, -1
 ROLE_NAMES = {SUPPORT: "support", RESISTANCE: "resistance", 0: "in-price"}
 OUTPUT_COLUMNS = [
@@ -86,9 +88,11 @@ class Touch:
     def __init__(self, top: float, bottom: float, role: int, bar: int):
         self.top, self.bottom, self.role = top, bottom, role
         self.first_bar = self.contact_start = self.latest_bar = bar
+        self.prior_contact_start = self.prior_latest_bar = bar
         self.in_contact = True
 
     def update_contact(self, bar: int, overlaps: bool) -> None:
+        self.prior_contact_start, self.prior_latest_bar = self.contact_start, self.latest_bar
         if overlaps:
             if not self.in_contact:
                 self.contact_start = bar
@@ -167,9 +171,7 @@ def contract_segments(df: pd.DataFrame) -> list[pd.DataFrame]:
 def segment_signals(df, rule, tick_size, params):
     """Signal rows for one contract's bars."""
     high_bars = resample_data(df, rule)
-    channels = build_channels(
-        high_bars, params["channel_min_width"], params["channel_max_width"], params["channel_unit"], params["pip_size"]
-    )
+    channels = cached_channels(high_bars, params)
     tops = channels[[f"top_{slot + 1}" for slot in range(EXPOSED_CHANNELS)]].to_numpy()
     bottoms = channels[[f"bottom_{slot + 1}" for slot in range(EXPOSED_CHANNELS)]].to_numpy()
     reference_closes = channels["reference_close"].to_numpy()
@@ -227,11 +229,22 @@ def segment_signals(df, rule, tick_size, params):
             # touch could be a stale one; the latest contact is the one the setup-time rule can accept.
             usable = [t for t in touches if t.role == role and t.first_bar < bar]
             if usable:
-                touch = max(usable, key=lambda t: t.latest_bar)
+                touch = max(usable, key=lambda t: t.prior_latest_bar)
                 row = signal_row(structure, bar, side, touch, closes[bar], reference_close, times, tick_size, params)
                 if row is not None:
                     rows.append(row)
     return rows
+
+
+def cached_channels(high_bars: pd.DataFrame, params: dict) -> pd.DataFrame:
+    settings = (params["channel_min_width"], params["channel_max_width"], params["channel_unit"], params["pip_size"])
+    bars_hash = int(pd.util.hash_pandas_object(high_bars[["high", "low", "close"]], index=True).sum())
+    key = (bars_hash, len(high_bars), *settings)
+    if key not in CHANNEL_CACHE:
+        if len(CHANNEL_CACHE) >= CHANNEL_CACHE_SIZE:
+            CHANNEL_CACHE.pop(next(iter(CHANNEL_CACHE)))
+        CHANNEL_CACHE[key] = build_channels(high_bars, *settings)
+    return CHANNEL_CACHE[key]
 
 
 def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_size, params):
@@ -252,7 +265,7 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         return None
     # The marked swing is confirmed `swing_length` bars after its own bar.
     marked_bar = times.get_loc(marked_time) - params["swing_length"]
-    touch_time = times[touch.contact_start]
+    touch_time = times[touch.prior_contact_start]
     swing_time = swing[f"{prefix}_break_swing_time"]
     stop_swing_time = times[marked_bar]
     return {
@@ -260,7 +273,7 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         "side": side,
         "stop": stop,
         "entry": entry,
-        "setup_time": times[touch.latest_bar],
+        "setup_time": times[touch.prior_latest_bar],
         "channel_top": touch.top,
         "channel_bottom": touch.bottom,
         "channel_role": ROLE_NAMES[channel_role(touch.top, touch.bottom, reference_close)],
