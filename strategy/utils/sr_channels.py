@@ -53,7 +53,9 @@ def build_channels(
     Widths are in percent of price (`%`) or in `pip_size` units (`pips`); `min_width` 0 disables the
     minimum filter.
     """
-    _validate_widths(min_width, max_width, width_unit, pip_size)
+    validate_widths(min_width, max_width, width_unit)
+    if not math.isfinite(pip_size) or pip_size <= 0:
+        raise ValueError("pip_size must be finite and positive")
     highs = bars["high"].to_numpy(dtype=float)
     lows = bars["low"].to_numpy(dtype=float)
     closes = bars["close"].to_numpy(dtype=float)
@@ -95,19 +97,26 @@ def build_channels(
     return pd.DataFrame(columns, index=bars.index)
 
 
-def _validate_widths(min_width: float, max_width: float, width_unit: str, pip_size: float) -> None:
+def validate_widths(
+    min_width: float, max_width: float, width_unit: str, names: tuple[str, str, str] = ("min_width", "max_width", "width_unit")
+) -> None:
+    """Rejects a minimum and maximum width that are not finite, ordered and non-negative, or an unknown unit."""
+    min_name, max_name, unit_name = names
     if width_unit not in WIDTH_UNITS:
-        raise ValueError(f"width_unit must be one of {', '.join(WIDTH_UNITS)}")
-    if not all(math.isfinite(value) for value in (min_width, max_width, pip_size)):
-        raise ValueError("channel widths and pip_size must be finite")
+        raise ValueError(f"{unit_name} must be one of {', '.join(WIDTH_UNITS)}")
+    if not all(math.isfinite(value) for value in (min_width, max_width)):
+        raise ValueError(f"{min_name} and {max_name} must be finite")
     if min_width < 0:
-        raise ValueError("min_width must be non-negative")
+        raise ValueError(f"{min_name} must be non-negative")
     if max_width <= 0:
-        raise ValueError("max_width must be positive")
+        raise ValueError(f"{max_name} must be positive")
     if min_width > max_width:
-        raise ValueError("min_width must not exceed max_width")
-    if pip_size <= 0:
-        raise ValueError("pip_size must be positive")
+        raise ValueError(f"{min_name} must not exceed {max_name}")
+
+
+def width_in_price(width: float, width_unit: str, base_price: float, pip_size: float) -> float:
+    """A width as a price distance: percent of `base_price` (`%`) or a count of `pip_size` (`pips`)."""
+    return base_price * width / 100 if width_unit == "%" else width * pip_size
 
 
 def _cluster(pivot_values: list[float], seed: int, max_width: float, width_unit: str, pip_size: float) -> tuple[float, float, int]:
@@ -115,7 +124,7 @@ def _cluster(pivot_values: list[float], seed: int, max_width: float, width_unit:
     strength = 0
     for pivot in pivot_values:
         width = high - pivot if pivot <= high else pivot - low
-        allowed = min(low, pivot) * max_width / 100 if width_unit == "%" else max_width * pip_size
+        allowed = width_in_price(max_width, width_unit, min(low, pivot), pip_size)
         if width <= allowed:
             if pivot <= high:
                 low = min(low, pivot)
@@ -138,7 +147,7 @@ def _select_channels(
     for seed in range(len(pivot_values)):
         top, bottom, strength = _cluster(pivot_values, seed, max_width, width_unit, pip_size)
         touches = int((((highs <= top) & (highs >= bottom)) | ((lows <= top) & (lows >= bottom))).sum())
-        min_allowed = bottom * min_width / 100 if width_unit == "%" else min_width * pip_size
+        min_allowed = width_in_price(min_width, width_unit, bottom, pip_size)
         rejected = min_width > 0 and top - bottom < min_allowed
         candidates.append((top, bottom, -1.0 if rejected else float(strength + touches)))
 
