@@ -42,9 +42,9 @@ def test_support_touch_then_bullish_choch_gives_one_long():
     assert row["side"] == "long"
     assert row["entry"] == 100.55
     assert row["stop"] == 100.12  # one tick below the LL at 100.13
-    assert row["zone_top"] == 100.2
-    assert row["zone_bottom"] == 100.0
-    assert row["zone_role"] == "support"
+    assert row["channel_top"] == 100.2
+    assert row["channel_bottom"] == 100.0
+    assert row["channel_role"] == "support"
     assert row["touch_time"] == at("04:32")
     assert row["setup_time"] == at("04:34")  # the latest contact, the last bar of the touch's 5-minute bar
     assert row["choch_level"] == 100.52
@@ -61,7 +61,7 @@ def test_resistance_touch_then_bearish_choch_gives_one_short():
     assert row["side"] == "short"
     assert row["entry"] == 99.45
     assert row["stop"] == 99.88  # one tick above the HH at 99.87
-    assert (row["zone_top"], row["zone_bottom"], row["zone_role"]) == (100.0, 99.8, "resistance")
+    assert (row["channel_top"], row["channel_bottom"], row["channel_role"]) == (100.0, 99.8, "resistance")
     assert row["touch_time"] == at("04:32")
     assert row["setup_time"] == at("04:34")
     assert row["choch_level"] == 99.48
@@ -95,13 +95,28 @@ def test_setup_is_skipped_when_the_stop_distance_is_outside_the_limits(overrides
     assert len(run(long_setup(), **overrides)) == trades
 
 
+@pytest.mark.parametrize(("side", "entry", "kept"), [("long", 100.55, True), ("long", 100.12, False), ("short", 103.0, True), ("short", 103.5, False)])
+def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept):
+    # On the long setup's CHoCH bar the last LL is 100.13 and the last HH 103.12: stops at 100.12 and 103.13.
+    # With no minimum distance, only the side check rejects a stop at or beyond the entry.
+    df = long_setup()
+    bar = len(df) - 1
+    structure = market_structure(df, 2)
+    touch = choch_sr.Touch(100.2, 100.0, choch_sr.SUPPORT, bar - 3)
+    params = {**choch_sr.PARAMS, "swing_length": 2, "pip_size": 0.01, "stop_min": 0.0, "stop_max": 100.0}
+
+    row = choch_sr.signal_row(structure, bar, side, touch, entry, 103.0, df.index, 0.01, params)
+
+    assert (row is not None) == kept
+
+
 def test_role_flip_drops_the_pending_touch():
     inside = run(role_flip_setup(100.05), stop_max=1.0)  # closes inside the channel: the touch stays pending
     flipped = run(role_flip_setup(99.95), stop_max=1.0)  # closes below it: the channel turns resistance
 
     assert len(inside) == 1
     assert inside.iloc[0]["time"] == at("04:41")
-    assert inside.iloc[0]["touch_time"] == at("04:32")
+    assert inside.iloc[0]["touch_time"] == at("04:36")  # the 04:35 five-minute bar opens clear of the channel, so contact restarts
     assert inside.iloc[0]["setup_time"] == at("04:39")  # contact continued through the next 5-minute bar
     assert flipped.empty
 
@@ -111,8 +126,9 @@ def test_signals_keep_coming_after_an_earlier_signal():
 
     assert list(signals["time"]) == [at("04:35"), at("05:57")]
     second = signals.iloc[1]
-    assert second["touch_time"] == at("04:32")  # the first touch was never cleared
+    assert second["touch_time"] == at("05:54")  # the touch is still pending, but its current contact started at the retest
     assert second["setup_time"] == at("05:54")  # its latest contact is the retest
+    assert second["plot_start_time"] == at("05:52")  # the retest's chart opens on its own swing, not at 04:32
 
 
 def test_choch_uses_the_matching_touch_with_the_latest_contact():
@@ -121,7 +137,7 @@ def test_choch_uses_the_matching_touch_with_the_latest_contact():
     assert list(signals["time"]) == [at("08:15"), at("09:37")]
     second = signals.iloc[1]
     # The lower channel's touch from 08:12 is still pending, but the dip into the upper channel is fresher.
-    assert (second["zone_top"], second["zone_bottom"]) == (101.7, 101.5)
+    assert (second["channel_top"], second["channel_bottom"]) == (101.7, 101.5)
     assert second["touch_time"] == at("09:34")
     assert second["setup_time"] == at("09:34")
 
@@ -155,7 +171,7 @@ def test_contract_change_rebuilds_state_from_the_new_contract_bars():
     assert list(signals["time"]) == [at("04:35"), at("04:35") + offset]
     second_row = signals.iloc[1]
     assert second_row["touch_time"] == at("04:32") + offset  # the first contract's touch did not carry over
-    assert (second_row["zone_top"], second_row["zone_bottom"]) == (100.2, 100.0)
+    assert (second_row["channel_top"], second_row["channel_bottom"]) == (100.2, 100.0)
 
 
 def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg):
@@ -201,11 +217,11 @@ def test_input_is_not_mutated():
     ("overrides", "message"),
     [
         ({"swing_length": 0}, "swing_length"),
-        ({"zone_unit": "points"}, "zone_unit"),
+        ({"channel_unit": "points"}, "channel_unit"),
         ({"stop_unit": "ticks"}, "stop_unit"),
-        ({"zone_min_width": -0.1}, "zone_min_width"),
-        ({"zone_max_width": 0.0}, "zone_max_width"),
-        ({"zone_min_width": 0.5, "zone_max_width": 0.4}, "zone_min_width"),
+        ({"channel_min_width": -0.1}, "channel_min_width"),
+        ({"channel_max_width": 0.0}, "channel_max_width"),
+        ({"channel_min_width": 0.5, "channel_max_width": 0.4}, "channel_min_width"),
         ({"stop_min": -1.0}, "stop_min"),
         ({"stop_max": 0.0}, "stop_max"),
         ({"stop_min": 0.6, "stop_max": 0.5}, "stop_min"),
@@ -219,9 +235,9 @@ def test_validate_params_rejects_bad_settings(overrides, message):
 def test_defaults_are_the_pine_defaults():
     assert choch_sr.PARAMS == {
         "swing_length": 20,
-        "zone_min_width": 0.1,
-        "zone_max_width": 0.4,
-        "zone_unit": "%",
+        "channel_min_width": 0.1,
+        "channel_max_width": 0.4,
+        "channel_unit": "%",
         "stop_min": 0.1,
         "stop_max": 0.5,
         "stop_unit": "%",

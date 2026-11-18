@@ -5,6 +5,7 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
+from tester_framework.backtest import BAR_DURATIONS
 from tester_framework.sessions import SessionSpec, add_session_columns, in_session_window, session_start_utc
 from tester_framework.utils import decimal_places
 
@@ -112,6 +113,11 @@ def signals_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=columns).sort_values("time") if rows else pd.DataFrame(columns=columns)
 
 
+def bars_after(time, bars: int, trade: dict) -> pd.Timestamp:
+    """The time `bars` bars of the trade's low timeframe after `time`."""
+    return pd.Timestamp(time) + bars * BAR_DURATIONS[trade["low_timeframe"]]
+
+
 def plot_opening_range(fig, trade: dict) -> None:
     """Draw the ORB high/low lines from the session start to the signal bar."""
     start = pd.Timestamp(trade["plot_start_time"])
@@ -132,6 +138,7 @@ def plot_opening_range(fig, trade: dict) -> None:
 __all__ = [
     "Breakout",
     "OPENING_RANGE_PLOT_KEYS",
+    "bars_after",
     "REQUIRED_SESSION_MESSAGE",
     "TIMEFRAME_MINUTES",
     "decimal_places",

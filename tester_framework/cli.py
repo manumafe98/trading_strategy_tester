@@ -38,7 +38,7 @@ def months_arg(value: str) -> tuple[int, ...]:
 class RunConfig:
     strategies: tuple[str, ...]
     asset: str | None
-    timeframe: str | None
+    high_timeframe: str | None
     sessions: str | None
     time_period: str
     data_source: str

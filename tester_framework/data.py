@@ -11,7 +11,7 @@ from .models import AssetConfig
 from .settings import ROOT, TIMEFRAMES
 
 
-__all__ = ["load_data", "normalize_data", "session_labels", "time_period_args"]
+__all__ = ["load_data", "market_session_starts", "normalize_data", "session_labels", "time_period_args"]
 OHLCV = ["open", "high", "low", "close", "volume"]
 RESAMPLE_AGG = {"open": "first", "high": "max", "low": "min", "close": "last", "volume": "sum"}
 LOCAL_RESAMPLE_RULES = {
@@ -84,6 +84,16 @@ def session_labels(index, timezone: str, session_start: str) -> pd.DatetimeIndex
     return (local - _session_offset(session_start)).normalize()
 
 
+def market_session_starts(labels: pd.DatetimeIndex, asset_cfg: AssetConfig) -> pd.DatetimeIndex:
+    """The UTC-naive start of each market session label, as `resample_data` opens daily bars."""
+    return (
+        (pd.DatetimeIndex(labels) + _session_offset(asset_cfg.session_start))
+        .tz_localize(asset_cfg.session_timezone, ambiguous="raise", nonexistent="raise")
+        .tz_convert("UTC")
+        .tz_localize(None)
+    )
+
+
 def resample_data(df: pd.DataFrame, rule: str | None, asset_cfg: AssetConfig | None = None) -> pd.DataFrame:
     if rule:
         agg = RESAMPLE_AGG | ({"contract": "last"} if "contract" in df else {})
@@ -95,12 +105,7 @@ def resample_data(df: pd.DataFrame, rule: str | None, asset_cfg: AssetConfig | N
                 - offset
             )
             df = df.resample(rule, closed="left", label="left").agg(agg)
-            df.index = (
-                (df.index + offset)
-                .tz_localize(asset_cfg.session_timezone, ambiguous="raise", nonexistent="raise")
-                .tz_convert("UTC")
-                .tz_localize(None)
-            )
+            df.index = market_session_starts(df.index, asset_cfg)
         else:
             df = df.resample(rule).agg(agg)
         df = df.dropna(subset=["open", "high", "low", "close"])

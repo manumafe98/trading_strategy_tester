@@ -20,7 +20,7 @@ import numpy as np
 import pandas as pd
 
 from strategy.utils.market_structure import market_structure
-from strategy.utils.sr_channels import EXPOSED_CHANNELS, WIDTH_UNITS, build_channels
+from strategy.utils.sr_channels import EXPOSED_CHANNELS, build_channels, validate_widths, width_in_price
 from tester_framework.data import LOCAL_RESAMPLE_RULES, resample_data
 from tester_framework.utils import decimal_places
 
@@ -28,14 +28,13 @@ from tester_framework.utils import decimal_places
 LOW_TIMEFRAME = "1m"
 PARAMS = {
     "swing_length": 20,
-    "zone_min_width": 0.1,
-    "zone_max_width": 0.4,
-    "zone_unit": "%",
+    "channel_min_width": 0.1,
+    "channel_max_width": 0.4,
+    "channel_unit": "%",
     "stop_min": 0.1,
     "stop_max": 0.5,
     "stop_unit": "%",
 }
-UNITS = WIDTH_UNITS
 EPSILON = 1e-8
 SUPPORT, RESISTANCE = 1, -1
 ROLE_NAMES = {SUPPORT: "support", RESISTANCE: "resistance", 0: "in-price"}
@@ -45,9 +44,9 @@ OUTPUT_COLUMNS = [
     "stop",
     "entry",
     "setup_time",
-    "zone_top",
-    "zone_bottom",
-    "zone_role",
+    "channel_top",
+    "channel_bottom",
+    "channel_role",
     "touch_time",
     "choch_level",
     "swing_time",
@@ -58,8 +57,8 @@ OUTPUT_COLUMNS = [
 PLOT_KEYS = (
     "signal_time",
     "exit_time",
-    "zone_top",
-    "zone_bottom",
+    "channel_top",
+    "channel_bottom",
     "touch_time",
     "choch_level",
     "swing_time",
@@ -71,52 +70,70 @@ PLOT_KEYS = (
 def validate_params(params):
     if params["swing_length"] < 1:
         raise ValueError("swing_length must be at least 1")
-    for unit_key in ("zone_unit", "stop_unit"):
-        if params[unit_key] not in UNITS:
-            raise ValueError(f"{unit_key} must be one of {', '.join(UNITS)}")
-    for low_key, high_key in (("zone_min_width", "zone_max_width"), ("stop_min", "stop_max")):
-        if params[low_key] < 0:
-            raise ValueError(f"{low_key} must be non-negative")
-        if params[high_key] <= 0:
-            raise ValueError(f"{high_key} must be positive")
-        if params[low_key] > params[high_key]:
-            raise ValueError(f"{low_key} must not exceed {high_key}")
+    for names in (("channel_min_width", "channel_max_width", "channel_unit"), ("stop_min", "stop_max", "stop_unit")):
+        validate_widths(*(params[name] for name in names), names=names)
 
 
 class Touch:
-    """A pending touch: the channel it follows, the role it was touched with, its first and latest contact bars."""
+    """A pending touch: the channel it follows, the role it was touched with, the bar it was first seen on, and
+    the first and latest bars of its current contact.
+
+    Contact is interrupted on a bar whose developing high-timeframe range does not overlap the channel, which
+    happens when a high-timeframe bar opens clear of it; the next contact starts a new run.
+    """
 
     # A plain class: the strategy loader runs this module outside sys.modules, which dataclasses need.
     def __init__(self, top: float, bottom: float, role: int, bar: int):
         self.top, self.bottom, self.role = top, bottom, role
-        self.first_bar = self.latest_bar = bar
+        self.first_bar = self.contact_start = self.latest_bar = bar
+        self.in_contact = True
+
+    def update_contact(self, bar: int, overlaps: bool) -> None:
+        if overlaps:
+            if not self.in_contact:
+                self.contact_start = bar
+            self.latest_bar = bar
+        self.in_contact = overlaps
 
     @property
     def midpoint(self) -> float:
         return (self.top + self.bottom) / 2
 
 
+def is_channel(top: float, bottom: float) -> bool:
+    """Whether a channel slot holds a channel: unused slots are NaN, and the Pine leaves 0 for none."""
+    return not (math.isnan(top) or math.isnan(bottom) or top == 0 or bottom == 0)
+
+
 def channel_role(top: float, bottom: float, reference_close: float) -> int:
-    if math.isnan(top) or math.isnan(bottom) or top == 0 or bottom == 0:
+    if not is_channel(top, bottom):
         return 0
     return SUPPORT if reference_close > top else RESISTANCE if reference_close < bottom else 0
 
 
+def match_distance(touch: Touch, top: float, bottom: float, tick_size: float) -> float:
+    """The distance between the touch's and the channel's midpoints, or inf when it exceeds half their summed
+    widths plus a tick."""
+    allowed = ((touch.top - touch.bottom) + (top - bottom)) / 2 + tick_size
+    distance = abs((top + bottom) / 2 - touch.midpoint)
+    return distance if distance <= allowed else math.inf
+
+
 def nearest_channel(touch: Touch, channels: list[tuple[float, float]], tick_size: float) -> tuple[float, float] | None:
-    """The channel whose midpoint is closest to the touch's, within half their summed widths plus a tick."""
+    """The matching channel whose midpoint is closest to the touch's."""
     best, best_distance = None, math.inf
     for top, bottom in channels:
-        allowed = ((touch.top - touch.bottom) + (top - bottom)) / 2 + tick_size
-        distance = abs((top + bottom) / 2 - touch.midpoint)
-        if distance <= allowed and distance < best_distance:
+        distance = match_distance(touch, top, bottom, tick_size)
+        if distance < best_distance:
             best, best_distance = (top, bottom), distance
     return best
 
 
 def stop_distance_ok(entry: float, stop: float, params: dict) -> bool:
-    distance = abs(entry - stop)
-    measured = distance / entry * 100 if params["stop_unit"] == "%" else distance / params["pip_size"]
-    return params["stop_min"] - EPSILON <= measured <= params["stop_max"] + EPSILON
+    unit, pip_size = params["stop_unit"], params["pip_size"]
+    shortest = width_in_price(params["stop_min"] - EPSILON, unit, entry, pip_size)
+    longest = width_in_price(params["stop_max"] + EPSILON, unit, entry, pip_size)
+    return shortest <= abs(entry - stop) <= longest
 
 
 def generate_signals(df, asset, timeframe, params):
@@ -151,7 +168,7 @@ def segment_signals(df, rule, tick_size, params):
     """Signal rows for one contract's bars."""
     high_bars = resample_data(df, rule)
     channels = build_channels(
-        high_bars, params["zone_min_width"], params["zone_max_width"], params["zone_unit"], params["pip_size"]
+        high_bars, params["channel_min_width"], params["channel_max_width"], params["channel_unit"], params["pip_size"]
     )
     tops = channels[[f"top_{slot + 1}" for slot in range(EXPOSED_CHANNELS)]].to_numpy()
     bottoms = channels[[f"bottom_{slot + 1}" for slot in range(EXPOSED_CHANNELS)]].to_numpy()
@@ -180,11 +197,7 @@ def segment_signals(df, rule, tick_size, params):
 
         high_row = high_rows[bar]
         reference_close = reference_closes[high_row]
-        in_force = [
-            (top, bottom)
-            for top, bottom in zip(tops[high_row], bottoms[high_row])
-            if not math.isnan(top) and not math.isnan(bottom) and top != 0 and bottom != 0
-        ]
+        in_force = [(top, bottom) for top, bottom in zip(tops[high_row], bottoms[high_row]) if is_channel(top, bottom)]
 
         # Pending touches follow their channel by midpoint and drop when none matches or its role flips.
         kept = []
@@ -196,8 +209,7 @@ def segment_signals(df, rule, tick_size, params):
             if role != 0 and role != touch.role:
                 continue
             touch.top, touch.bottom = channel
-            if range_high >= touch.bottom and range_low <= touch.top:
-                touch.latest_bar = bar
+            touch.update_contact(bar, range_high >= touch.bottom and range_low <= touch.top)
             kept.append(touch)
         touches = kept
 
@@ -205,12 +217,7 @@ def segment_signals(df, rule, tick_size, params):
             role = channel_role(top, bottom, reference_close)
             if role == 0 or not (range_high >= bottom and range_low <= top):
                 continue
-            midpoint = (top + bottom) / 2
-            already_pending = any(
-                abs(midpoint - touch.midpoint) <= ((touch.top - touch.bottom) + (top - bottom)) / 2 + tick_size
-                for touch in touches
-            )
-            if not already_pending:
+            if not any(match_distance(touch, top, bottom, tick_size) < math.inf for touch in touches):
                 touches.append(Touch(top, bottom, role, bar))
 
         for is_choch, role, side in ((bullish_choch, SUPPORT, "long"), (bearish_choch, RESISTANCE, "short")):
@@ -221,15 +228,14 @@ def segment_signals(df, rule, tick_size, params):
             usable = [t for t in touches if t.role == role and t.first_bar < bar]
             if usable:
                 touch = max(usable, key=lambda t: t.latest_bar)
-                row = setup_row(structure, bar, side, touch, closes[bar], reference_close, times, params)
+                row = signal_row(structure, bar, side, touch, closes[bar], reference_close, times, tick_size, params)
                 if row is not None:
                     rows.append(row)
     return rows
 
 
-def setup_row(structure, bar, side, touch, entry, reference_close, times, params):
+def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_size, params):
     """The signal for a CHoCH that uses `touch`, or None when the stop fails the side or distance checks."""
-    tick_size = float(params["tick_size"])
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
     swing = structure.iloc[bar]
@@ -246,7 +252,7 @@ def setup_row(structure, bar, side, touch, entry, reference_close, times, params
         return None
     # The marked swing is confirmed `swing_length` bars after its own bar.
     marked_bar = times.get_loc(marked_time) - params["swing_length"]
-    touch_time = times[touch.first_bar]
+    touch_time = times[touch.contact_start]
     swing_time = swing[f"{prefix}_break_swing_time"]
     stop_swing_time = times[marked_bar]
     return {
@@ -255,9 +261,9 @@ def setup_row(structure, bar, side, touch, entry, reference_close, times, params
         "stop": stop,
         "entry": entry,
         "setup_time": times[touch.latest_bar],
-        "zone_top": touch.top,
-        "zone_bottom": touch.bottom,
-        "zone_role": ROLE_NAMES[channel_role(touch.top, touch.bottom, reference_close)],
+        "channel_top": touch.top,
+        "channel_bottom": touch.bottom,
+        "channel_role": ROLE_NAMES[channel_role(touch.top, touch.bottom, reference_close)],
         "touch_time": touch_time,
         "choch_level": swing[f"{prefix}_break_price"],
         "swing_time": swing_time,
@@ -281,14 +287,14 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
         type="rect",
         x0=touch_time,
         x1=pd.Timestamp(trade["exit_time"]),
-        y0=trade["zone_bottom"],
-        y1=trade["zone_top"],
+        y0=trade["channel_bottom"],
+        y1=trade["channel_top"],
         fillcolor="rgba(0,200,0,0.15)" if is_long else "rgba(255,0,0,0.15)",
         line={"color": color, "width": 1},
         name=f"{role} channel",
     )
     # The touch comes from above a support channel and from below a resistance channel.
-    touch_price = trade["zone_top"] if is_long else trade["zone_bottom"]
+    touch_price = trade["channel_top"] if is_long else trade["channel_bottom"]
     fig.add_scatter(
         x=[touch_time],
         y=[touch_price],

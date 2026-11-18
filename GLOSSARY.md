@@ -12,7 +12,7 @@ A price band built from pivots. It is called support when it lies below the refe
 _Avoid_: S/R zone, level
 
 **Touch**:
-A low-timeframe price range overlapping a support/resistance channel: the developing high-timeframe bar's range, assembled from closed low-timeframe bars, reaching into a support or resistance channel. A pending touch keeps its first and latest contact bar.
+A low-timeframe price range overlapping a support/resistance channel: the developing high-timeframe bar's range, assembled from closed low-timeframe bars, reaching into a support or resistance channel. A pending touch keeps the first and latest bar of its current contact; a high-timeframe bar that opens clear of the channel interrupts the contact, and the next contact starts a new one.
 
 **Fair value gap (FVG)**:
 A three-bar price gap where the first bar's high stays below the third bar's low (bullish), or the first bar's low stays above the third bar's high (bearish).
@@ -68,7 +68,7 @@ _Avoid_: straddling trade, crossover trade
 
 **Signal**:
 A strategy's request to enter: a time, a side, and a stop.
-_Avoid_: setup, order
+_Avoid_: order
 
 **Close entry**:
 A signal that fills at a given price on its own bar instead of at the next bar's open.

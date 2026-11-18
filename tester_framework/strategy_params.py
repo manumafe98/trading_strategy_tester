@@ -8,11 +8,13 @@ import types
 __all__ = [
     "RESERVED_PARAMS",
     "check_declared_params",
+    "combination_count",
+    "expand_strategy_params",
     "format_param_value",
     "params_label",
     "parse_param_value",
     "parse_strategy_params",
-    "resolve_strategy_params",
+    "strategy_param_values",
 ]
 
 
@@ -114,11 +116,10 @@ def params_label(defaults: dict[str, object], params: dict[str, object]) -> str:
     return " ".join(f"{key}={format_param_value(value)}" for key, value in params.items() if value != defaults[key])
 
 
-def resolve_strategy_params(strategies: dict[str, types.ModuleType], text: str | None) -> dict[str, list[dict[str, object]]]:
-    """Every parameter combination of each strategy: defaults merged with each `--strategy_params` combination.
-
-    Combinations are the cartesian product of the listed values, in the order the names were given.
-    """
+def strategy_param_values(
+    strategies: dict[str, types.ModuleType], text: str | None
+) -> dict[str, dict[str, list[object]]]:
+    """Each strategy's distinct parsed values per `--strategy_params` name, in the order given."""
     overrides = parse_strategy_params(text)
     resolved = {}
     for name, strategy in strategies.items():
@@ -127,14 +128,33 @@ def resolve_strategy_params(strategies: dict[str, types.ModuleType], text: str |
         for key in overrides:
             if key not in declared:
                 raise ValueError(f"--strategy_params {key} is not declared in {name} PARAMS")
-        values = [
-            list(dict.fromkeys(parse_param_value(key, raw, declared[key], param_types.get(key)) for raw in raws))
+        resolved[name] = {
+            key: list(dict.fromkeys(parse_param_value(key, raw, declared[key], param_types.get(key)) for raw in raws))
             for key, raws in overrides.items()
-        ]
+        }
+    return resolved
+
+
+def combination_count(values: dict[str, list[object]]) -> int:
+    """How many parameter combinations `values` expands to, without building them."""
+    return math.prod(len(listed) for listed in values.values())
+
+
+def expand_strategy_params(
+    strategies: dict[str, types.ModuleType], values: dict[str, dict[str, list[object]]]
+) -> dict[str, list[dict[str, object]]]:
+    """Every parameter combination of each strategy: defaults merged with each combination of its values.
+
+    Combinations are the cartesian product of the listed values, in the order the names were given; each is
+    checked by the strategy's `validate_params`.
+    """
+    resolved = {}
+    for name, strategy in strategies.items():
+        declared = getattr(strategy, "PARAMS", {})
+        validate_params = getattr(strategy, "validate_params", None)
         combinations = []
-        for combination in itertools.product(*values):
-            params = {**declared, **dict(zip(overrides, combination))}
-            validate_params = getattr(strategy, "validate_params", None)
+        for combination in itertools.product(*values[name].values()):
+            params = {**declared, **dict(zip(values[name], combination))}
             if callable(validate_params):
                 try:
                     validate_params(dict(params))

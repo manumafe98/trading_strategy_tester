@@ -19,16 +19,16 @@ from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
 from .models import OPERATIONS, IntrabarRule, TargetFill
 from .reports import fill_rule_tags, format_metric, reset_output_dirs, write_results_html
-from .runner import cache_data, run_variants
-from .sessions import SessionSpec, parse_sessions, session_label
+from .runner import batch_label, cache_data, run_variants
+from .sessions import SessionSpec, parse_sessions
 from .split import (
     SELECT_BY, Split, oos_cutoff, rank_variants, selection_tags, split_tags, validate_selection_args, validate_split_args,
 )
 from .settings import DEFAULT_MAX_VARIANTS, DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
-from .strategy_params import params_label, resolve_strategy_params
+from .strategy_params import combination_count, expand_strategy_params, params_label, strategy_param_values
 from .types import VariantBatchTask
-from .utils import csv_items
+from .utils import csv_items, variant_count
 
 
 __all__ = ["main", "parser", "run"]
@@ -39,14 +39,7 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantBatchTask) -> str:
-    session = session_label(task["session"])
-    parts = [task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"]]
-    if session:
-        parts.append(session)
-    if task["params_label"]:
-        parts.append(task["params_label"])
-    parts.append(f'{len(task["variants"])} variants')
-    return " ".join(parts)
+    return f'{batch_label(task)} {variant_count(len(task["variants"]))}'
 
 
 def status_lines(
@@ -253,9 +246,9 @@ def run(config: RunConfig) -> None:
         raise ValueError("--session_exit requires --sessions with a session window")
     session_variants = session_specs or [None]
     validate_required_flags(strategies, session_specs)
-    strategy_params = resolve_strategy_params(strategies, config.strategy_params)
+    param_values = strategy_param_values(strategies, config.strategy_params)
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
-    timeframes = list(dict.fromkeys(csv_items(config.timeframe) or DEFAULT_TIMEFRAMES))
+    timeframes = list(dict.fromkeys(csv_items(config.high_timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
     variants = {ratio: exit_mode_variants(config.exit_mode, ratio) for ratio in ratios}
     if not any(variants.values()):
@@ -291,7 +284,7 @@ def run(config: RunConfig) -> None:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
     low_timeframe_flags = list(dict.fromkeys(csv_items(config.low_timeframe)))
     # One entry per strategy, high timeframe and low timeframe; each is a batch per asset and session window.
-    timeframe_pairs = []
+    strategy_high_low_timeframes = []
     for strategy_name, strategy in strategies.items():
         declared = getattr(strategy, "LOW_TIMEFRAME", None)
         if low_timeframe_flags and declared is None:
@@ -303,14 +296,16 @@ def run(config: RunConfig) -> None:
                 for asset in assets:
                     if low_timeframe not in asset_configs[asset].bars_per_year:
                         raise ValueError(f"Missing bars_per_year for {asset} {low_timeframe}")
-                if low_timeframe_flags:
-                    low, high = BAR_DURATIONS[low_timeframe], BAR_DURATIONS[timeframe]
-                    if low >= high:
-                        raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must be smaller than high timeframe {timeframe}")
-                    if high % low:
-                        raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
-                timeframe_pairs.append((strategy_name, strategy, timeframe, low_timeframe))
-    batch_count = sum(len(strategy_params[name]) for name, *_ in timeframe_pairs) * len(assets) * len(session_variants)
+                # An equal low timeframe is a single-timeframe run.
+                source = "--low_timeframe" if low_timeframe_flags else f"{strategy_name} LOW_TIMEFRAME"
+                low, high = BAR_DURATIONS[low_timeframe], BAR_DURATIONS[timeframe]
+                if low > high:
+                    raise ValueError(f"{source}: low timeframe {low_timeframe} must not exceed high timeframe {timeframe}")
+                if high % low:
+                    raise ValueError(f"{source}: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
+                strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
+    combinations = {name: combination_count(values) for name, values in param_values.items()}
+    batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
     task_count = batch_count * len(variant_pairs)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
@@ -318,13 +313,15 @@ def run(config: RunConfig) -> None:
         raise ValueError("--max_variants must be a positive integer")
     if task_count > config.max_variants:
         raise ValueError(f"{task_count} variants exceed --max_variants {config.max_variants}; pass a larger --max_variants to run them")
-    print(f"{task_count} variants", file=sys.stderr)
+    # Combinations are built and validated only once the run is known to fit the cap.
+    strategy_params = expand_strategy_params(strategies, param_values)
+    print(variant_count(task_count), file=sys.stderr)
     rows = []
     splits: list[Split] = []
     outputs_reset = False
     status = StatusDisplay(workers, started)
     strategy_label = ", ".join(strategies)
-    status.update(phase="Preparing", detail=f"{strategy_label} | {task_count} variants", completed=0, total=task_count)
+    status.update(phase="Preparing", detail=f"{strategy_label} | {variant_count(task_count)}", completed=0, total=task_count)
     status.start()
 
     try:
@@ -335,7 +332,7 @@ def run(config: RunConfig) -> None:
                 asset_cfg = asset_configs[asset]
                 risk_pct = risks[asset]
                 timeframe_groups = {}
-                for strategy_name, strategy, timeframe, low_timeframe in timeframe_pairs:
+                for strategy_name, strategy, timeframe, low_timeframe in strategy_high_low_timeframes:
                     timeframe_groups.setdefault(low_timeframe, []).append((strategy_name, strategy, timeframe))
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
@@ -561,7 +558,7 @@ def main() -> None:
         config = RunConfig(
             strategies=strategies,
             asset=args.asset,
-            timeframe=args.high_timeframe,
+            high_timeframe=args.high_timeframe,
             sessions=args.sessions,
             time_period=args.time_period,
             data_source=args.data_source,

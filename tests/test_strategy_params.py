@@ -174,8 +174,8 @@ def test_variant_labels_show_only_non_default_parameter_values(monkeypatch, tmp_
     (task,) = _run(monkeypatch, tmp_path, test_asset_cfg, {"test": strategy}, strategy_params="mode=break;swing_length=20")
     (plain_task,) = _run(monkeypatch, tmp_path, test_asset_cfg, {"test": plain})
 
-    assert cli.variant_label(task) == "test TEST 1h 1h mode=break 1 variants"
-    assert cli.variant_label(plain_task) == "test TEST 1h 1h 1 variants"
+    assert cli.variant_label(task) == "test TEST 1h 1h mode=break 1 variant"
+    assert cli.variant_label(plain_task) == "test TEST 1h 1h 1 variant"
 
 
 def test_variant_pages_list_every_parameter_value(monkeypatch, tmp_path, base_data, test_asset_cfg):
@@ -296,6 +296,29 @@ def test_a_run_over_max_variants_fails_before_data_loads_counting_rr_and_exit_mo
         )
 
 
+def test_max_variants_is_enforced_before_any_combination_is_built_or_validated(monkeypatch, test_asset_cfg):
+    def validate_params(_params):
+        pytest.fail("validate_params ran before the variant cap was checked")
+
+    strategy, _ = _recording_strategy({"swing_length": 20, "mode": "close"}, validate_params=validate_params)
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
+
+    # 300 x 300 combinations; a repeated value counts once.
+    lengths = ",".join(str(value) for value in range(1, 301))
+    modes = ",".join(f"m{value}" for value in range(300))
+    with pytest.raises(ValueError, match=re.escape("90000 variants exceed --max_variants 2000")):
+        cli.run(_config(strategy_params=f"swing_length={lengths},1;mode={modes}"))
+
+
+def test_a_single_variant_run_prints_1_variant(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    strategy, _ = _recording_strategy({"swing_length": 20})
+
+    _run(monkeypatch, tmp_path, test_asset_cfg, {"test": strategy})
+
+    assert capsys.readouterr().err.splitlines()[0] == "1 variant"
+
+
 def test_max_variants_defaults_to_2000(monkeypatch, test_asset_cfg):
     values = ",".join(str(value) for value in range(1, 2002))
 
@@ -356,6 +379,20 @@ def test_the_results_page_shows_the_params_column(monkeypatch, tmp_path, base_da
 
     assert "<th>Low TF</th><th>Params</th><th>RR</th>" in html
     assert '<span class="pill plain">swing_length=10</span>' in html
+
+
+def test_the_all_defaults_row_has_an_empty_params_cell(monkeypatch, tmp_path, base_data, test_asset_cfg):
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path / "results")
+    monkeypatch.setattr(runner, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: pd.DataFrame()))
+    rows = [
+        *runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, strategy_params={"swing_length": 10}, params_label="swing_length=10")),
+        *runner.run_variants(_task(base_data, tmp_path, test_asset_cfg)),
+    ]
+    columns = result_columns("all", include_params=True)
+
+    html = reports.write_results_html(pd.DataFrame(rows), _config(strategies=("ema50",)), columns).read_text(encoding="utf-8")
+
+    assert '<span class="pill plain"></span>' not in html
 
 
 def test_split_mode_ranks_parameter_combinations_together_within_a_strategy_and_asset(monkeypatch, tmp_path, test_asset_cfg):

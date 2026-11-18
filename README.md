@@ -154,7 +154,7 @@ The input `df` is shared across timeframes; strategies **must not mutate** it. C
 LOW_TIMEFRAME = "5m"  # data loaded at 5m, signals generated per --high_timeframe
 ```
 
-`LOW_TIMEFRAME` is the default; `--low_timeframe 1m,5m` runs a declaring strategy on each listed low timeframe as its own variants. Each listed value must be a configured timeframe with `bars_per_year` for every asset, strictly smaller than each high timeframe, and divide it evenly. A strategy without `LOW_TIMEFRAME` rejects the flag. The results table shows `High TF` and `Low TF`, and variant labels, page titles and trade chart file names name both.
+`LOW_TIMEFRAME` is the default; `--low_timeframe 1m,5m` runs a declaring strategy on each listed low timeframe as its own variants. Each listed value, and the `LOW_TIMEFRAME` default, must be a configured timeframe with `bars_per_year` for every asset, no larger than each high timeframe, and divide it evenly. A low timeframe equal to the high timeframe is a single-timeframe run. A strategy without `LOW_TIMEFRAME` rejects the flag. The results table shows `High TF` and `Low TF`, and variant labels, page titles and trade chart file names name both.
 
 Strategies can add indicators to trade charts with an optional hook:
 
@@ -165,7 +165,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
-A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--high_timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. High-timeframe bars are clock-aligned, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
+A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--high_timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. Intraday high-timeframe bars are clock-aligned and daily ones open at the asset's market session start, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
 
 Any extra signal column beyond `time`, `side`, `stop`, `entry`, and `setup_time` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
 
@@ -176,7 +176,7 @@ def calculate_metrics(data, signals, trades, asset, timeframe, params):
     return {"Strategy metric": value}
 ```
 
-`params` contains the effective RR, exit mode, operation, risk percentage, capital, costs flag, time period, data source, and asset tick size. The hook is called even when a variant has no completed trades.
+`params` contains the strategy parameters, the session window, the effective RR, exit mode, operation, risk percentage, capital, costs flag, time period, data source, and the asset's tick size and pip size. The hook is called even when a variant has no completed trades.
 
 ### Strategy parameters
 
@@ -204,7 +204,7 @@ Each combination of the listed values, the cartesian product in the order the na
 
 Values are parsed to the default's type: whole numbers for int, finite numbers for float, `true`/`false` for bool, and text for str. `none` is accepted only for a `None` default. With a `PARAM_TYPES` entry, any other value must parse to that type; without one, it stays text. String values must not contain `,` or `;`. An undeclared name, a value that does not parse, a name given twice, or a name some strategy in `--strategies` does not declare fails before data loads. `validate_params` then receives every declared parameter of each combination, defaults filled in, also when the flag is omitted; a `ValueError` it raises is reported with the strategy name before data loads.
 
-The run prints its variant count, RR and exit modes included, to stderr before data loads, and refuses more than 2,000 variants unless `--max_variants N` raises the cap.
+The run prints its variant count, RR and exit modes included, to stderr before data loads, and refuses more than 2,000 variants unless `--max_variants N` raises the cap. The cap is checked on the product of the value counts, before any combination is built or passed to `validate_params`.
 
 `params` in `generate_signals`, `plot_indicators` and `calculate_metrics` holds every declared parameter with defaults filled in. Each variant page lists every parameter value. The results table's Params column and the progress display's variant labels show the values that differ from their defaults; the column is hidden when no variant has one. In split mode, parameter combinations are ranked with the other variants of their strategy and asset. A strategy without `PARAMS` behaves as before.
 

@@ -4,6 +4,7 @@ import pandas as pd
 
 from strategy.utils.fvg import find_qualifying_fvg, track_fvgs_to_bar
 from strategy.utils.orb import (
+    bars_after,
     decimal_places,
     find_breakouts,
     OPENING_RANGE_PLOT_KEYS,
@@ -79,7 +80,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
     plot_opening_range(fig, trade)
 
     form_time = pd.Timestamp(trade["fvg_form_time"])
-    box_end = form_time + pd.Timedelta(minutes=FVG_BOX_BARS)
+    box_end = bars_after(form_time, FVG_BOX_BARS, trade)
     is_bull = trade["side"] == "long"
     color = "rgba(0,200,0,0.15)" if is_bull else "rgba(255,0,0,0.15)"
     line_color = "green" if is_bull else "red"

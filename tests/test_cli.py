@@ -55,7 +55,7 @@ def test_status_lines():
 def test_variant_label_names_both_timeframes():
     task = {"strategy": "orb_candle", "asset": "MGC", "timeframe": "15m", "low_timeframe": "5m", "session": None, "params_label": "", "variants": ((1, "fixed"),)}
 
-    assert cli.variant_label(task) == "orb_candle MGC 15m 5m 1 variants"
+    assert cli.variant_label(task) == "orb_candle MGC 15m 5m 1 variant"
 
 
 def test_main_maps_new_cli_flags(monkeypatch):
@@ -128,7 +128,7 @@ def test_main_maps_high_timeframe_to_config(monkeypatch):
     monkeypatch.setattr(cli, "run", configs.append)
     cli.main()
 
-    assert configs[0].timeframe == "15m,1h"
+    assert configs[0].high_timeframe == "15m,1h"
 
 
 def test_main_maps_low_timeframe_to_config(monkeypatch):
@@ -146,17 +146,31 @@ def test_main_maps_low_timeframe_to_config(monkeypatch):
     [
         (SimpleNamespace(), {"low_timeframe": "1h"}, "test does not declare LOW_TIMEFRAME"),
         (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "7m"}, "Unknown low timeframe 7m"),
-        (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "1h"}, "low timeframe 1h must be smaller than high timeframe 1h"),
-        (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "1d"}, "low timeframe 1d must be smaller than high timeframe 1h"),
         (
             SimpleNamespace(LOW_TIMEFRAME="5m"),
-            {"timeframe": "5m", "low_timeframe": "10m"},
-            "low timeframe 10m must be smaller than high timeframe 5m",
+            {"low_timeframe": "1d"},
+            "--low_timeframe: low timeframe 1d must not exceed high timeframe 1h",
         ),
         (
             SimpleNamespace(LOW_TIMEFRAME="5m"),
-            {"timeframe": "5m", "low_timeframe": "2m"},
-            "low timeframe 2m must divide high timeframe 5m evenly",
+            {"high_timeframe": "5m", "low_timeframe": "10m"},
+            "--low_timeframe: low timeframe 10m must not exceed high timeframe 5m",
+        ),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"high_timeframe": "5m", "low_timeframe": "2m"},
+            "--low_timeframe: low timeframe 2m must divide high timeframe 5m evenly",
+        ),
+        # The rule applies to the declared default as well, and the message names it.
+        (
+            SimpleNamespace(LOW_TIMEFRAME="5m"),
+            {"high_timeframe": "2m"},
+            "test LOW_TIMEFRAME: low timeframe 5m must not exceed high timeframe 2m",
+        ),
+        (
+            SimpleNamespace(LOW_TIMEFRAME="2m"),
+            {"high_timeframe": "5m"},
+            "test LOW_TIMEFRAME: low timeframe 2m must divide high timeframe 5m evenly",
         ),
         (SimpleNamespace(LOW_TIMEFRAME="5m"), {"low_timeframe": "15m"}, "Missing bars_per_year for TEST 15m"),
     ],
@@ -170,6 +184,24 @@ def test_run_rejects_invalid_low_timeframes_before_loading_data(monkeypatch, tes
 
     with pytest.raises(ValueError, match=message):
         cli.run(_config(**overrides))
+
+
+@pytest.mark.parametrize("overrides", [{"low_timeframe": "1h"}, {}])
+def test_low_timeframe_equal_to_the_high_timeframe_is_a_single_timeframe_run(monkeypatch, test_asset_cfg, overrides):
+    loaded = []
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(LOW_TIMEFRAME="1h", generate_signals=None))
+
+    def load_data(_asset, _cfg, timeframe, *_args):
+        loaded.append(timeframe)
+        raise RuntimeError("stop after validation")
+
+    monkeypatch.setattr(cli, "load_data", load_data)
+
+    with pytest.raises(RuntimeError, match="stop after validation"):
+        cli.run(_config(**overrides))
+
+    assert loaded == ["1h"]
 
 
 def test_timeframe_flag_is_rejected_with_a_message_naming_high_timeframe(capsys):
@@ -195,7 +227,7 @@ def test_run_rejects_negative_trade_html(monkeypatch, test_asset_cfg):
             RunConfig(
                 strategies=("test",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -218,7 +250,7 @@ def test_run_rejects_invalid_calendar_filters(monkeypatch, test_asset_cfg, field
     config = RunConfig(
         strategies=("test",),
         asset="TEST",
-        timeframe="1h",
+        high_timeframe="1h",
         sessions=None,
         time_period="1d",
         data_source="local",
@@ -296,7 +328,7 @@ def test_run_loads_low_timeframe_once_for_all_high_timeframes(
         RunConfig(
             strategies=("one", "two"),
             asset="TEST",
-            timeframe="1h,15m",
+            high_timeframe="1h,15m",
             sessions=None,
             time_period="1d",
             data_source="local",
@@ -395,7 +427,7 @@ def test_run_waits_for_executor_before_temp_cleanup_on_failure(monkeypatch, tmp_
             RunConfig(
                 strategies=("test",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -494,7 +526,7 @@ def test_run_requires_strategy_owned_sessions(monkeypatch, test_asset_cfg):
             RunConfig(
                 strategies=("orb_candle",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -519,7 +551,7 @@ def test_run_rejects_unknown_required_flag(monkeypatch, test_asset_cfg):
             RunConfig(
                 strategies=("test",),
                 asset="TEST",
-                timeframe="1h",
+                high_timeframe="1h",
                 sessions=None,
                 time_period="1d",
                 data_source="local",
@@ -538,7 +570,7 @@ def _config(**overrides) -> RunConfig:
     values = dict(
         strategies=("test",),
         asset="TEST",
-        timeframe="1h",
+        high_timeframe="1h",
         sessions=None,
         time_period="1d",
         data_source="local",
@@ -568,7 +600,7 @@ def test_run_rejects_risk_override_for_asset_not_in_run(monkeypatch, test_asset_
     ("overrides", "message"),
     [
         ({"asset": "NOPE"}, "Unknown asset NOPE"),
-        ({"timeframe": "7h"}, "Unknown timeframe 7h"),
+        ({"high_timeframe": "7h"}, "Unknown timeframe 7h"),
         ({"capital": 0}, "--capital"),
         ({"capital": -1}, "--capital"),
         ({"capital": math.nan}, "--capital"),

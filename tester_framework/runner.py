@@ -14,6 +14,7 @@ from .settings import FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS
 from .split import entered_in_sample
 from .strategy_loader import load_strategy
 from .types import VariantBatchTask
+from .utils import variant_parts
 
 
 def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, str, tuple[str, ...]]:
@@ -30,6 +31,27 @@ def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, 
     return str(values_path), str(index_path), tuple(data.columns)
 
 
+def batch_label(task: VariantBatchTask) -> str:
+    """The variant batch a task runs: strategy, asset, timeframes, session window and changed parameters."""
+    return " ".join(
+        variant_parts(
+            task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"],
+            session_label(task["session"]), task["params_label"],
+        )
+    )
+
+
+def strategy_hook_params(task: VariantBatchTask) -> dict[str, object]:
+    """The `params` a task's `generate_signals` receives: its strategy parameters and the asset's tick, pip and
+    session window."""
+    return {
+        **task["strategy_params"],
+        "tick_size": task["asset_cfg"].tick_size,
+        "pip_size": task["asset_cfg"].pip_size,
+        "session": task["session"],
+    }
+
+
 def _run_variant(
     task: VariantBatchTask,
     data: pd.DataFrame,
@@ -37,6 +59,7 @@ def _run_variant(
     signals: pd.DataFrame,
     risk_reward_ratio: float,
     exit_mode: str,
+    hook_params: dict[str, object],
 ) -> dict[str, object]:
     session = session_label(task["session"])
     metrics, trades = run_backtest(
@@ -62,7 +85,7 @@ def _run_variant(
         intrabar=task["intrabar"],
     )
     params = {
-        **task["strategy_params"],
+        **hook_params,
         "risk_reward_ratio": risk_reward_ratio,
         "exit_mode": exit_mode,
         "operation": task["operation"],
@@ -71,9 +94,6 @@ def _run_variant(
         "with_costs": task["with_costs"],
         "time_period": task["time_period"],
         "data_source": task["data_source"],
-        "tick_size": task["asset_cfg"].tick_size,
-        "pip_size": task["asset_cfg"].pip_size,
-        "session": task["session"],
     }
     custom_metrics = strategy_metrics(strategy, data, signals, trades, task["asset"], task["timeframe"], params)
     charted = 0
@@ -121,13 +141,8 @@ def _run_variant(
 
 def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
     values = index_values = data = signals = None
-    session = session_label(task["session"])
-    batch_parts = [task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"]]
-    if session:
-        batch_parts.append(session)
-    if task["params_label"]:
-        batch_parts.append(task["params_label"])
-    batch_label = " ".join(batch_parts)
+    label = batch_label(task)
+    hook_params = strategy_hook_params(task)
     try:
         try:
             values_path, index_path, columns = task["data_cache"]
@@ -140,29 +155,24 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
                 data,
                 asset=task["asset"],
                 timeframe=task["timeframe"],
-                params={
-                    **task["strategy_params"],
-                    "tick_size": task["asset_cfg"].tick_size,
-                    "pip_size": task["asset_cfg"].pip_size,
-                    "session": task["session"],
-                },
+                params=hook_params,
             )
             signals = filter_signals(signals, task["session"])
         except MemoryError as exc:
-            raise RuntimeError(f"{batch_label}: insufficient memory; retry with fewer --workers") from exc
+            raise RuntimeError(f"{label}: insufficient memory; retry with fewer --workers") from exc
         except (FileNotFoundError, RuntimeError, ValueError) as exc:
             detail = str(exc) or type(exc).__name__
-            raise RuntimeError(f"{batch_label}: {detail}") from exc
+            raise RuntimeError(f"{label}: {detail}") from exc
         rows = []
         for risk_reward_ratio, exit_mode in task["variants"]:
-            label = f"{batch_label} {risk_reward_ratio:g}R {exit_mode}"
+            variant = f"{label} {risk_reward_ratio:g}R {exit_mode}"
             try:
-                rows.append(_run_variant(task, data, strategy, signals, risk_reward_ratio, exit_mode))
+                rows.append(_run_variant(task, data, strategy, signals, risk_reward_ratio, exit_mode, hook_params))
             except MemoryError as exc:
-                raise RuntimeError(f"{label}: insufficient memory; retry with fewer --workers") from exc
+                raise RuntimeError(f"{variant}: insufficient memory; retry with fewer --workers") from exc
             except (FileNotFoundError, RuntimeError, ValueError) as exc:
                 detail = str(exc) or type(exc).__name__
-                raise RuntimeError(f"{label}: {detail}") from exc
+                raise RuntimeError(f"{variant}: {detail}") from exc
         return rows
     finally:
         # DataFrames built on the cached arrays may outlive this call (pytest
@@ -171,4 +181,4 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
         values = index_values = data = signals = None
 
 
-__all__ = ["cache_data", "run_variants"]
+__all__ = ["batch_label", "cache_data", "run_variants"]
