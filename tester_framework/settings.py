@@ -40,7 +40,7 @@ def load_assets() -> dict[str, AssetConfig]:
     if not isinstance(raw_assets, dict):
         raise ValueError(f"{path} must contain an object of asset configurations")
     assets = {}
-    required = set(AssetConfig.__dataclass_fields__)
+    required = set(AssetConfig.__dataclass_fields__) - {"pip_size"}
     for name, raw in raw_assets.items():
         if not isinstance(raw, dict):
             raise ValueError(f"{name} asset config must be an object")
@@ -69,6 +69,7 @@ def load_assets() -> dict[str, AssetConfig]:
                 session_timezone=str(raw["session_timezone"]),
                 session_start=str(raw["session_start"]),
                 bars_per_year={str(tf): value for tf, value in raw_bars.items()},
+                pip_size=float(raw["pip_size"]) if "pip_size" in raw else None,
             )
         except (TypeError, ValueError) as exc:
             raise ValueError(f"{name} invalid asset config: {exc}") from exc
