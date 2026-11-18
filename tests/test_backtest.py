@@ -1728,6 +1728,28 @@ def test_trailing_stop_entry_trails_from_the_fill_on_its_fill_bar(test_asset_cfg
     assert [(t["exit_i"], t["exit_reason"], t["exit"]) for t in trades] == [(0, ExitReason.STOP, 101.5)]
 
 
+def test_partial_stop_entry_takes_its_first_target_and_stop_on_its_fill_bar(test_asset_cfg):
+    data = _bars([100.0, 101.7, 99.3, 99.4], [99.4] * 4)
+
+    _, trades = _run(data, [_stop_entry(data, "long", 100.5, 99.5)], test_asset_cfg, risk_reward_ratio=2, exit_mode="partial")
+
+    assert [(f["exit_i"], f["exit_reason"], f["raw_exit"], f["qty"]) for f in trades[0]["exits"]] == [
+        (0, ExitReason.TARGET, 101.5, 50.0),
+        (0, ExitReason.STOP, 99.5, 50.0),
+    ]
+
+
+def test_signals_may_mix_close_entries_and_stop_entries_across_rows():
+    signals = pd.DataFrame(
+        [
+            {"time": pd.Timestamp("2025-01-01 00:00"), "side": "long", "stop": 99.0, "entry": 100.0},
+            {"time": pd.Timestamp("2025-01-01 01:00"), "side": "long", "stop": 99.0, "stop_entry": 100.5},
+        ]
+    )
+
+    assert len(normalize_signals(signals)) == 2
+
+
 def test_signal_with_both_entry_and_stop_entry_is_an_error():
     signals = pd.DataFrame(
         [{"time": pd.Timestamp("2025-01-01"), "side": "long", "stop": 99.0, "entry": 100.0, "stop_entry": 100.5}]
