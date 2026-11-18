@@ -11,7 +11,8 @@ import math
 
 import numpy as np
 import pandas as pd
-from numpy.lib.stride_tricks import sliding_window_view
+
+from strategy.utils.pivots import pivot_high_bars
 
 
 PIVOT_PERIOD = 10
@@ -27,23 +28,18 @@ def pivot_highs(values: np.ndarray, period: int = PIVOT_PERIOD) -> np.ndarray:
 
     The pivot may equal a bar on its left but must be strictly above every bar on its right.
     """
-    return _pivots(np.asarray(values, dtype=float), period)
+    return _confirmed(np.asarray(values, dtype=float), period)
 
 
 def pivot_lows(values: np.ndarray, period: int = PIVOT_PERIOD) -> np.ndarray:
     """Mirror of `pivot_highs`: equal allowed on the left, strictly below every bar on the right."""
-    return _pivots(-np.asarray(values, dtype=float), period)
+    return _confirmed(-np.asarray(values, dtype=float), period)
 
 
-def _pivots(values: np.ndarray, period: int) -> np.ndarray:
+def _confirmed(values: np.ndarray, period: int) -> np.ndarray:
+    # A pivot is confirmed `period` bars after its own bar.
     confirmed = np.zeros(len(values), dtype=bool)
-    if len(values) < 2 * period + 1:
-        return confirmed
-    windows = sliding_window_view(values, 2 * period + 1)
-    center = windows[:, period]
-    left_ok = (windows[:, :period] <= center[:, None]).all(axis=1)
-    right_ok = (windows[:, period + 1 :] < center[:, None]).all(axis=1)
-    confirmed[2 * period :] = left_ok & right_ok
+    confirmed[period:] = pivot_high_bars(values, period)[: len(values) - period]
     return confirmed
 
 

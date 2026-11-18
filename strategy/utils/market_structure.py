@@ -11,22 +11,10 @@ import math
 import numpy as np
 import pandas as pd
 
+from strategy.utils.pivots import pivot_high_bars
+
 
 CONFIRMATIONS = ("close", "wick")
-
-
-def _swing_high_bars(highs: np.ndarray, swing_length: int) -> np.ndarray:
-    """Per bar, whether it is a swing high: the highest of `swing_length` bars on each side."""
-    is_swing = np.zeros(len(highs), dtype=bool)
-    if len(highs) < 2 * swing_length + 1:
-        return is_swing
-    windows = np.lib.stride_tricks.sliding_window_view(highs, 2 * swing_length + 1)
-    value = windows[:, swing_length]
-    left = windows[:, :swing_length].max(axis=1)
-    right = windows[:, swing_length + 1 :].max(axis=1)
-    # Tie rule (unverified against ta.pivothigh): an equal high on the left is allowed, one on the right is not.
-    is_swing[swing_length:-swing_length] = (left <= value) & (right < value)
-    return is_swing
 
 
 def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "close") -> pd.DataFrame:
@@ -57,9 +45,8 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
     high_source = closes if confirmation == "close" else highs
     low_source = closes if confirmation == "close" else lows
     n = len(df)
-    swing_high_bars = _swing_high_bars(highs, swing_length)
-    # A swing low of the lows is a swing high of their negation, with the same tie rule.
-    swing_low_bars = _swing_high_bars(-lows, swing_length)
+    swing_high_bars = pivot_high_bars(highs, swing_length)
+    swing_low_bars = pivot_high_bars(-lows, swing_length)
 
     def prices() -> np.ndarray:
         return np.full(n, np.nan)
