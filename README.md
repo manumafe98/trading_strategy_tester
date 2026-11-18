@@ -176,7 +176,7 @@ def calculate_metrics(data, signals, trades, asset, timeframe, params):
     return {"Strategy metric": value}
 ```
 
-`params` contains the effective RR, exit mode, operation, risk percentage, capital, costs flag, time period, data source, and asset tick size. The hook is called even when a variant has no completed trades.
+`params` contains the strategy parameters, the session window, the effective RR, exit mode, operation, risk percentage, capital, costs flag, time period, data source, and the asset's tick size and pip size. The hook is called even when a variant has no completed trades.
 
 ### Strategy parameters
 
