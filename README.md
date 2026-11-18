@@ -144,7 +144,7 @@ def generate_signals(df, asset, timeframe, params):
 
 `side` must be `long` or `short`. The strategy owns entries and stops; the framework owns fixed, trailing, and partial exits.
 
-`params["tick_size"]` contains the configured price tick for the current asset. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`.
+`params["tick_size"]` contains the configured price tick for the current asset. `params["pip_size"]` contains its pip, the unit of `pips` settings: the optional `pip_size` asset field (0.0001 for EURUSD and GBPUSD), defaulting to `tick_size`. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`.
 
 The input `df` is shared across timeframes; strategies **must not mutate** it. Copy inside the strategy if needed.
 

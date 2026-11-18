@@ -30,3 +30,10 @@ def test_load_assets_fails_when_min_risk_ticks_missing(tmp_path, monkeypatch):
     monkeypatch.setattr(settings, "CONFIG_DIR", tmp_path)
     with pytest.raises(ValueError, match="MNQ missing asset config keys: min_risk_ticks"):
         load_assets()
+
+
+def test_configured_pip_sizes_default_to_tick_size_outside_forex():
+    assets = load_assets()
+    assert {name: asset.pip_size for name, asset in assets.items()} == {
+        "MNQ": 0.25, "MES": 0.25, "MGC": 0.1, "EURUSD": 0.0001, "GBPUSD": 0.0001, "BTCUSD": 0.01,
+    }
