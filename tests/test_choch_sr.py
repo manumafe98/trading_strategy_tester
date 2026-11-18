@@ -9,7 +9,16 @@ import pytest
 from strategy import choch_sr
 from strategy.choch_sr import generate_signals, plot_indicators
 from strategy.utils.market_structure import market_structure
-from tests.choch_sr_bars import RECOVERY_CLOSES, append, long_setup, mirror, repeated_setup, role_flip_setup, shifted_trigger, two_channel_setup
+from tests.choch_sr_bars import (
+    RECOVERY_CLOSES,
+    append,
+    long_setup,
+    mirror,
+    repeated_setup,
+    role_flip_setup,
+    shifted_trigger,
+    two_channel_setup,
+)
 from tester_framework.backtest import run_backtest
 from tester_framework.sessions import parse_sessions
 from tester_framework.strategy_loader import load_strategy

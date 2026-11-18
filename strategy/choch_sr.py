@@ -9,7 +9,7 @@ The strategy ignores positions: it never clears touches or waits after its own s
 are not in a new high-timeframe bar after the previous trade's exit.
 
 A futures roll (a change in the `contract` column) clears pivots, channels, pending touches and swings;
-each contract's bars are run on their own. Data without a `contract` column never resets.
+each contract's bars are processed on their own. Data without a `contract` column never resets.
 """
 
 from __future__ import annotations
@@ -55,7 +55,17 @@ OUTPUT_COLUMNS = [
     "stop_swing_price",
     "plot_start_time",
 ]
-PLOT_KEYS = ("signal_time", "exit_time", "zone_top", "zone_bottom", "touch_time", "choch_level", "swing_time", "stop_swing_time", "stop_swing_price")
+PLOT_KEYS = (
+    "signal_time",
+    "exit_time",
+    "zone_top",
+    "zone_bottom",
+    "touch_time",
+    "choch_level",
+    "swing_time",
+    "stop_swing_time",
+    "stop_swing_price",
+)
 
 
 def validate_params(params):
@@ -122,7 +132,7 @@ def generate_signals(df, asset, timeframe, params):
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     rows = []
-    # A roll clears pivots, channels, touches and swings: each contract's bars run on their own.
+    # A roll clears pivots, channels, touches and swings: each contract's bars are processed on their own.
     for segment in contract_segments(df):
         rows.extend(segment_signals(segment, rule, tick_size, params))
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS) if rows else pd.DataFrame(columns=OUTPUT_COLUMNS)
@@ -133,8 +143,8 @@ def contract_segments(df: pd.DataFrame) -> list[pd.DataFrame]:
     if "contract" not in df:
         return [df]
     contracts = df["contract"]
-    run_ids = (contracts != contracts.shift()).cumsum()
-    return [segment for _, segment in df.groupby(run_ids, sort=False)]
+    segment_ids = (contracts != contracts.shift()).cumsum()
+    return [segment for _, segment in df.groupby(segment_ids, sort=False)]
 
 
 def segment_signals(df, rule, tick_size, params):
@@ -236,7 +246,9 @@ def setup_row(structure, bar, side, touch, entry, reference_close, times, params
         return None
     # The marked swing is confirmed `swing_length` bars after its own bar.
     marked_bar = times.get_loc(marked_time) - params["swing_length"]
-    touch_time, swing_time, stop_swing_time = times[touch.first_bar], swing[f"{prefix}_break_swing_time"], times[marked_bar]
+    touch_time = times[touch.first_bar]
+    swing_time = swing[f"{prefix}_break_swing_time"]
+    stop_swing_time = times[marked_bar]
     return {
         "time": times[bar],
         "side": side,
@@ -277,7 +289,13 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
     )
     # The touch comes from above a support channel and from below a resistance channel.
     touch_price = trade["zone_top"] if is_long else trade["zone_bottom"]
-    fig.add_scatter(x=[touch_time], y=[touch_price], mode="markers", name="touch", marker={"color": color, "size": 10, "symbol": "x"})
+    fig.add_scatter(
+        x=[touch_time],
+        y=[touch_price],
+        mode="markers",
+        name="touch",
+        marker={"color": color, "size": 10, "symbol": "x"},
+    )
     fig.add_shape(
         type="line",
         x0=pd.Timestamp(trade["swing_time"]),
