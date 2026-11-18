@@ -312,13 +312,13 @@ def run(config: RunConfig) -> None:
                 timeframe_pairs.append((strategy_name, strategy, timeframe, low_timeframe))
     batch_count = sum(len(strategy_params[name]) for name, *_ in timeframe_pairs) * len(assets) * len(session_variants)
     task_count = batch_count * len(variant_pairs)
+    workers = worker_count(config.workers, batch_count)
+    risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     if config.max_variants < 1:
         raise ValueError("--max_variants must be a positive integer")
     if task_count > config.max_variants:
         raise ValueError(f"{task_count} variants exceed --max_variants {config.max_variants}; pass a larger --max_variants to run them")
     print(f"{task_count} variants", file=sys.stderr)
-    workers = worker_count(config.workers, batch_count)
-    risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     rows = []
     splits: list[Split] = []
     outputs_reset = False

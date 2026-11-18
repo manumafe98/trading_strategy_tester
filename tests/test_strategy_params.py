@@ -382,3 +382,28 @@ def test_max_variants_flag_defaults_to_2000_and_maps_to_config(monkeypatch):
     cli.main()
 
     assert [config.max_variants for config in configs] == [2000, 5000]
+
+
+def test_a_value_listed_twice_runs_once(monkeypatch, tmp_path, test_asset_cfg):
+    strategy, seen = _recording_strategy({"width": 0.4})
+
+    _run(monkeypatch, tmp_path, test_asset_cfg, {"test": strategy}, strategy_params="width=0.5,0.50,0.4")
+
+    assert [params["width"] for params in seen] == [0.5, 0.4]
+
+
+def test_a_failing_batch_names_its_parameter_values(monkeypatch, tmp_path, base_data, test_asset_cfg):
+    def generate_signals(*_args, **_kwargs):
+        raise ValueError("bad swing")
+
+    monkeypatch.setattr(runner, "load_strategy", lambda _name: SimpleNamespace(generate_signals=generate_signals))
+
+    with pytest.raises(RuntimeError, match="ema50 TEST 1h 1h swing_length=10: bad swing"):
+        runner.run_variants(
+            _task(base_data, tmp_path, test_asset_cfg, strategy_params={"swing_length": 10}, params_label="swing_length=10")
+        )
+
+
+def test_the_variant_cap_runs_after_the_other_checks(monkeypatch, test_asset_cfg):
+    with pytest.raises(ValueError, match="--workers must be at least 1"):
+        _capped_run(monkeypatch, test_asset_cfg, strategy_params="swing_length=10,20", max_variants=1, workers=0)

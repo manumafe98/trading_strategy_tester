@@ -200,7 +200,7 @@ Defaults must be int, float, bool, str or `None`, and `PARAM_TYPES` types one of
 "$PY" -m tester_framework --strategies my_strategy --strategy_params "swing_length=10,20;max_touch_minutes=15,30"
 ```
 
-Each combination of the listed values, the cartesian product in the order the names were given, is a separate set of variants; the second command runs four. Signals are generated once per combination and shared across its RR and exit-mode variants.
+Each combination of the listed values, the cartesian product in the order the names were given, is a separate set of variants; the second command runs four. A value listed twice runs once. Signals are generated once per combination and shared across its RR and exit-mode variants.
 
 Values are parsed to the default's type: whole numbers for int, finite numbers for float, `true`/`false` for bool, and text for str. `none` is accepted only for a `None` default. With a `PARAM_TYPES` entry, any other value must parse to that type; without one, it stays text. String values must not contain `,` or `;`. An undeclared name, a value that does not parse, a name given twice, or a name some strategy in `--strategies` does not declare fails before data loads. `validate_params` then receives every declared parameter of each combination, defaults filled in, also when the flag is omitted; a `ValueError` it raises is reported with the strategy name before data loads.
 

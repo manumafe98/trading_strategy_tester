@@ -128,7 +128,7 @@ def resolve_strategy_params(strategies: dict[str, types.ModuleType], text: str |
             if key not in declared:
                 raise ValueError(f"--strategy_params {key} is not declared in {name} PARAMS")
         values = [
-            [parse_param_value(key, raw, declared[key], param_types.get(key)) for raw in raws]
+            list(dict.fromkeys(parse_param_value(key, raw, declared[key], param_types.get(key)) for raw in raws))
             for key, raws in overrides.items()
         ]
         combinations = []
