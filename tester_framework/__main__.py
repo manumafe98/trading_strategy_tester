@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import itertools
 import math
 import os
 import sys
@@ -23,7 +24,7 @@ from .sessions import SessionSpec, parse_sessions, session_label
 from .split import (
     SELECT_BY, Split, oos_cutoff, rank_variants, selection_tags, split_tags, validate_selection_args, validate_split_args,
 )
-from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
+from .settings import DEFAULT_MAX_VARIANTS, DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
 from .strategy_params import params_label, resolve_strategy_params
 from .types import VariantBatchTask
@@ -253,7 +254,6 @@ def run(config: RunConfig) -> None:
     session_variants = session_specs or [None]
     validate_required_flags(strategies, session_specs)
     strategy_params = resolve_strategy_params(strategies, config.strategy_params)
-    param_labels = {name: params_label(getattr(strategies[name], "PARAMS", {}), params) for name, params in strategy_params.items()}
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
     timeframes = list(dict.fromkeys(csv_items(config.timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
@@ -310,8 +310,13 @@ def run(config: RunConfig) -> None:
                     if high % low:
                         raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
                 timeframe_pairs.append((strategy_name, strategy, timeframe, low_timeframe))
-    batch_count = len(timeframe_pairs) * len(assets) * len(session_variants)
+    batch_count = sum(len(strategy_params[name]) for name, *_ in timeframe_pairs) * len(assets) * len(session_variants)
     task_count = batch_count * len(variant_pairs)
+    if config.max_variants < 1:
+        raise ValueError("--max_variants must be a positive integer")
+    if task_count > config.max_variants:
+        raise ValueError(f"{task_count} variants exceed --max_variants {config.max_variants}; pass a larger --max_variants to run them")
+    print(f"{task_count} variants", file=sys.stderr)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     rows = []
@@ -350,8 +355,9 @@ def run(config: RunConfig) -> None:
                         outputs_reset = True
                     data_cache = cache_data(data, cache_dir, cache_id)
                     cache_id += 1
-                    for strategy_name, _strategy, timeframe in strategy_timeframes:
-                        for session in session_variants:
+                    for strategy_name, strategy, timeframe in strategy_timeframes:
+                        defaults = getattr(strategy, "PARAMS", {})
+                        for session, params in itertools.product(session_variants, strategy_params[strategy_name]):
                             tasks.append(
                                 VariantBatchTask(
                                     strategy=strategy_name,
@@ -376,8 +382,8 @@ def run(config: RunConfig) -> None:
                                     oos_cutoff=cutoff,
                                     target_fill=config.target_fill,
                                     intrabar=config.intrabar,
-                                    strategy_params=strategy_params[strategy_name],
-                                    params_label=param_labels[strategy_name],
+                                    strategy_params=params,
+                                    params_label=params_label(defaults, params),
                                 )
                             )
                     del data
@@ -419,8 +425,10 @@ def run(config: RunConfig) -> None:
         status.update(phase="Writing results", detail="console + html", completed=len(rows), total=task_count)
         status.start()
 
-        columns = result_columns(config.operation, include_session=bool(session_specs), split=split_mode)
         table = pd.DataFrame(rows)
+        # Params shows only the values that differ from their defaults, so it is hidden when every row is empty.
+        include_params = "Params" in table and bool(table["Params"].astype(bool).any())
+        columns = result_columns(config.operation, include_session=bool(session_specs), split=split_mode, include_params=include_params)
         if not table.empty:
             strategy_order = {name: i for i, name in enumerate(strategies)}
             order = {asset: i for i, asset in enumerate(assets)}
@@ -465,7 +473,14 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--strategy_params",
         metavar="NAME=VALUE;...",
-        help="semicolon list of parameter values the strategies declare in PARAMS, e.g. swing_length=10;entry_mode=break",
+        help="semicolon list of parameter values the strategies declare in PARAMS; comma lists run every combination, e.g. swing_length=10,20;entry_mode=break",
+    )
+    p.add_argument(
+        "--max_variants",
+        type=int,
+        default=DEFAULT_MAX_VARIANTS,
+        metavar="N",
+        help=f"refuse a run of more than N variants (default {DEFAULT_MAX_VARIANTS})",
     )
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--high_timeframe", help="comma list, default configured list")
@@ -570,6 +585,7 @@ def main() -> None:
             intrabar=IntrabarRule(args.intrabar),
             strategy_params=args.strategy_params,
             low_timeframe=args.low_timeframe,
+            max_variants=args.max_variants,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import math
 import types
 
@@ -68,8 +69,6 @@ def parse_strategy_params(text: str | None) -> dict[str, tuple[str, ...]]:
         if key in parsed:
             raise ValueError(f"--strategy_params names {key} more than once")
         parsed[key] = tuple(value.strip() for value in values.split(","))
-        if len(parsed[key]) > 1:
-            raise ValueError(f"--strategy_params takes one value per parameter; got: {item.strip()}")
     return parsed
 
 
@@ -115,8 +114,11 @@ def params_label(defaults: dict[str, object], params: dict[str, object]) -> str:
     return " ".join(f"{key}={format_param_value(value)}" for key, value in params.items() if value != defaults[key])
 
 
-def resolve_strategy_params(strategies: dict[str, types.ModuleType], text: str | None) -> dict[str, dict[str, object]]:
-    """Every declared parameter of each strategy, defaults merged with the `--strategy_params` values."""
+def resolve_strategy_params(strategies: dict[str, types.ModuleType], text: str | None) -> dict[str, list[dict[str, object]]]:
+    """Every parameter combination of each strategy: defaults merged with each `--strategy_params` combination.
+
+    Combinations are the cartesian product of the listed values, in the order the names were given.
+    """
     overrides = parse_strategy_params(text)
     resolved = {}
     for name, strategy in strategies.items():
@@ -125,14 +127,19 @@ def resolve_strategy_params(strategies: dict[str, types.ModuleType], text: str |
         for key in overrides:
             if key not in declared:
                 raise ValueError(f"--strategy_params {key} is not declared in {name} PARAMS")
-        params = dict(declared)
-        for key, (raw,) in overrides.items():
-            params[key] = parse_param_value(key, raw, declared[key], param_types.get(key))
-        validate_params = getattr(strategy, "validate_params", None)
-        if callable(validate_params):
-            try:
-                validate_params(dict(params))
-            except ValueError as exc:
-                raise ValueError(f"{name}: {exc}") from None
-        resolved[name] = params
+        values = [
+            [parse_param_value(key, raw, declared[key], param_types.get(key)) for raw in raws]
+            for key, raws in overrides.items()
+        ]
+        combinations = []
+        for combination in itertools.product(*values):
+            params = {**declared, **dict(zip(overrides, combination))}
+            validate_params = getattr(strategy, "validate_params", None)
+            if callable(validate_params):
+                try:
+                    validate_params(dict(params))
+                except ValueError as exc:
+                    raise ValueError(f"{name}: {exc}") from None
+            combinations.append(params)
+        resolved[name] = combinations
     return resolved
