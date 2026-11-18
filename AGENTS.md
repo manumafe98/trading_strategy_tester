@@ -22,7 +22,8 @@ def generate_signals(df, asset, timeframe, params):
 - Local futures `df` also carries a numeric `contract` column: one code per contract, changing at each roll.
 - `timeframe` is the high timeframe. A strategy can load a smaller low timeframe by setting `LOW_TIMEFRAME = "5m"`; `df` then holds low-timeframe bars.
 - An optional `setup_time` column marks the start of the latest bar a signal's setup depends on (no later than `time`); the engine discards a signal whose setup time is before the first high-timeframe bar after the previous trade's exit.
-- Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
+- An optional `stop_entry` column makes a signal a stop entry: it fills on its own bar at `max(open, stop_entry)` for a long or `min(open, stop_entry)` for a short once price reaches the level, and is discarded otherwise. A signal sets at most one of `entry` and `stop_entry`. The level must be computed only from earlier bars; the engine can't check this.
+- Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `stop_entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
 - A strategy can declare tunable parameters as `PARAMS = {"name": default}` (int, float, bool, str or `None`), plus `PARAM_TYPES = {"name": int}` for `None` defaults. Every key the engine puts in `params` (`tick_size`, `pip_size`, `session`, `trade`, `capital`, `exit_mode`, ...; see `RESERVED_PARAMS` in `tester_framework/strategy_params.py`) is reserved. `--strategy_params "name=value,value;..."` sets them, each combination of listed values running as its own variants, and `params` in every hook holds every declared parameter, defaults filled in.
 
 Optional hooks:
