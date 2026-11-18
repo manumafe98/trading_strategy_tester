@@ -13,6 +13,7 @@ from tests.choch_sr_bars import (
     RECOVERY_CLOSES,
     TRIGGER_CLOSES,
     append,
+    higher_low_setup,
     long_setup,
     mirror,
     repeated_setup,
@@ -111,6 +112,31 @@ def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept
     assert (row is not None) == kept
 
 
+@pytest.mark.parametrize(
+    ("stop_source", "stop", "stop_swing_time", "stop_swing_price"),
+    [("last_ll_hh", 100.12, "04:32", 100.13), ("last_swing", 100.19, "04:37", 100.20)],
+)
+def test_stop_source_picks_the_swing_behind_the_stop(stop_source, stop, stop_swing_time, stop_swing_price):
+    (row,) = run(higher_low_setup(), stop_source=stop_source).to_dict("records")
+
+    assert row["stop"] == stop
+    assert row["stop_swing_time"] == at(stop_swing_time)
+    assert row["stop_swing_price"] == stop_swing_price
+    assert row["stop_source"] == stop_source
+
+
+def test_last_swing_stop_short_is_one_tick_above_the_last_swing_high():
+    (row,) = run(mirror(higher_low_setup()), stop_source="last_swing").to_dict("records")
+
+    assert (row["side"], row["stop"], row["stop_swing_price"]) == ("short", 99.81, 99.80)
+
+
+@pytest.mark.parametrize(("stop_max", "trades"), [(0.36, 1), (0.35, 0)])
+def test_last_swing_stop_is_checked_against_the_stop_distance_limits(stop_max, trades):
+    # The 100.19 stop is 0.36 below the 100.55 entry: 0.358%.
+    assert len(run(higher_low_setup(), stop_source="last_swing", stop_max=stop_max)) == trades
+
+
 def test_role_flip_drops_the_pending_touch():
     inside = run(role_flip_setup(100.05), stop_max=1.0)  # closes inside the channel: the touch stays pending
     flipped = run(role_flip_setup(99.95), stop_max=1.0)  # closes below it: the channel turns resistance
@@ -203,9 +229,10 @@ def test_contract_change_rebuilds_state_from_the_new_contract_bars():
     assert (second_row["channel_top"], second_row["channel_bottom"]) == (100.2, 100.0)
 
 
-def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg):
+@pytest.mark.parametrize(("stop_source", "stop_swing_name"), [("last_ll_hh", "stop swing (LL)"), ("last_swing", "stop swing (swing)")])
+def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg, stop_source, stop_swing_name):
     df = append(long_setup(), RECOVERY_CLOSES)  # the long exits at its target during the recovery
-    signals = run(df)
+    signals = run(df, stop_source=stop_source)
     _, (trade,) = run_backtest(
         df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
         operation="all", risk_pct=1, capital=10_000, with_costs=False,
@@ -223,7 +250,7 @@ def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg
     assert choch.label.text == "CHoCH"
     markers = {marker.name: (list(marker.x), list(marker.y)) for marker in fig.data}
     assert markers["touch"] == ([at("04:32")], [100.2])
-    assert markers["stop swing (LL)"] == ([at("04:32")], [100.13])
+    assert markers[stop_swing_name] == ([at("04:32")], [100.13])
     assert trade["plot_start_time"] == at("04:30")  # the chart opens on the earliest bar it draws
 
 
@@ -254,6 +281,7 @@ def test_input_is_not_mutated():
         ({"stop_min": -1.0}, "stop_min"),
         ({"stop_max": 0.0}, "stop_max"),
         ({"stop_min": 0.6, "stop_max": 0.5}, "stop_min"),
+        ({"stop_source": "last_hl"}, "stop_source"),
     ],
 )
 def test_validate_params_rejects_bad_settings(overrides, message):
@@ -270,6 +298,7 @@ def test_defaults_are_the_pine_defaults():
         "stop_min": 0.1,
         "stop_max": 0.5,
         "stop_unit": "%",
+        "stop_source": "last_ll_hh",
     }
     assert choch_sr.LOW_TIMEFRAME == "1m"
     choch_sr.validate_params(dict(choch_sr.PARAMS))
