@@ -457,7 +457,7 @@ def write_results_html(
 ) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
-    shown = ("Strategy", "Asset", "High TF", "Low TF", "Session", "RR", "Exit Mode", *FINANCIAL_COLUMNS, *SPLIT_COLUMNS)
+    shown = ("Strategy", "Asset", "High TF", "Low TF", "Session", "Params", "RR", "Exit Mode", *FINANCIAL_COLUMNS, *SPLIT_COLUMNS)
     columns = [column for column in shown if column in columns]
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")

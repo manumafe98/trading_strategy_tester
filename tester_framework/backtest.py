@@ -721,10 +721,12 @@ def add_trade_counts(metrics: dict, trades: list[dict], operation: str, with_cos
     return metrics
 
 
-def result_columns(operation: str, include_session: bool = False, split: bool = False) -> list[str]:
+def result_columns(operation: str, include_session: bool = False, split: bool = False, include_params: bool = False) -> list[str]:
     columns = ["Strategy", "Asset", "High TF", "Low TF"]
     if include_session:
         columns.append("Session")
+    if include_params:
+        columns.append("Params")
     columns += ["RR", "Exit Mode", "Trades", "Discarded"]
     if operation == "all":
         columns += ["Long", "Short"]

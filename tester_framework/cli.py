@@ -4,6 +4,7 @@ import argparse
 from dataclasses import dataclass
 
 from .models import IntrabarRule, TargetFill
+from .settings import DEFAULT_MAX_VARIANTS
 
 
 DAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
@@ -61,3 +62,4 @@ class RunConfig:
     intrabar: IntrabarRule = IntrabarRule.PATH
     strategy_params: str | None = None
     low_timeframe: str | None = None
+    max_variants: int = DEFAULT_MAX_VARIANTS

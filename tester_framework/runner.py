@@ -108,6 +108,7 @@ def _run_variant(
     row["Exit Mode"] = exit_mode
     if session:
         row["Session"] = session
+    row["Params"] = task["params_label"]
     row["_risk_pct"] = task["risk_pct"]
     row["_sort_return"] = metrics["Net" if task["with_costs"] else "Gross"]["Return"]
     if task["oos_cutoff"] is not None:
@@ -124,6 +125,8 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
     batch_parts = [task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"]]
     if session:
         batch_parts.append(session)
+    if task["params_label"]:
+        batch_parts.append(task["params_label"])
     batch_label = " ".join(batch_parts)
     try:
         try:
