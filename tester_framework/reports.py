@@ -19,7 +19,7 @@ from .settings import (
 )
 from .split import SELECT_BY, Split, entered_in_sample, selection_tags, split_tags
 from .strategy_params import format_param_value
-from .utils import clean_exit_name, net_value
+from .utils import clean_exit_name, net_value, variant_parts
 
 
 MetricValue: TypeAlias = float | int | tuple[float | int, ...] | list[float | int] | str
@@ -106,20 +106,14 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     fig.add_hline(y=trade["stop"], line_dash="dot", line_color="red", annotation_text="stop")
     for target in trade["targets"]:
         fig.add_hline(y=target["price"], line_dash="dot", line_color="green", annotation_text=f'{target["r"]:g}R target')
-    title = f"{trade['strategy']} {trade['asset']} {trade['timeframe']} {trade['low_timeframe']}"
-    if trade.get("session"):
-        title = f"{title} {trade['session']}"
-    title = f"{title} {trade['side']} {trade['exit_mode']}"
+    labels = (trade["strategy"], trade["asset"], trade["timeframe"], trade["low_timeframe"])
+    title = " ".join([*variant_parts(*labels, trade.get("session")), str(trade["side"]), trade["exit_mode"]])
     fig.update_layout(title=title, xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
     session = clean_exit_name(str(trade["session"])) if trade.get("session") else None
-    parts = [trade["strategy"], trade["asset"], trade["timeframe"], trade["low_timeframe"]]
-    if session:
-        parts.append(session)
-    parts.extend([rr, trade["exit_mode"], stamp, str(trade["side"])])
-    base = "_".join(parts)
+    base = "_".join([*variant_parts(*labels, session), rr, trade["exit_mode"], stamp, str(trade["side"])])
     path = TRADES_DIR / f"{base}.html"
     n = 2
     while path.exists():

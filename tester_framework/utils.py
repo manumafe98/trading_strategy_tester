@@ -16,9 +16,22 @@ def csv_items(value: str | None) -> list[str]:
     return [x.strip() for x in str(value or "").split(",") if x.strip()]
 
 
+def variant_parts(
+    strategy: str, asset: str, high_timeframe: str, low_timeframe: str, session: str | None = None, params_label: str = ""
+) -> list[str]:
+    """The names that label a variant's batch: strategy, asset, both timeframes, then its session window and
+    changed parameters when it has them."""
+    parts = [strategy, asset, high_timeframe, low_timeframe]
+    if session:
+        parts.append(session)
+    if params_label:
+        parts.append(params_label)
+    return parts
+
+
 def net_value(value):
     """The Net value of a Gross / Net pair, else the value itself."""
     return value[-1] if isinstance(value, (tuple, list)) else value
 
 
-__all__ = ["clean_exit_name", "csv_items", "decimal_places", "net_value"]
+__all__ = ["clean_exit_name", "csv_items", "decimal_places", "net_value", "variant_parts"]

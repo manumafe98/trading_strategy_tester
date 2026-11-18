@@ -19,8 +19,8 @@ from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
 from .models import OPERATIONS, IntrabarRule, TargetFill
 from .reports import fill_rule_tags, format_metric, reset_output_dirs, write_results_html
-from .runner import cache_data, run_variants
-from .sessions import SessionSpec, parse_sessions, session_label
+from .runner import batch_label, cache_data, run_variants
+from .sessions import SessionSpec, parse_sessions
 from .split import (
     SELECT_BY, Split, oos_cutoff, rank_variants, selection_tags, split_tags, validate_selection_args, validate_split_args,
 )
@@ -39,14 +39,7 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantBatchTask) -> str:
-    session = session_label(task["session"])
-    parts = [task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"]]
-    if session:
-        parts.append(session)
-    if task["params_label"]:
-        parts.append(task["params_label"])
-    parts.append(f'{len(task["variants"])} variants')
-    return " ".join(parts)
+    return f'{batch_label(task)} {len(task["variants"])} variants'
 
 
 def status_lines(
