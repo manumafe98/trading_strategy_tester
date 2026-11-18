@@ -23,8 +23,8 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
     A swing is a `swing_length`-bar pivot and appears on its confirmation bar, `swing_length` bars after
     its own bar. Breaking a swing high is bullish, breaking a swing low bearish; `confirmation="close"`
     needs a close beyond the swing, `"wick"` the high or low. Each swing breaks at most once. On one bar
-    the high side is processed before the low side, as in the Pine, except that with `"wick"` an open
-    strictly nearer the low processes the low side first.
+    the high side is processed before the low side, as in the Pine, except that with `"wick"` the low side
+    comes first when the open is below the swing low, or not above the swing high and strictly nearer the low.
 
     Returned columns, indexed like `df` (`*_time` columns are bar times, NaT when absent):
     - `swing_high_price/label/time`, `swing_low_price/label/time`: a swing confirmed on this bar, its
@@ -47,7 +47,7 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
     high_source = closes if confirmation == "close" else highs
     low_source = closes if confirmation == "close" else lows
     opens = df["open"].to_numpy(dtype=float)
-    opens_nearer_low = (confirmation == "wick") & (opens - lows < highs - opens)
+    by_wick = confirmation == "wick"
     n = len(df)
     swing_high_bars = pivot_high_bars(highs, swing_length)
     swing_low_bars = pivot_high_bars(-lows, swing_length)
@@ -122,8 +122,11 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
             low_active = False
             out["bearish_break_price"][i] = previous_low
             out["bearish_break_swing_time"][i] = previous_low_time
-        out["low_broken_first"][i] = high_broken and low_broken and opens_nearer_low[i]
-        for direction in (-1, 1) if opens_nearer_low[i] else (1, -1):
+        path_reaches_low_first = by_wick and (
+            opens[i] < previous_low or (opens[i] <= previous_high and opens[i] - lows[i] < highs[i] - opens[i])
+        )
+        out["low_broken_first"][i] = high_broken and low_broken and path_reaches_low_first
+        for direction in (-1, 1) if path_reaches_low_first else (1, -1):
             if direction == 1 and high_broken:
                 out["bullish_choch"][i] = previous_break_direction == -1
                 previous_break_direction = 1

@@ -151,18 +151,25 @@ def test_fvg_window_follows_the_session_window():
     assert signals[["side", "fvg_bottom", "time"]].values.tolist() == [["long", 99.5, pd.Timestamp("2025-01-02 17:09")]]
 
 
-def _choch_bar_breaking_both_swings(opened):
+def _choch_bar_breaking_both_swings(opened, high=100.56):
     df = long_setup()
-    df.iloc[-1] = [opened, 100.56, 100.10, 100.40, 1.0]
+    df.iloc[-1] = [opened, high, 100.10, 100.40, 1.0]
     return df
 
 
 @pytest.mark.parametrize(
-    ("opened", "reflect", "sides"),
-    [(100.45, False, ["long"]), (100.20, False, []), (100.45, True, ["short"]), (100.20, True, [])],
+    ("opened", "high", "reflect", "sides"),
+    [
+        (100.45, 100.56, False, ["long"]),
+        (100.20, 100.56, False, []),
+        (100.60, 101.50, False, ["long"]),
+        (100.45, 100.56, True, ["short"]),
+        (100.20, 100.56, True, []),
+        (100.60, 101.50, True, ["short"]),
+    ],
 )
-def test_double_wick_break_fills_only_the_level_the_path_reaches_first(opened, reflect, sides):
-    df = _choch_bar_breaking_both_swings(opened)
+def test_double_wick_break_fills_only_the_level_the_path_reaches_first(opened, high, reflect, sides):
+    df = _choch_bar_breaking_both_swings(opened, high)
     params = {**choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "entry_mode": "break"}
 
     signals = choch_sr.generate_signals(mirror(df) if reflect else df, asset="TEST", timeframe="5m", params=params)
