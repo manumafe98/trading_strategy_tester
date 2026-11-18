@@ -33,18 +33,18 @@ SELECT_BY = {"return_dd": "Return / DD", "sharpe": "Sharpe Ratio", "return": "Re
 
 @dataclass(frozen=True)
 class Split:
-    """The cutoff of one asset and execution timeframe, with the bar times either side of it."""
+    """The cutoff of one asset and low timeframe, with the bar times either side of it."""
 
     asset: str
-    execution_timeframe: str
+    low_timeframe: str
     cutoff: int
     bar_count: int
     in_sample: tuple[pd.Timestamp, pd.Timestamp]
     out_of_sample: tuple[pd.Timestamp, pd.Timestamp]
 
     @classmethod
-    def from_index(cls, asset: str, execution_timeframe: str, index: pd.DatetimeIndex, cutoff: int) -> Split:
-        return cls(asset, execution_timeframe, cutoff, len(index), (index[0], index[cutoff - 1]), (index[cutoff], index[-1]))
+    def from_index(cls, asset: str, low_timeframe: str, index: pd.DatetimeIndex, cutoff: int) -> Split:
+        return cls(asset, low_timeframe, cutoff, len(index), (index[0], index[cutoff - 1]), (index[cutoff], index[-1]))
 
 
 def validate_split_args(oos_start: str | None, oos_fraction: float | None) -> None:
@@ -95,7 +95,7 @@ def entered_in_sample(trade: dict, cutoff: int) -> bool:
 def split_tags(split: Split) -> tuple[str, str]:
     def period(name: str, bounds: tuple[pd.Timestamp, pd.Timestamp]) -> str:
         start, end = (pd.Timestamp(value).strftime("%Y-%m-%d %H:%M") for value in bounds)
-        return f"{split.asset} {split.execution_timeframe} {name} {start} to {end} UTC"
+        return f"{split.asset} {split.low_timeframe} {name} {start} to {end} UTC"
 
     return period("in-sample", split.in_sample), period("out-of-sample", split.out_of_sample)
 

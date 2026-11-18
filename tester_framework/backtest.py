@@ -19,7 +19,7 @@ from .utils import csv_items, decimal_places
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
-# Bar length per execution timeframe; a close entry fills at its bar's start plus this.
+# Bar length per low timeframe; a close entry fills at its bar's start plus this.
 BAR_DURATIONS = {
     timeframe: pd.Timedelta(minutes=minutes)
     for timeframe, minutes in {"1m": 1, "2m": 2, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.items()
@@ -385,7 +385,7 @@ def run_backtest(
     capital: float,
     with_costs: bool,
     asset_cfg: AssetConfig,
-    execution_timeframe: str | None = None,
+    low_timeframe: str | None = None,
     max_trades: int | None = None,
     days: tuple[int, ...] = (),
     months: tuple[int, ...] = (),
@@ -433,13 +433,13 @@ def run_backtest(
         (lows > values).any() for values in (opens, highs, closes)
     ):
         raise ValueError("Data contains invalid OHLC ranges")
-    annualization_timeframe = execution_timeframe or timeframe
+    annualization_timeframe = low_timeframe or timeframe
     if annualization_timeframe not in asset_cfg.bars_per_year:
         raise ValueError(f"Missing bars_per_year for {asset} {annualization_timeframe}")
     if "1d" not in asset_cfg.bars_per_year:
         raise ValueError(f"Missing bars_per_year for {asset} 1d")
     if annualization_timeframe not in BAR_DURATIONS:
-        raise ValueError(f"Unknown execution timeframe for {asset}: {annualization_timeframe}")
+        raise ValueError(f"Unknown low timeframe for {asset}: {annualization_timeframe}")
     bar_duration = BAR_DURATIONS[annualization_timeframe]
 
     bar_count = len(data)
