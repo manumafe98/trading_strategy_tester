@@ -67,6 +67,13 @@ def long_setup() -> pd.DataFrame:
     return append(warm_up(), TRIGGER_CLOSES)
 
 
+HIGHER_LOW_CLOSES = TRIGGER_CLOSES[:-1] + [100.25, 100.30, 100.22, 100.30, 100.35, 100.55]
+
+
+def higher_low_setup() -> pd.DataFrame:
+    return append(warm_up(), HIGHER_LOW_CLOSES)
+
+
 def mirror(df: pd.DataFrame) -> pd.DataFrame:
     """Prices reflected around 100, which turns the long setup into the short one."""
     return pd.DataFrame(

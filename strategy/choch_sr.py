@@ -34,10 +34,12 @@ PARAMS = {
     "stop_min": 0.1,
     "stop_max": 0.5,
     "stop_unit": "%",
+    "stop_source": "last_ll_hh",
     "max_touch_minutes": None,
     "touch_buckets": "0-5,5-15,15-30,30-60,60+",
 }
 PARAM_TYPES = {"max_touch_minutes": int}
+STOP_SOURCES = ("last_ll_hh", "last_swing")
 EPSILON = 1e-8
 CHANNEL_CACHE: dict[tuple, pd.DataFrame] = {}
 CHANNEL_CACHE_SIZE = 32
@@ -58,6 +60,7 @@ OUTPUT_COLUMNS = [
     "swing_time",
     "stop_swing_time",
     "stop_swing_price",
+    "stop_source",
     "plot_start_time",
 ]
 PLOT_KEYS = (
@@ -70,6 +73,7 @@ PLOT_KEYS = (
     "swing_time",
     "stop_swing_time",
     "stop_swing_price",
+    "stop_source",
 )
 
 
@@ -78,6 +82,8 @@ def validate_params(params):
         raise ValueError("swing_length must be at least 1")
     for names in (("channel_min_width", "channel_max_width", "channel_unit"), ("stop_min", "stop_max", "stop_unit")):
         validate_widths(*(params[name] for name in names), names=names)
+    if params["stop_source"] not in STOP_SOURCES:
+        raise ValueError(f"stop_source must be one of {', '.join(STOP_SOURCES)}, got {params['stop_source']}")
     if params["max_touch_minutes"] is not None and params["max_touch_minutes"] < 1:
         raise ValueError("max_touch_minutes must be at least 1 or none")
     touch_bands(params["touch_buckets"])
@@ -286,8 +292,7 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
     swing = structure.iloc[bar]
-    marked_price = swing["last_ll_price"] if is_long else swing["last_hh_price"]
-    marked_time = swing["last_ll_time"] if is_long else swing["last_hh_time"]
+    marked_price, stop_swing_time = stop_swing(swing, is_long, times, params)
     if pd.isna(marked_price):
         return None
     if is_long:
@@ -297,11 +302,8 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
     stop = round(stop, decimal_places(tick_size))
     if (stop >= entry if is_long else stop <= entry) or not stop_distance_ok(entry, stop, params):
         return None
-    # The marked swing is confirmed `swing_length` bars after its own bar.
-    marked_bar = times.get_loc(marked_time) - params["swing_length"]
     touch_time = times[touch.prior_contact_start]
     swing_time = swing[f"{prefix}_break_swing_time"]
-    stop_swing_time = times[marked_bar]
     return {
         "time": times[bar],
         "side": side,
@@ -316,9 +318,22 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         "swing_time": swing_time,
         "stop_swing_time": stop_swing_time,
         "stop_swing_price": marked_price,
+        "stop_source": params["stop_source"],
         # The trade chart opens on the earliest bar it draws.
         "plot_start_time": min(touch_time, swing_time, stop_swing_time),
     }
+
+
+def stop_swing(swing, is_long, times, params):
+    if params["stop_source"] == "last_swing":
+        side = "low" if is_long else "high"
+        return swing[f"last_swing_{side}_price"], swing[f"last_swing_{side}_time"]
+    marked = "ll" if is_long else "hh"
+    marked_price, confirmed_time = swing[f"last_{marked}_price"], swing[f"last_{marked}_time"]
+    if pd.isna(marked_price):
+        return marked_price, None
+    # The marked swing is confirmed `swing_length` bars after its own bar.
+    return marked_price, times[times.get_loc(confirmed_time) - params["swing_length"]]
 
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
@@ -359,7 +374,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
         label={"text": "CHoCH", "textposition": "end"},
         name="CHoCH",
     )
-    label = "LL" if is_long else "HH"
+    label = "swing" if trade["stop_source"] == "last_swing" else "LL" if is_long else "HH"
     fig.add_scatter(
         x=[pd.Timestamp(trade["stop_swing_time"])],
         y=[trade["stop_swing_price"]],
