@@ -24,7 +24,7 @@ RANDOM_ENTRY_SEEDS = (1, 2, 3, 4, 5)
 # The only high timeframes a strategy may refuse, with the error it must raise; any other error fails the test.
 UNSUPPORTED_SIGNAL_TIMEFRAMES = {
     (name, "1d"): "ORB strategies support intraday timeframes only" for name in ("orb_candle", "orb_combined", "orb_fvg")
-}
+} | {("choch_sr", "1d"): "choch_sr supports intraday high timeframes only"}
 SANITY_ASSET = AssetConfig(
     ticker="TEST",
     point_value=1.0,
@@ -61,9 +61,14 @@ def random_walk(bars: int, bar_size: str, seed: int = 0) -> pd.DataFrame:
 
 
 def strategy_params(strategy) -> dict:
-    """The params the runner passes, with the ny session window for strategies that require --sessions."""
+    """The params the runner passes: declared defaults, ticks, and the ny session window for strategies that require --sessions."""
     needs_session = "sessions" in getattr(strategy, "REQUIRED_FLAGS", {})
-    return {"tick_size": TICK, "session": parse_sessions("ny")[0] if needs_session else None}
+    return {
+        **getattr(strategy, "PARAMS", {}),
+        "tick_size": TICK,
+        "pip_size": TICK,
+        "session": parse_sessions("ny")[0] if needs_session else None,
+    }
 
 
 def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, params: dict, seed: int = 0) -> None:
