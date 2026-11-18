@@ -26,13 +26,13 @@ WIDTH_UNITS = ("%", "pips")
 def pivot_highs(values: np.ndarray, period: int = PIVOT_PERIOD) -> np.ndarray:
     """Boolean per confirmation bar: the bar `period` bars back is a pivot high.
 
-    The pivot may equal a bar on its left but must be strictly above every bar on its right.
+    The window and tie rule are `strategy.utils.pivots.pivot_high_bars`.
     """
     return _confirmed(np.asarray(values, dtype=float), period)
 
 
 def pivot_lows(values: np.ndarray, period: int = PIVOT_PERIOD) -> np.ndarray:
-    """Mirror of `pivot_highs`: equal allowed on the left, strictly below every bar on the right."""
+    """Mirror of `pivot_highs` for pivot lows."""
     return _confirmed(-np.asarray(values, dtype=float), period)
 
 

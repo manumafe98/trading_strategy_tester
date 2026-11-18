@@ -3,7 +3,9 @@ from __future__ import annotations
 import pandas as pd
 import pytest
 
-from strategy.orb_fvg import generate_signals
+import plotly.graph_objects as go
+
+from strategy.orb_fvg import generate_signals, plot_indicators
 from tester_framework.sessions import parse_sessions
 
 
@@ -98,3 +100,19 @@ def test_empty_data():
 def test_requires_positive_tick_size():
     with pytest.raises(ValueError, match="tick_size"):
         generate_signals(make_fvg_day(), asset="MNQ", timeframe="5m", params={"tick_size": 0, "session": SESSION})
+
+
+@pytest.mark.parametrize(("low_timeframe", "bar_minutes"), [("1m", 1), ("5m", 5)])
+def test_fvg_box_spans_22_low_timeframe_bars(low_timeframe, bar_minutes):
+    form_time = pd.Timestamp("2025-01-02 14:32")
+    trade = {
+        "side": "long", "plot_start_time": pd.Timestamp("2025-01-02 14:30"), "signal_time": pd.Timestamp("2025-01-02 14:40"),
+        "orb_high": 102.0, "orb_low": 98.5, "fvg_top": 101.0, "fvg_bottom": 99.0, "fvg_form_time": form_time,
+        "low_timeframe": low_timeframe,
+    }
+    fig = go.Figure()
+
+    plot_indicators(fig, None, None, "TEST", "5m", {"trade": trade})
+
+    (box,) = fig.layout.shapes
+    assert (box.x0, box.x1) == (form_time, form_time + pd.Timedelta(minutes=22 * bar_minutes))
