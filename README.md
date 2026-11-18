@@ -232,3 +232,14 @@ The Pine references in `pine_scripts_examples/` differ from these strategies on 
 - **FVG bars.** Pine checks `high[2] < low` on every bar in its FVG window, so on the window's first two bars an FVG can use bars from before the window. We only use bars inside the session window, so the first two window bars cannot complete an FVG.
 - **FVG cap.** Pine keeps at most `Max Tracked FVGs` (default 100) and drops the oldest. We keep every active FVG.
 - **FVG window.** Pine detects FVGs in a separate `FVG Session` input that defaults to 09:30-12:00 New York, and its trade window is hardcoded to 09:30-11:59. Both of ours follow the `--sessions` window, so a wider window detects and trades FVGs outside 09:30-12:00.
+
+## CHoCH + SR Strategy
+
+`choch_sr` ports `pine_scripts_examples/choch_sr_mtf_strategy.pine`: a touch on a high-timeframe support or resistance channel, then the first CHoCH the opposite way on 1-minute bars.
+
+Every trade carries `touch_to_choch_minutes`, the minutes from the close of the bar where the touch's current uninterrupted contact started to the close of the CHoCH bar. A high-timeframe bar that opens clear of the channel interrupts the contact, and the next contact starts the count again.
+
+- **`max_touch_minutes`** (default `none`, which matches the Pine) keeps a touch from giving a signal once its contact started more than that many minutes before the bar's close. While price stays in the channel the touch stays too old; it can give a signal again only after the contact is interrupted and restarts. So no trade's `touch_to_choch_minutes` exceeds the limit.
+- **`touch_buckets`** (default `0-5,5-15,15-30,30-60,60+`) sets the time bands for the strategy metrics: `Trades <band>`, `Win rate <band>` (the percentage of trades with R > 0) and `Avg R <band>`, with net R under `--with_costs` and gross R otherwise. Bands are `[low, high)` minutes, start at 0, leave no gaps or overlaps, and only the last may be open-ended. A band with no trades shows 0 trades and blank win rate and Avg R. Band names add `m`, as in `Win rate 5-15m` and `Avg R 60+m`. `--strategy_params` splits values on `,`, so other bands cannot be set from the command line yet.
+
+**Known overstatement.** When contact continues across a trade's exit, the engine only accepts a retest from the first high-timeframe bar after the exit, but the strategy does not know that bar. `touch_to_choch_minutes` and the `max_touch_minutes` age still count from the earlier start of the contact, so they overstate the time for those trades.

@@ -34,7 +34,10 @@ PARAMS = {
     "stop_min": 0.1,
     "stop_max": 0.5,
     "stop_unit": "%",
+    "max_touch_minutes": None,
+    "touch_buckets": "0-5,5-15,15-30,30-60,60+",
 }
+PARAM_TYPES = {"max_touch_minutes": int}
 EPSILON = 1e-8
 CHANNEL_CACHE: dict[tuple, pd.DataFrame] = {}
 CHANNEL_CACHE_SIZE = 32
@@ -50,6 +53,7 @@ OUTPUT_COLUMNS = [
     "channel_bottom",
     "channel_role",
     "touch_time",
+    "touch_to_choch_minutes",
     "choch_level",
     "swing_time",
     "stop_swing_time",
@@ -74,6 +78,30 @@ def validate_params(params):
         raise ValueError("swing_length must be at least 1")
     for names in (("channel_min_width", "channel_max_width", "channel_unit"), ("stop_min", "stop_max", "stop_unit")):
         validate_widths(*(params[name] for name in names), names=names)
+    if params["max_touch_minutes"] is not None and params["max_touch_minutes"] < 1:
+        raise ValueError("max_touch_minutes must be at least 1 or none")
+    touch_bands(params["touch_buckets"])
+
+
+def touch_bands(text: str) -> list[tuple[float, float, str]]:
+    bands = []
+    previous_high = 0.0
+    for band in text.split(","):
+        band = band.strip()
+        try:
+            if band.endswith("+"):
+                low, high = float(band[:-1]), math.inf
+            else:
+                low_text, _, high_text = band.partition("-")
+                low, high = float(low_text), float(high_text)
+        except ValueError:
+            raise ValueError(f"touch_buckets band {band!r} must look like 5-15 or 60+") from None
+        if low != previous_high or not high > low:
+            raise ValueError("touch_buckets must be increasing bands from 0 with no gaps or overlaps, open-ended only at the end")
+        label = f"{low:g}+m" if high == math.inf else f"{low:g}-{high:g}m"
+        bands.append((low, high, label))
+        previous_high = high
+    return bands
 
 
 class Touch:
@@ -227,13 +255,19 @@ def segment_signals(df, rule, tick_size, params):
                 continue
             # Any channel with the matching role counts. Touches are never cleared, so the Pine's first pending
             # touch could be a stale one; the latest contact is the one the setup-time rule can accept.
-            usable = [t for t in touches if t.role == role and t.first_bar < bar]
+            usable = [t for t in touches if t.role == role and t.first_bar < bar and within_touch_limit(t, bar, times, params)]
             if usable:
                 touch = max(usable, key=lambda t: t.prior_latest_bar)
                 row = signal_row(structure, bar, side, touch, closes[bar], reference_close, times, tick_size, params)
                 if row is not None:
+                    row["touch_to_choch_minutes"] = (times[bar] - row["touch_time"]) / pd.Timedelta(minutes=1)
                     rows.append(row)
     return rows
+
+
+def within_touch_limit(touch: Touch, bar: int, times: pd.DatetimeIndex, params: dict) -> bool:
+    limit = params["max_touch_minutes"]
+    return limit is None or times[bar] - times[touch.prior_contact_start] <= pd.Timedelta(minutes=limit)
 
 
 def cached_channels(high_bars: pd.DataFrame, params: dict) -> pd.DataFrame:
@@ -335,3 +369,14 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
         name=f"stop swing ({label})",
         marker={"color": "orange", "size": 9, "symbol": "triangle-up" if is_long else "triangle-down"},
     )
+
+
+def calculate_metrics(data, signals, trades, asset, timeframe, params):
+    r_key = "net_realized_r" if params["with_costs"] else "realized_r"
+    metrics = {}
+    for low, high, label in touch_bands(params["touch_buckets"]):
+        band_r = [float(trade[r_key]) for trade in trades if low <= trade["touch_to_choch_minutes"] < high]
+        metrics[f"Trades {label}"] = len(band_r)
+        metrics[f"Win rate {label}"] = round(sum(r > 0 for r in band_r) / len(band_r) * 100, 2) if band_r else math.nan
+        metrics[f"Avg R {label}"] = round(sum(band_r) / len(band_r), 4) if band_r else math.nan
+    return metrics
