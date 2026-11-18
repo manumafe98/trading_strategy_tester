@@ -29,9 +29,13 @@ def variant_parts(
     return parts
 
 
+def variant_count(count: int) -> str:
+    return f"{count} variant" if count == 1 else f"{count} variants"
+
+
 def net_value(value):
     """The Net value of a Gross / Net pair, else the value itself."""
     return value[-1] if isinstance(value, (tuple, list)) else value
 
 
-__all__ = ["clean_exit_name", "csv_items", "decimal_places", "net_value", "variant_parts"]
+__all__ = ["clean_exit_name", "csv_items", "decimal_places", "net_value", "variant_count", "variant_parts"]

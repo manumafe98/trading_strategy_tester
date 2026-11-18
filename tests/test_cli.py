@@ -55,7 +55,7 @@ def test_status_lines():
 def test_variant_label_names_both_timeframes():
     task = {"strategy": "orb_candle", "asset": "MGC", "timeframe": "15m", "low_timeframe": "5m", "session": None, "params_label": "", "variants": ((1, "fixed"),)}
 
-    assert cli.variant_label(task) == "orb_candle MGC 15m 5m 1 variants"
+    assert cli.variant_label(task) == "orb_candle MGC 15m 5m 1 variant"
 
 
 def test_main_maps_new_cli_flags(monkeypatch):

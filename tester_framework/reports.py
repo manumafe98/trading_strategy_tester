@@ -19,7 +19,7 @@ from .settings import (
 )
 from .split import SELECT_BY, Split, entered_in_sample, selection_tags, split_tags
 from .strategy_params import format_param_value
-from .utils import clean_exit_name, net_value, variant_parts
+from .utils import clean_exit_name, net_value, variant_count, variant_parts
 
 
 MetricValue: TypeAlias = float | int | tuple[float | int, ...] | list[float | int] | str
@@ -427,6 +427,8 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td class="c"><span class="strategy-badge">{html_escape(str(value))}</span></td>'
     if col == "Asset":
         return f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(value))}</span></div></td>'
+    if col == "Params" and not value:
+        return '<td class="c"></td>'
     if col in {"High TF", "Low TF"}:
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
     sort_attr = ""
@@ -514,7 +516,7 @@ def write_results_html(
             for tag in (
                 f"ranked by in-sample {SELECT_BY[config.select_by]}",
                 f"top {config.select_top} selected per strategy and asset",
-                f"{len(table)} variants",
+                variant_count(len(table)),
             )
         )
         tags.extend(f'<span class="tag">{html_escape(tag)}</span>' for tag in selection_tags(table))

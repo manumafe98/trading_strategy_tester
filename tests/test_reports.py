@@ -489,7 +489,7 @@ def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(m
     assert '<span class="pill plain">yes</span>' in html
     assert "ranked by in-sample Return / DD" in html
     assert "top 5 selected per strategy and asset" in html
-    assert "1 variants" in html
+    assert '<span class="tag">1 variant</span>' in html
     # Net OOS Return -4.50% with costs on, from one variant with out-of-sample trades.
     assert "ema50 MGC: Tried 1, OOS profitable 0/1 (0.0%), Equal-weight OOS -4.50%" in html
     assert "Tried" not in plain and "Equal-weight" not in plain

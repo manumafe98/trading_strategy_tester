@@ -26,9 +26,9 @@ from .split import (
 )
 from .settings import DEFAULT_MAX_VARIANTS, DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
-from .strategy_params import params_label, resolve_strategy_params
+from .strategy_params import combination_count, expand_strategy_params, params_label, strategy_param_values
 from .types import VariantBatchTask
-from .utils import csv_items
+from .utils import csv_items, variant_count
 
 
 __all__ = ["main", "parser", "run"]
@@ -39,7 +39,7 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantBatchTask) -> str:
-    return f'{batch_label(task)} {len(task["variants"])} variants'
+    return f'{batch_label(task)} {variant_count(len(task["variants"]))}'
 
 
 def status_lines(
@@ -246,7 +246,7 @@ def run(config: RunConfig) -> None:
         raise ValueError("--session_exit requires --sessions with a session window")
     session_variants = session_specs or [None]
     validate_required_flags(strategies, session_specs)
-    strategy_params = resolve_strategy_params(strategies, config.strategy_params)
+    param_values = strategy_param_values(strategies, config.strategy_params)
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
     timeframes = list(dict.fromkeys(csv_items(config.high_timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
@@ -304,7 +304,8 @@ def run(config: RunConfig) -> None:
                 if high % low:
                     raise ValueError(f"{source}: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
                 strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
-    batch_count = sum(len(strategy_params[name]) for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
+    combinations = {name: combination_count(values) for name, values in param_values.items()}
+    batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
     task_count = batch_count * len(variant_pairs)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
@@ -312,13 +313,15 @@ def run(config: RunConfig) -> None:
         raise ValueError("--max_variants must be a positive integer")
     if task_count > config.max_variants:
         raise ValueError(f"{task_count} variants exceed --max_variants {config.max_variants}; pass a larger --max_variants to run them")
-    print(f"{task_count} variants", file=sys.stderr)
+    # Combinations are built and validated only once the run is known to fit the cap.
+    strategy_params = expand_strategy_params(strategies, param_values)
+    print(variant_count(task_count), file=sys.stderr)
     rows = []
     splits: list[Split] = []
     outputs_reset = False
     status = StatusDisplay(workers, started)
     strategy_label = ", ".join(strategies)
-    status.update(phase="Preparing", detail=f"{strategy_label} | {task_count} variants", completed=0, total=task_count)
+    status.update(phase="Preparing", detail=f"{strategy_label} | {variant_count(task_count)}", completed=0, total=task_count)
     status.start()
 
     try:
