@@ -75,12 +75,25 @@ def validate_params(params):
 
 
 class Touch:
-    """A pending touch: the channel it follows, the role it was touched with, its first and latest contact bars."""
+    """A pending touch: the channel it follows, the role it was touched with, the bar it was first seen on, and
+    the first and latest bars of its current contact.
+
+    Contact is interrupted on a bar whose developing high-timeframe range does not overlap the channel, which
+    happens when a high-timeframe bar opens clear of it; the next contact starts a new run.
+    """
 
     # A plain class: the strategy loader runs this module outside sys.modules, which dataclasses need.
     def __init__(self, top: float, bottom: float, role: int, bar: int):
         self.top, self.bottom, self.role = top, bottom, role
-        self.first_bar = self.latest_bar = bar
+        self.first_bar = self.contact_start = self.latest_bar = bar
+        self.in_contact = True
+
+    def update_contact(self, bar: int, overlaps: bool) -> None:
+        if overlaps:
+            if not self.in_contact:
+                self.contact_start = bar
+            self.latest_bar = bar
+        self.in_contact = overlaps
 
     @property
     def midpoint(self) -> float:
@@ -196,8 +209,7 @@ def segment_signals(df, rule, tick_size, params):
             if role != 0 and role != touch.role:
                 continue
             touch.top, touch.bottom = channel
-            if range_high >= touch.bottom and range_low <= touch.top:
-                touch.latest_bar = bar
+            touch.update_contact(bar, range_high >= touch.bottom and range_low <= touch.top)
             kept.append(touch)
         touches = kept
 
@@ -240,7 +252,7 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         return None
     # The marked swing is confirmed `swing_length` bars after its own bar.
     marked_bar = times.get_loc(marked_time) - params["swing_length"]
-    touch_time = times[touch.first_bar]
+    touch_time = times[touch.contact_start]
     swing_time = swing[f"{prefix}_break_swing_time"]
     stop_swing_time = times[marked_bar]
     return {

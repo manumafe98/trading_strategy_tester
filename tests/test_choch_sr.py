@@ -116,7 +116,7 @@ def test_role_flip_drops_the_pending_touch():
 
     assert len(inside) == 1
     assert inside.iloc[0]["time"] == at("04:41")
-    assert inside.iloc[0]["touch_time"] == at("04:32")
+    assert inside.iloc[0]["touch_time"] == at("04:36")  # the 04:35 five-minute bar opens clear of the channel, so contact restarts
     assert inside.iloc[0]["setup_time"] == at("04:39")  # contact continued through the next 5-minute bar
     assert flipped.empty
 
@@ -126,8 +126,9 @@ def test_signals_keep_coming_after_an_earlier_signal():
 
     assert list(signals["time"]) == [at("04:35"), at("05:57")]
     second = signals.iloc[1]
-    assert second["touch_time"] == at("04:32")  # the first touch was never cleared
+    assert second["touch_time"] == at("05:54")  # the touch is still pending, but its current contact started at the retest
     assert second["setup_time"] == at("05:54")  # its latest contact is the retest
+    assert second["plot_start_time"] == at("05:52")  # the retest's chart opens on its own swing, not at 04:32
 
 
 def test_choch_uses_the_matching_touch_with_the_latest_contact():
