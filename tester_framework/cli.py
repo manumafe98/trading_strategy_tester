@@ -59,3 +59,4 @@ class RunConfig:
     select_top: int | None = None
     target_fill: TargetFill = TargetFill.TICK_THROUGH
     intrabar: IntrabarRule = IntrabarRule.PATH
+    strategy_params: str | None = None

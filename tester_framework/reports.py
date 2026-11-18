@@ -18,6 +18,7 @@ from .settings import (
     COST_PAIR_COLUMNS, FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS, RESULTS_DIR, ROOT, SPLIT_COLUMNS, TIMEFRAMES, TRADES_DIR,
 )
 from .split import SELECT_BY, Split, entered_in_sample, selection_tags, split_tags
+from .strategy_params import format_param_value
 from .utils import clean_exit_name, net_value
 
 
@@ -60,7 +61,7 @@ def reset_output_dirs() -> None:
         folder.mkdir(parents=True, exist_ok=True)
 
 
-def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType) -> Path | None:
+def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType, strategy_params: dict) -> Path | None:
     # Keep plotly lazy so tests avoid chart dependencies.
     import plotly.graph_objects as go
 
@@ -92,7 +93,7 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
             view=view,
             asset=trade["asset"],
             timeframe=trade["timeframe"],
-            params={"trade": trade, "tick_size": trade["tick_size"]},
+            params={**strategy_params, "trade": trade, "tick_size": trade["tick_size"]},
         )
     color = "green" if trade["side"] == Side.LONG else "red"
     fig.add_trace(go.Scatter(x=[trade["entry_time"]], y=[trade["entry"]], mode="markers", name="entry", marker={"color": color, "size": 10}))
@@ -293,6 +294,10 @@ def _variant_sections(row: pd.Series, analytics: dict) -> str:
     custom_metrics = row.get("_strategy_metrics", {})
     if custom_metrics:
         sections.append(f'<section><h2>Strategy metrics</h2>{_detail_table(["Metric", "Value"], [[name, value] for name, value in custom_metrics.items()])}</section>')
+    strategy_params = row.get("_strategy_params", {})
+    if strategy_params:
+        param_rows = [[name, format_param_value(value)] for name, value in strategy_params.items()]
+        sections.append(f'<section><h2>Strategy parameters</h2>{_detail_table(["Parameter", "Value"], param_rows)}</section>')
     return "".join(sections)
 
 

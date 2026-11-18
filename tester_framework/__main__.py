@@ -25,6 +25,7 @@ from .split import (
 )
 from .settings import DEFAULT_SELECT_BY, DEFAULT_SELECT_TOP, DEFAULT_TIMEFRAMES, TIMEFRAMES, load_assets
 from .strategy_loader import load_strategy
+from .strategy_params import params_label, resolve_strategy_params
 from .types import VariantBatchTask
 from .utils import csv_items
 
@@ -41,6 +42,8 @@ def variant_label(task: VariantBatchTask) -> str:
     parts = [task["strategy"], task["asset"], task["timeframe"]]
     if session:
         parts.append(session)
+    if task["params_label"]:
+        parts.append(task["params_label"])
     parts.append(f'{len(task["variants"])} variants')
     return " ".join(parts)
 
@@ -249,6 +252,8 @@ def run(config: RunConfig) -> None:
         raise ValueError("--session_exit requires --sessions with a session window")
     session_variants = session_specs or [None]
     validate_required_flags(strategies, session_specs)
+    strategy_params = resolve_strategy_params(strategies, config.strategy_params)
+    param_labels = {name: params_label(getattr(strategies[name], "PARAMS", {}), params) for name, params in strategy_params.items()}
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
     timeframes = list(dict.fromkeys(csv_items(config.timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
@@ -369,6 +374,8 @@ def run(config: RunConfig) -> None:
                                     oos_cutoff=cutoff,
                                     target_fill=config.target_fill,
                                     intrabar=config.intrabar,
+                                    strategy_params=strategy_params[strategy_name],
+                                    params_label=param_labels[strategy_name],
                                 )
                             )
                     del data
@@ -443,8 +450,14 @@ def run(config: RunConfig) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser()
+    # Abbreviations would let the old --strategy flag reach --strategy_params.
+    p = argparse.ArgumentParser(allow_abbrev=False)
     p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
+    p.add_argument(
+        "--strategy_params",
+        metavar="NAME=VALUE;...",
+        help="semicolon list of parameter values the strategies declare in PARAMS, e.g. swing_length=10;entry_mode=break",
+    )
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--timeframe", help="comma list, default configured list")
     p.add_argument("--sessions", help="comma list of asia, london, ny, ny_bank, all, none, or custom ranges like ny=09:30-12:00")
@@ -544,6 +557,7 @@ def main() -> None:
             select_top=args.select_top,
             target_fill=TargetFill(args.target_fill),
             intrabar=IntrabarRule(args.intrabar),
+            strategy_params=args.strategy_params,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

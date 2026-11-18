@@ -21,6 +21,7 @@ def generate_signals(df, asset, timeframe, params):
 - Local futures `df` also carries a numeric `contract` column: one code per contract, changing at each roll.
 - A strategy can load data at a different execution timeframe by setting `EXECUTION_TIMEFRAME = "5m"`.
 - Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
+- A strategy can declare tunable parameters as `PARAMS = {"name": default}` (int, float, bool, str or `None`), plus `PARAM_TYPES = {"name": int}` for `None` defaults. `tick_size`, `session` and `trade` are reserved names. `--strategy_params "name=value;..."` overrides them, and `params` in every hook holds every declared parameter, defaults filled in.
 
 Optional hooks:
 
@@ -30,6 +31,9 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 def calculate_metrics(data, signals, trades, asset, timeframe, params):
     return {"My metric": value}  # flat dict of scalars
+
+def validate_params(params):
+    raise ValueError("...")  # runs before data loads; params holds every declared parameter
 ```
 
 Strategies own indicators and stops. The framework owns data loading, fills, exits, risk sizing, costs, result HTML, and trade HTML.

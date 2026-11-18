@@ -174,6 +174,31 @@ def calculate_metrics(data, signals, trades, asset, timeframe, params):
 
 `params` contains the effective RR, exit mode, operation, risk percentage, capital, costs flag, time period, data source, and asset tick size. The hook is called even when a variant has no completed trades.
 
+### Strategy parameters
+
+A strategy declares tunable settings as module-level `PARAMS`, a dict of name to default. A `None` default can name its type in `PARAM_TYPES`:
+
+```python
+PARAMS = {"swing_length": 20, "entry_mode": "close", "retest": True, "max_touch_minutes": None}
+PARAM_TYPES = {"max_touch_minutes": int}
+
+def validate_params(params):  # optional
+    if params["swing_length"] < 1:
+        raise ValueError("swing_length must be at least 1")
+```
+
+Defaults must be int, float, bool, str or `None`, and `PARAM_TYPES` types one of int, float, bool or str. The names `tick_size`, `session` and `trade` are reserved for the framework; declaring one fails when the strategy loads.
+
+`--strategy_params` overrides one value per parameter, as `;`-separated `name=value` items:
+
+```bash
+"$PY" -m tester_framework --strategies my_strategy --strategy_params "swing_length=10;entry_mode=break;max_touch_minutes=none"
+```
+
+Values are parsed to the default's type: whole numbers for int, finite numbers for float, `true`/`false` for bool, and text for str. `none` is accepted only for a `None` default. With a `PARAM_TYPES` entry, any other value must parse to that type; without one, it stays text. String values must not contain `,` or `;`. An undeclared name, a value that does not parse, a name given twice, or a name some strategy in `--strategies` does not declare fails before data loads. `validate_params` then receives every declared parameter, defaults filled in, also when the flag is omitted; a `ValueError` it raises is reported with the strategy name before data loads.
+
+`params` in `generate_signals`, `plot_indicators` and `calculate_metrics` holds every declared parameter with defaults filled in; in `calculate_metrics`, the engine keys listed above win over a same-named parameter. Each variant page lists every parameter value, and the progress display's variant labels show the values that differ from their defaults. A strategy without `PARAMS` behaves as before.
+
 ## ORB Strategies
 
 Three Opening Range Breakout strategies share common logic in `strategy/utils/`:

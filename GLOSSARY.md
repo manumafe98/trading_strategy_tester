@@ -109,6 +109,9 @@ _Avoid_: skipped signal, rejected signal
 One combination of strategy, asset, signal timeframe, RR, exit mode, and session window, backtested independently.
 _Avoid_: run, scenario
 
+**Strategy parameter**:
+A setting a strategy declares with a default and the framework can sweep per variant.
+
 **Selected variant**:
 One of the top N variants of a strategy and asset, ranked on an in-sample metric (`--select_by`, `--select_top`) in split mode.
 _Avoid_: winner, best variant, optimized variant

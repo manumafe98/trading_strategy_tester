@@ -61,7 +61,9 @@ def _run_variant(
         target_fill=task["target_fill"],
         intrabar=task["intrabar"],
     )
+    # Engine keys win over a same-named strategy parameter.
     params = {
+        **task["strategy_params"],
         "risk_reward_ratio": risk_reward_ratio,
         "exit_mode": exit_mode,
         "operation": task["operation"],
@@ -81,7 +83,7 @@ def _run_variant(
                 trade["session"] = session
             if task["trade_html"] is None or chart_number <= task["trade_html"]:
                 charted += 1
-                trade["chart_path"] = write_trade_html(data, trade, strategy)
+                trade["chart_path"] = write_trade_html(data, trade, strategy, task["strategy_params"])
                 if charted % 100 == 0:
                     # Plotly retains cyclic objects long enough to exhaust parallel Windows workers.
                     gc.collect()
@@ -110,6 +112,7 @@ def _run_variant(
         row["_oos_cutoff"] = task["oos_cutoff"]
     row["_analytics"] = encode_analytics(analytics)
     row["_strategy_metrics"] = custom_metrics
+    row["_strategy_params"] = task["strategy_params"]
     return row
 
 
@@ -132,7 +135,7 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
                 data,
                 asset=task["asset"],
                 timeframe=task["timeframe"],
-                params={"tick_size": task["asset_cfg"].tick_size, "session": task["session"]},
+                params={**task["strategy_params"], "tick_size": task["asset_cfg"].tick_size, "session": task["session"]},
             )
             signals = filter_signals(signals, task["session"])
         except MemoryError as exc:

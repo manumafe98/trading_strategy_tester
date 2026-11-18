@@ -29,3 +29,5 @@ class VariantBatchTask(TypedDict):
     oos_cutoff: int | None
     target_fill: TargetFill
     intrabar: IntrabarRule
+    strategy_params: dict[str, object]
+    params_label: str
