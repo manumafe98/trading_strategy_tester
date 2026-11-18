@@ -8,7 +8,7 @@ import numpy as np
 import pandas as pd
 
 from .analytics import classify_outcome, trade_stats
-from .data import session_labels
+from .data import market_session_starts, session_labels
 from .models import OPERATIONS, AssetConfig, ExitReason, IntrabarRule, Side, TargetFill
 from .sessions import SessionSpec, session_exit_bars
 from .split import entered_in_sample, walk_forward_efficiency
@@ -598,8 +598,12 @@ def run_backtest(
         bar_net_equity[trade["exit_i"]] = current_net
         last_bar_idx = trade["exit_i"] + 1
         busy_until = trade["exit_i"]
-        if high_bar is not None:
-            # High-timeframe bars are clock-aligned, as resample_data aligns intraday rules.
+        if timeframe == "1d":
+            # Daily bars open at the market session start, as resample_data aligns them.
+            label = session_labels(data.index[busy_until : busy_until + 1], asset_cfg.session_timezone, asset_cfg.session_start)
+            fresh_from = market_session_starts(label + pd.Timedelta(days=1), asset_cfg)[0]
+        elif high_bar is not None:
+            # Intraday high-timeframe bars are clock-aligned, as resample_data aligns intraday rules.
             fresh_from = pd.Timestamp(data.index[busy_until]).floor(high_bar) + high_bar
         trades.append(trade)
         if max_trades is not None and len(trades) >= max_trades:

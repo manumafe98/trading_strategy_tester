@@ -1575,6 +1575,31 @@ def test_setup_time_rule_uses_each_risk_reward_ratio_s_own_exit(test_asset_cfg):
     assert [(t["entry_i"], t["exit_i"]) for t in rr3] == [(1, 4)]
 
 
+@pytest.mark.parametrize(
+    ("target_bar", "setup_time", "accepted"),
+    [
+        # Exit at 01:00 UTC, inside the market session that opened at 18:00 New York (23:00 UTC) on Dec 31.
+        (1, "2025-01-01 22:00", False),
+        (1, "2025-01-01 23:00", True),  # the next market session opens before midnight UTC
+        # Exit at 23:00 UTC, the first bar of the Jan 1 market session: midnight UTC is not a daily bar open.
+        (23, "2025-01-02 01:00", False),
+        (23, "2025-01-02 23:00", True),
+    ],
+)
+def test_daily_setup_time_rule_uses_the_market_session_start(test_asset_cfg, target_bar, setup_time, accepted):
+    flat = [100.0, 100.0, 100.0, 100.0]
+    data = _bars(*[[100.0, 101.5, 100.0, 101.0] if i == target_bar else flat for i in range(50)])
+    cfg = replace(test_asset_cfg, session_timezone="America/New_York", session_start="18:00")
+    signals = [
+        {"time": data.index[target_bar - 1], "side": "long", "stop": 99.0},
+        {"time": data.index[47], "side": "long", "stop": 99.0, "setup_time": pd.Timestamp(setup_time)},
+    ]
+
+    _, trades = _run(data, signals, cfg, timeframe="1d", low_timeframe="1h")
+
+    assert [t["entry_i"] for t in trades] == ([target_bar, 48] if accepted else [target_bar])
+
+
 def test_setup_time_after_signal_time_is_an_error():
     signals = pd.DataFrame(
         [{"time": pd.Timestamp("2025-01-01 01:00"), "side": "long", "stop": 99, "setup_time": pd.Timestamp("2025-01-01 01:15")}]

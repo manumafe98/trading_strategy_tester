@@ -165,7 +165,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 
 The framework calls this hook for each trade HTML. Keep indicator plotting in the strategy because only the strategy knows which lines matter.
 
-A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--high_timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. High-timeframe bars are clock-aligned, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
+A signal may carry a `setup_time`: the start of the latest bar its setup depends on, a UTC-naive timestamp no later than `time`. After a trade's final exit, a signal whose `setup_time` is before the open of the first high-timeframe (`--high_timeframe`) bar starting after the exit bar's start is discarded and counted in `Discarded`. Intraday high-timeframe bars are clock-aligned and daily ones open at the asset's market session start, and each RR and exit mode uses its own exits. A signal without `setup_time`, or with NA, is not checked.
 
 Any extra signal column beyond `time`, `side`, `stop`, `entry`, and `setup_time` (for example `vwap`) is copied onto the trade passed as `params["trade"]` when its value is not NA. Engine-owned trade keys such as `target` or `qty` win over same-named signal columns. `plot_start_time` is parsed as a datetime and moves the chart start back to it.
 
