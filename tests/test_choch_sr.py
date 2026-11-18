@@ -336,6 +336,10 @@ def test_a_touch_whose_contact_is_older_than_max_touch_minutes_gives_no_signal(l
     assert len(run(long_setup(), max_touch_minutes=limit)) == trades
 
 
+def test_max_touch_minutes_counts_from_the_start_of_the_current_contact():
+    assert list(run(repeated_setup(), max_touch_minutes=3)["time"]) == [at("04:35"), at("05:57")]
+
+
 def test_max_touch_minutes_is_an_optional_int():
     assert choch_sr.PARAMS["max_touch_minutes"] is None
     assert choch_sr.PARAM_TYPES == {"max_touch_minutes": int}

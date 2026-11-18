@@ -103,7 +103,9 @@ def touch_bands(text: str) -> list[tuple[float, float, str]]:
         except ValueError:
             raise ValueError(f"touch_buckets band {band!r} must look like 5-15 or 60+") from None
         if low != previous_high or not high > low:
-            raise ValueError("touch_buckets must be increasing bands from 0 with no gaps or overlaps, open-ended only at the end")
+            raise ValueError(
+                "touch_buckets must be increasing bands from 0 with no gaps or overlaps, open-ended only at the end"
+            )
         label = f"{low:g}+m" if high == math.inf else f"{low:g}-{high:g}m"
         bands.append((low, high, label))
         previous_high = high
@@ -261,7 +263,9 @@ def segment_signals(df, rule, tick_size, params):
                 continue
             # Any channel with the matching role counts. Touches are never cleared, so the Pine's first pending
             # touch could be a stale one; the latest contact is the one the setup-time rule can accept.
-            usable = [t for t in touches if t.role == role and t.first_bar < bar and within_touch_limit(t, bar, times, params)]
+            usable = [
+                t for t in touches if t.role == role and t.first_bar < bar and within_touch_limit(t, bar, times, params)
+            ]
             if usable:
                 touch = max(usable, key=lambda t: t.prior_latest_bar)
                 row = signal_row(structure, bar, side, touch, closes[bar], reference_close, times, tick_size, params)
