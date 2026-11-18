@@ -52,6 +52,7 @@ def test_support_touch_then_bullish_choch_gives_one_long():
     assert row["choch_level"] == 100.52
     assert row["swing_time"] == at("04:30")
     assert row["stop_swing_time"] == at("04:32")
+    assert row["entry_mode"] == "close"
 
 
 def test_resistance_touch_then_bearish_choch_gives_one_short():
@@ -282,6 +283,7 @@ def test_input_is_not_mutated():
         ({"stop_max": 0.0}, "stop_max"),
         ({"stop_min": 0.6, "stop_max": 0.5}, "stop_min"),
         ({"stop_source": "last_hl"}, "stop_source"),
+        ({"entry_mode": "touch"}, "entry_mode"),
     ],
 )
 def test_validate_params_rejects_bad_settings(overrides, message):
@@ -299,6 +301,7 @@ def test_defaults_are_the_pine_defaults():
         "stop_max": 0.5,
         "stop_unit": "%",
         "stop_source": "last_ll_hh",
+        "entry_mode": "close",
     }
     assert choch_sr.LOW_TIMEFRAME == "1m"
     choch_sr.validate_params(dict(choch_sr.PARAMS))
@@ -309,3 +312,54 @@ def test_strategy_loader_runs_it():
     params = {**strategy.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "session": None}
 
     assert len(strategy.generate_signals(long_setup(), "TEST", "5m", params)) == 1
+
+
+def wick_only_break() -> pd.DataFrame:
+    df = long_setup()
+    df.iloc[-1] = [100.30, 100.56, 100.28, 100.50, 1.0]
+    return df
+
+
+def test_wick_only_break_gives_a_stop_entry_in_break_mode_only():
+    assert run(wick_only_break()).empty
+
+    (row,) = run(wick_only_break(), entry_mode="break").to_dict("records")
+
+    assert row["time"] == at("04:35")
+    assert row["side"] == "long"
+    assert row["stop_entry"] == 100.53
+    assert pd.isna(row["entry"])
+    assert row["stop"] == 100.12
+    assert row["setup_time"] == at("04:34")
+    assert row["choch_level"] == 100.52
+    assert row["entry_mode"] == "break"
+
+
+def backtest(df, signals, asset_cfg):
+    return run_backtest(
+        df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10_000, with_costs=False,
+        asset_cfg=dataclasses.replace(asset_cfg, tick_size=0.01),
+    )
+
+
+@pytest.mark.parametrize(
+    ("setup", "fill"),
+    [(wick_only_break, 100.53), (long_setup, 100.55)],
+)
+def test_break_entry_fills_at_the_level_or_at_an_open_beyond_it(test_asset_cfg, setup, fill):
+    df = append(setup(), RECOVERY_CLOSES)
+
+    _, (trade,) = backtest(df, run(df, entry_mode="break"), test_asset_cfg)
+
+    assert trade["entry_time"] == at("04:35")
+    assert trade["entry"] == fill
+    assert trade["entry_mode"] == "break"
+
+
+def test_break_entry_ignores_a_stop_swing_confirmed_on_the_choch_bar():
+    df = long_setup().iloc[:-1].copy()
+    df.iloc[-1] = [100.30, 100.56, 100.28, 100.30, 1.0]
+    assert market_structure(df, 2, "wick")["last_ll_time"].iloc[-1] == at("04:34")
+
+    assert run(df, entry_mode="break").empty

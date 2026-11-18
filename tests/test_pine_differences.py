@@ -1,10 +1,14 @@
-"""Intentional differences from the Pine ORB references, documented in README "Differences From Pine"."""
+"""Intentional differences from the Pine references, documented in README "Differences From Pine"."""
 
 from __future__ import annotations
 
 import pandas as pd
+import pytest
 
+from strategy import choch_sr
 from strategy.orb_fvg import generate_signals
+from strategy.utils.market_structure import market_structure
+from tests.choch_sr_bars import long_setup, mirror
 from tester_framework.backtest import run_backtest
 from tester_framework.models import ExitReason
 from tester_framework.sessions import parse_sessions
@@ -145,3 +149,29 @@ def test_fvg_window_follows_the_session_window():
     signals = _orb_fvg(data, session=parse_sessions("ny=09:30-13:00")[0])
 
     assert signals[["side", "fvg_bottom", "time"]].values.tolist() == [["long", 99.5, pd.Timestamp("2025-01-02 17:09")]]
+
+
+def _choch_bar_breaking_both_swings(opened):
+    df = long_setup()
+    df.iloc[-1] = [opened, 100.56, 100.10, 100.40, 1.0]
+    return df
+
+
+@pytest.mark.parametrize(
+    ("opened", "reflect", "sides"),
+    [(100.45, False, ["long"]), (100.20, False, []), (100.45, True, ["short"]), (100.20, True, [])],
+)
+def test_double_wick_break_fills_only_the_level_the_path_reaches_first(opened, reflect, sides):
+    df = _choch_bar_breaking_both_swings(opened)
+    params = {**choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "entry_mode": "break"}
+
+    signals = choch_sr.generate_signals(mirror(df) if reflect else df, asset="TEST", timeframe="5m", params=params)
+
+    assert list(signals["side"]) == sides
+
+
+def test_double_wick_break_opening_nearer_the_low_breaks_the_low_first_as_a_bos():
+    choch_bar = market_structure(_choch_bar_breaking_both_swings(100.20), 2, "wick").iloc[-1]
+
+    assert (choch_bar["bearish_break_price"], choch_bar["bearish_choch"]) == (100.13, False)
+    assert (choch_bar["bullish_break_price"], choch_bar["bullish_choch"]) == (100.52, True)

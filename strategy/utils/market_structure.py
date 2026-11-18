@@ -23,13 +23,15 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
     A swing is a `swing_length`-bar pivot and appears on its confirmation bar, `swing_length` bars after
     its own bar. Breaking a swing high is bullish, breaking a swing low bearish; `confirmation="close"`
     needs a close beyond the swing, `"wick"` the high or low. Each swing breaks at most once. On one bar
-    the high side is processed before the low side, as in the Pine.
+    the high side is processed before the low side, as in the Pine, except that with `"wick"` an open
+    strictly nearer the low processes the low side first.
 
     Returned columns, indexed like `df` (`*_time` columns are bar times, NaT when absent):
     - `swing_high_price/label/time`, `swing_low_price/label/time`: a swing confirmed on this bar, its
       label (HH/LH, HL/LL) and its own bar.
     - `bullish_break_price/swing_time`, `bearish_break_price/swing_time`: the swing broken on this bar
-      and its own bar; `bullish_choch`, `bearish_choch`: whether that break is a CHoCH.
+      and its own bar; `bullish_choch`, `bearish_choch`: whether that break is a CHoCH;
+      `low_broken_first`: whether a bar breaking both swings broke the low first.
     - `last_hh_price/time`, `last_ll_price/time`: the last marked HH/LL and the bar that confirmed it.
     - `last_swing_high_price/time`, `last_swing_low_price/time`: the most recent confirmed swing of
       any label and its own bar, kept after it breaks.
@@ -44,6 +46,8 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
     closes = df["close"].to_numpy(dtype=float)
     high_source = closes if confirmation == "close" else highs
     low_source = closes if confirmation == "close" else lows
+    opens = df["open"].to_numpy(dtype=float)
+    opens_nearer_low = (confirmation == "wick") & (opens - lows < highs - opens)
     n = len(df)
     swing_high_bars = pivot_high_bars(highs, swing_length)
     swing_low_bars = pivot_high_bars(-lows, swing_length)
@@ -67,6 +71,7 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
         "bearish_break_price": prices(),
         "bearish_break_swing_time": bar_positions(),
         "bearish_choch": np.zeros(n, dtype=bool),
+        "low_broken_first": np.zeros(n, dtype=bool),
         "last_hh_price": prices(),
         "last_hh_time": bar_positions(),
         "last_ll_price": prices(),
@@ -107,18 +112,24 @@ def market_structure(df: pd.DataFrame, swing_length: int, confirmation: str = "c
                 if label == "LL":
                     last_ll, last_ll_time = price, i
 
-        if high_active and high_source[i] > previous_high:
+        high_broken = high_active and high_source[i] > previous_high
+        low_broken = low_active and low_source[i] < previous_low
+        if high_broken:
             high_active = False
             out["bullish_break_price"][i] = previous_high
             out["bullish_break_swing_time"][i] = previous_high_time
-            out["bullish_choch"][i] = previous_break_direction == -1
-            previous_break_direction = 1
-        if low_active and low_source[i] < previous_low:
+        if low_broken:
             low_active = False
             out["bearish_break_price"][i] = previous_low
             out["bearish_break_swing_time"][i] = previous_low_time
-            out["bearish_choch"][i] = previous_break_direction == 1
-            previous_break_direction = -1
+        out["low_broken_first"][i] = high_broken and low_broken and opens_nearer_low[i]
+        for direction in (-1, 1) if opens_nearer_low[i] else (1, -1):
+            if direction == 1 and high_broken:
+                out["bullish_choch"][i] = previous_break_direction == -1
+                previous_break_direction = 1
+            if direction == -1 and low_broken:
+                out["bearish_choch"][i] = previous_break_direction == 1
+                previous_break_direction = -1
 
         out["last_hh_price"][i], out["last_hh_time"][i] = last_hh, last_hh_time
         out["last_ll_price"][i], out["last_ll_time"][i] = last_ll, last_ll_time

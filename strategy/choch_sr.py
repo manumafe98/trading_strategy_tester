@@ -2,7 +2,8 @@
 
 A setup is a touch on a support/resistance channel on the high timeframe followed by the first CHoCH the
 opposite way on the low timeframe: a support touch then a bullish CHoCH is a long, a resistance touch then
-a bearish CHoCH a short. Entries are close entries on the CHoCH bar.
+a bearish CHoCH a short. Entries are close entries on the CHoCH bar, or with `entry_mode=break` stop entries
+one tick beyond the broken swing.
 
 The strategy ignores positions: it never clears touches or waits after its own signals. Each signal carries
 `setup_time`, the latest contact bar of its touch, and the engine's setup-time rule discards retests that
@@ -35,8 +36,10 @@ PARAMS = {
     "stop_max": 0.5,
     "stop_unit": "%",
     "stop_source": "last_ll_hh",
+    "entry_mode": "close",
 }
 STOP_SOURCES = ("last_ll_hh", "last_swing")
+ENTRY_MODES = ("close", "break")
 EPSILON = 1e-8
 CHANNEL_CACHE: dict[tuple, pd.DataFrame] = {}
 CHANNEL_CACHE_SIZE = 32
@@ -47,6 +50,7 @@ OUTPUT_COLUMNS = [
     "side",
     "stop",
     "entry",
+    "stop_entry",
     "setup_time",
     "channel_top",
     "channel_bottom",
@@ -57,6 +61,7 @@ OUTPUT_COLUMNS = [
     "stop_swing_time",
     "stop_swing_price",
     "stop_source",
+    "entry_mode",
     "plot_start_time",
 ]
 PLOT_KEYS = (
@@ -80,6 +85,8 @@ def validate_params(params):
         validate_widths(*(params[name] for name in names), names=names)
     if params["stop_source"] not in STOP_SOURCES:
         raise ValueError(f"stop_source must be one of {', '.join(STOP_SOURCES)}, got {params['stop_source']}")
+    if params["entry_mode"] not in ENTRY_MODES:
+        raise ValueError(f"entry_mode must be one of {', '.join(ENTRY_MODES)}, got {params['entry_mode']}")
 
 
 class Touch:
@@ -185,9 +192,16 @@ def segment_signals(df, rule, tick_size, params):
     high_rows = high_bars.index.get_indexer(period_starts)
     new_period = np.r_[True, period_starts[1:] != period_starts[:-1]]
 
-    structure = market_structure(df, params["swing_length"])
+    confirmation = "wick" if params["entry_mode"] == "break" else "close"
+    structure = market_structure(df, params["swing_length"], confirmation)
     bullish_choch = structure["bullish_choch"].to_numpy()
     bearish_choch = structure["bearish_choch"].to_numpy()
+    if confirmation == "wick":
+        low_broken_first = structure["low_broken_first"].to_numpy()
+        broke_both = (structure["bullish_break_price"].notna() & structure["bearish_break_price"].notna()).to_numpy()
+        high_broken_first = broke_both & ~low_broken_first
+        bullish_choch = bullish_choch & ~low_broken_first
+        bearish_choch = bearish_choch & ~high_broken_first
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
@@ -258,14 +272,14 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
     swing = structure.iloc[bar]
-    marked_price, stop_swing_time = stop_swing(swing, is_long, times, params)
+    enters_on_break = params["entry_mode"] == "break"
+    swings_before_bar = structure.iloc[bar - 1] if enters_on_break else swing
+    marked_price, stop_swing_time = stop_swing(swings_before_bar, is_long, times, params)
     if pd.isna(marked_price):
         return None
-    if is_long:
-        stop = math.floor((marked_price - tick_size) / tick_size + EPSILON) * tick_size
-    else:
-        stop = math.ceil((marked_price + tick_size) / tick_size - EPSILON) * tick_size
-    stop = round(stop, decimal_places(tick_size))
+    stop = one_tick_beyond(marked_price, not is_long, tick_size)
+    if enters_on_break:
+        entry = one_tick_beyond(swing[f"{prefix}_break_price"], is_long, tick_size)
     if (stop >= entry if is_long else stop <= entry) or not stop_distance_ok(entry, stop, params):
         return None
     touch_time = times[touch.prior_contact_start]
@@ -274,7 +288,8 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         "time": times[bar],
         "side": side,
         "stop": stop,
-        "entry": entry,
+        "entry": math.nan if enters_on_break else entry,
+        "stop_entry": entry if enters_on_break else math.nan,
         "setup_time": times[touch.prior_latest_bar],
         "channel_top": touch.top,
         "channel_bottom": touch.bottom,
@@ -285,9 +300,18 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         "stop_swing_time": stop_swing_time,
         "stop_swing_price": marked_price,
         "stop_source": params["stop_source"],
+        "entry_mode": params["entry_mode"],
         # The trade chart opens on the earliest bar it draws.
         "plot_start_time": min(touch_time, swing_time, stop_swing_time),
     }
+
+
+def one_tick_beyond(price: float, upward: bool, tick_size: float) -> float:
+    if upward:
+        ticks = math.ceil((price + tick_size) / tick_size - EPSILON)
+    else:
+        ticks = math.floor((price - tick_size) / tick_size + EPSILON)
+    return round(ticks * tick_size, decimal_places(tick_size))
 
 
 def stop_swing(swing, is_long, times, params):
