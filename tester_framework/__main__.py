@@ -290,11 +290,11 @@ def run(config: RunConfig) -> None:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
     for strategy in strategies.values():
-        execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
+        low_timeframe = getattr(strategy, "LOW_TIMEFRAME", None)
         for timeframe in timeframes:
-            data_timeframe = execution_timeframe or timeframe
+            data_timeframe = low_timeframe or timeframe
             if data_timeframe not in TIMEFRAMES:
-                raise ValueError(f"Unknown execution timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
+                raise ValueError(f"Unknown low timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
             for asset in assets:
                 if data_timeframe not in asset_configs[asset].bars_per_year:
                     raise ValueError(f"Missing bars_per_year for {asset} {data_timeframe}")
@@ -325,9 +325,9 @@ def run(config: RunConfig) -> None:
                 risk_pct = risks[asset]
                 timeframe_groups = {}
                 for strategy_name, strategy in strategies.items():
-                    execution_timeframe = getattr(strategy, "EXECUTION_TIMEFRAME", None)
+                    low_timeframe = getattr(strategy, "LOW_TIMEFRAME", None)
                     for timeframe in timeframes:
-                        timeframe_groups.setdefault(execution_timeframe or timeframe, []).append(
+                        timeframe_groups.setdefault(low_timeframe or timeframe, []).append(
                             (strategy_name, strategy, timeframe)
                         )
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
@@ -358,7 +358,7 @@ def run(config: RunConfig) -> None:
                                     asset=asset,
                                     asset_cfg=asset_cfg,
                                     timeframe=timeframe,
-                                    execution_timeframe=data_timeframe,
+                                    low_timeframe=data_timeframe,
                                     operation=config.operation,
                                     risk_pct=risk_pct,
                                     capital=config.capital,
@@ -449,6 +449,13 @@ def run(config: RunConfig) -> None:
     print(f"elapsed: {format_duration(elapsed)} ({elapsed:.2f}s)")
 
 
+class RemovedTimeframeFlag(argparse.Action):
+    """Fails `--timeframe` with a pointer to its replacement (ADR 0004)."""
+
+    def __call__(self, parser, namespace, values, option_string=None):
+        parser.error("--timeframe was renamed to --high_timeframe")
+
+
 def parser() -> argparse.ArgumentParser:
     # Abbreviations would let the old --strategy flag reach --strategy_params.
     p = argparse.ArgumentParser(allow_abbrev=False)
@@ -459,7 +466,8 @@ def parser() -> argparse.ArgumentParser:
         help="semicolon list of parameter values the strategies declare in PARAMS, e.g. swing_length=10;entry_mode=break",
     )
     p.add_argument("--asset", help="comma list, default all configured assets")
-    p.add_argument("--timeframe", help="comma list, default configured list")
+    p.add_argument("--high_timeframe", help="comma list, default configured list")
+    p.add_argument("--timeframe", nargs="?", action=RemovedTimeframeFlag, help=argparse.SUPPRESS)
     p.add_argument("--sessions", help="comma list of asia, london, ny, ny_bank, all, none, or custom ranges like ny=09:30-12:00")
     p.add_argument(
         "--time_period",
@@ -535,7 +543,7 @@ def main() -> None:
         config = RunConfig(
             strategies=strategies,
             asset=args.asset,
-            timeframe=args.timeframe,
+            timeframe=args.high_timeframe,
             sessions=args.sessions,
             time_period=args.time_period,
             data_source=args.data_source,

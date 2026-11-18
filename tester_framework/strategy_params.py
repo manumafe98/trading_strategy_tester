@@ -16,7 +16,7 @@ __all__ = [
 
 
 # Keys the framework itself puts in a strategy's params.
-RESERVED_PARAMS = ("tick_size", "session", "trade")
+RESERVED_PARAMS = ("tick_size", "pip_size", "session", "trade")
 PARAM_VALUE_TYPES = (int, float, bool, str)
 
 

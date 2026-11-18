@@ -13,7 +13,7 @@ class VariantBatchTask(TypedDict):
     asset: str
     asset_cfg: AssetConfig
     timeframe: str
-    execution_timeframe: str
+    low_timeframe: str
     operation: str
     risk_pct: float
     capital: float

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import re
+from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -23,7 +24,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "asset": "TEST",
         "asset_cfg": asset_cfg,
         "timeframe": "1h",
-        "execution_timeframe": "1h",
+        "low_timeframe": "1h",
         "operation": "all",
         "risk_pct": 1,
         "capital": 10_000,
@@ -302,7 +303,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "asset": "TEST",
                 "asset_cfg": asset_cfg,
                 "timeframe": "1h",
-                "execution_timeframe": "1h",
+                "low_timeframe": "1h",
                 "operation": "all",
                 "risk_pct": 1,
                 "capital": 10_000,
@@ -352,3 +353,25 @@ def test_run_variants_closes_trades_at_roll_on_cached_contract_data(monkeypatch,
 
     (trade,) = decode_analytics(row["_analytics"])["trades"]
     assert (trade["exit_reason"], trade["exit_time"]) == ("roll", pd.Timestamp("2025-01-02 10:00"))
+
+
+def test_strategy_hooks_receive_the_asset_pip_size(monkeypatch, tmp_path, base_data, test_asset_cfg):
+    received = []
+
+    def generate_signals(data, asset, timeframe, params):
+        received.append(params["pip_size"])
+        return pd.DataFrame()
+
+    def calculate_metrics(data, signals, trades, asset, timeframe, params):
+        received.append(params["pip_size"])
+        return {}
+
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(generate_signals=generate_signals, calculate_metrics=calculate_metrics),
+    )
+
+    runner.run_variants(_task(base_data, tmp_path, replace(test_asset_cfg, pip_size=0.5)))
+
+    assert received == [0.5, 0.5]

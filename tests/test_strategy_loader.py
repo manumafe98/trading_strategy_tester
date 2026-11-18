@@ -31,7 +31,7 @@ def test_missing_strategy_rejected():
 
 
 def test_module_without_generate_signals_rejected(monkeypatch, tmp_path):
-    (tmp_path / "no_signals.py").write_text("EXECUTION_TIMEFRAME = '5m'\n", encoding="utf-8")
+    (tmp_path / "no_signals.py").write_text("LOW_TIMEFRAME = '5m'\n", encoding="utf-8")
     monkeypatch.setattr(strategy_loader, "STRATEGY_DIR", tmp_path)
 
     with pytest.raises(ValueError, match="must define generate_signals"):
@@ -50,7 +50,7 @@ def _write_strategy(tmp_path, monkeypatch, body):
     monkeypatch.setattr(strategy_loader, "STRATEGY_DIR", tmp_path)
 
 
-@pytest.mark.parametrize("name", ["tick_size", "session", "trade"])
+@pytest.mark.parametrize("name", ["tick_size", "pip_size", "session", "trade"])
 def test_declaring_a_reserved_parameter_name_fails_at_load(monkeypatch, tmp_path, name):
     _write_strategy(tmp_path, monkeypatch, f"PARAMS = {{'{name}': 1}}\n")
 

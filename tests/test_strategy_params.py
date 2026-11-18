@@ -67,6 +67,7 @@ def test_overrides_arrive_typed_like_their_defaults_with_other_defaults_filled_i
         "limit": 30,
         "note": None,
         "tick_size": test_asset_cfg.tick_size,
+        "pip_size": test_asset_cfg.pip_size,
         "session": None,
     }
     assert type(params["swing_length"]) is int

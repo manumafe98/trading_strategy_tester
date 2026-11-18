@@ -52,7 +52,7 @@ def _run_variant(
         capital=task["capital"],
         with_costs=task["with_costs"],
         asset_cfg=task["asset_cfg"],
-        execution_timeframe=task["execution_timeframe"],
+        low_timeframe=task["low_timeframe"],
         max_trades=task["max_trades"],
         days=task["days"],
         months=task["months"],
@@ -73,6 +73,7 @@ def _run_variant(
         "time_period": task["time_period"],
         "data_source": task["data_source"],
         "tick_size": task["asset_cfg"].tick_size,
+        "pip_size": task["asset_cfg"].pip_size,
         "session": task["session"],
     }
     custom_metrics = strategy_metrics(strategy, data, signals, trades, task["asset"], task["timeframe"], params)
@@ -135,7 +136,12 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
                 data,
                 asset=task["asset"],
                 timeframe=task["timeframe"],
-                params={**task["strategy_params"], "tick_size": task["asset_cfg"].tick_size, "session": task["session"]},
+                params={
+                    **task["strategy_params"],
+                    "tick_size": task["asset_cfg"].tick_size,
+                    "pip_size": task["asset_cfg"].pip_size,
+                    "session": task["session"],
+                },
             )
             signals = filter_signals(signals, task["session"])
         except MemoryError as exc:
