@@ -11,6 +11,9 @@ The first break of an active swing in the direction opposite to the previous bre
 A price band built from pivots. It is called support when it lies below the reference price, resistance when it lies above it, and an in-price channel when the price is inside the band.
 _Avoid_: S/R zone, level
 
+**Touch**:
+A low-timeframe price range overlapping a support/resistance channel: the developing high-timeframe bar's range, assembled from closed low-timeframe bars, reaching into a support or resistance channel. A pending touch keeps its first and latest contact bar.
+
 **Fair value gap (FVG)**:
 A three-bar price gap where the first bar's high stays below the third bar's low (bullish), or the first bar's low stays above the third bar's high (bearish).
 _Avoid_: imbalance, gap
@@ -20,6 +23,12 @@ _Avoid_: imbalance, gap
 **Opening Range Breakout (ORB)**:
 A strategy family that marks the high and low of the opening range, the first high-timeframe bar of a session window, and trades the first close beyond it.
 _Avoid_: ORB as a name for the range itself
+
+**`choch_sr`**:
+A strategy that trades a setup: long after a touch on a support channel, short after a touch on a resistance channel.
+
+**Setup**:
+A touch followed by the first CHoCH in the opposite direction: a bullish CHoCH after a support touch, a bearish CHoCH after a resistance touch.
 
 ## Time
 
