@@ -13,7 +13,7 @@ from time import perf_counter
 import pandas as pd
 
 from .analytics import format_duration
-from .backtest import INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
+from .backtest import BAR_DURATIONS, INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
 from .models import OPERATIONS, IntrabarRule, TargetFill
@@ -38,7 +38,7 @@ WorkerState = tuple[str, float] | None
 
 def variant_label(task: VariantBatchTask) -> str:
     session = session_label(task["session"])
-    parts = [task["strategy"], task["asset"], task["timeframe"]]
+    parts = [task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"]]
     if session:
         parts.append(session)
     parts.append(f'{len(task["variants"])} variants')
@@ -284,23 +284,29 @@ def run(config: RunConfig) -> None:
     for timeframe in timeframes:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-    for strategy in strategies.values():
-        low_timeframe = getattr(strategy, "LOW_TIMEFRAME", None)
+    low_timeframe_flags = list(dict.fromkeys(csv_items(config.low_timeframe)))
+    # One entry per strategy, high timeframe and low timeframe; each is a batch per asset and session window.
+    timeframe_pairs = []
+    for strategy_name, strategy in strategies.items():
+        declared = getattr(strategy, "LOW_TIMEFRAME", None)
+        if low_timeframe_flags and declared is None:
+            raise ValueError(f"--low_timeframe: {strategy_name} does not declare LOW_TIMEFRAME")
         for timeframe in timeframes:
-            data_timeframe = low_timeframe or timeframe
-            if data_timeframe not in TIMEFRAMES:
-                raise ValueError(f"Unknown low timeframe {data_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
-            for asset in assets:
-                if data_timeframe not in asset_configs[asset].bars_per_year:
-                    raise ValueError(f"Missing bars_per_year for {asset} {data_timeframe}")
-    task_count = (
-        len(strategies)
-        * len(assets)
-        * len(timeframes)
-        * len(session_variants)
-        * len(variant_pairs)
-    )
-    batch_count = len(strategies) * len(assets) * len(timeframes) * len(session_variants)
+            for low_timeframe in low_timeframe_flags or [declared or timeframe]:
+                if low_timeframe not in TIMEFRAMES:
+                    raise ValueError(f"Unknown low timeframe {low_timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
+                for asset in assets:
+                    if low_timeframe not in asset_configs[asset].bars_per_year:
+                        raise ValueError(f"Missing bars_per_year for {asset} {low_timeframe}")
+                if low_timeframe_flags:
+                    low, high = BAR_DURATIONS[low_timeframe], BAR_DURATIONS[timeframe]
+                    if low >= high:
+                        raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must be smaller than high timeframe {timeframe}")
+                    if high % low:
+                        raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
+                timeframe_pairs.append((strategy_name, strategy, timeframe, low_timeframe))
+    batch_count = len(timeframe_pairs) * len(assets) * len(session_variants)
+    task_count = batch_count * len(variant_pairs)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     rows = []
@@ -319,12 +325,8 @@ def run(config: RunConfig) -> None:
                 asset_cfg = asset_configs[asset]
                 risk_pct = risks[asset]
                 timeframe_groups = {}
-                for strategy_name, strategy in strategies.items():
-                    low_timeframe = getattr(strategy, "LOW_TIMEFRAME", None)
-                    for timeframe in timeframes:
-                        timeframe_groups.setdefault(low_timeframe or timeframe, []).append(
-                            (strategy_name, strategy, timeframe)
-                        )
+                for strategy_name, strategy, timeframe, low_timeframe in timeframe_pairs:
+                    timeframe_groups.setdefault(low_timeframe, []).append((strategy_name, strategy, timeframe))
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
                     data = load_data(asset, asset_cfg, data_timeframe, config.time_period, config.data_source)
@@ -454,6 +456,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
     p.add_argument("--asset", help="comma list, default all configured assets")
     p.add_argument("--high_timeframe", help="comma list, default configured list")
+    p.add_argument("--low_timeframe", help="comma list; only for strategies that declare LOW_TIMEFRAME, which is the default")
     p.add_argument("--timeframe", nargs="?", action=RemovedTimeframeFlag, help=argparse.SUPPRESS)
     p.add_argument("--sessions", help="comma list of asia, london, ny, ny_bank, all, none, or custom ranges like ny=09:30-12:00")
     p.add_argument(
@@ -552,6 +555,7 @@ def main() -> None:
             select_top=args.select_top,
             target_fill=TargetFill(args.target_fill),
             intrabar=IntrabarRule(args.intrabar),
+            low_timeframe=args.low_timeframe,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:
