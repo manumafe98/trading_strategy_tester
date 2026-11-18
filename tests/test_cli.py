@@ -116,6 +116,22 @@ def test_trade_html_rejects_negative_count():
         cli.parser().parse_args(["--trade_html", "-1"])
 
 
+def test_main_maps_high_timeframe_to_config(monkeypatch):
+    configs = []
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--high_timeframe", "15m,1h"])
+    monkeypatch.setattr(cli, "run", configs.append)
+    cli.main()
+
+    assert configs[0].timeframe == "15m,1h"
+
+
+def test_timeframe_flag_is_rejected_with_a_message_naming_high_timeframe(capsys):
+    with pytest.raises(SystemExit):
+        cli.parser().parse_args(["--timeframe", "1h"])
+
+    assert "--high_timeframe" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("flag", ["--strategy", "--exit-mode", "--no_trade_html"])
 def test_old_cli_flags_are_rejected(flag):
     with pytest.raises(SystemExit):
@@ -173,7 +189,7 @@ def test_run_rejects_invalid_calendar_filters(monkeypatch, test_asset_cfg, field
         cli.run(config)
 
 
-def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
+def test_run_loads_low_timeframe_once_for_all_high_timeframes(
     monkeypatch, tmp_path, test_asset_cfg, base_data
 ):
     load_calls = []
@@ -181,7 +197,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
     test_asset_cfg = replace(test_asset_cfg, bars_per_year={"1h": 1716, "15m": 6864, "5m": 20592})
 
     def load_strategy(_name):
-        return SimpleNamespace(EXECUTION_TIMEFRAME="5m", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
+        return SimpleNamespace(LOW_TIMEFRAME="5m", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
 
     def load_data(asset, _asset_cfg, timeframe, _period, _source):
         load_calls.append((asset, timeframe))
@@ -248,7 +264,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
     )
 
     assert load_calls == [("TEST", "5m")]
-    assert [(task["strategy"], task["timeframe"], task["execution_timeframe"]) for task in submitted] == [
+    assert [(task["strategy"], task["timeframe"], task["low_timeframe"]) for task in submitted] == [
         ("one", "1h", "5m"),
         ("one", "15m", "5m"),
         ("two", "1h", "5m"),
@@ -260,7 +276,7 @@ def test_run_loads_execution_timeframe_once_for_all_signal_timeframes(
 
 def test_run_waits_for_executor_before_temp_cleanup_on_failure(monkeypatch, tmp_path, test_asset_cfg, base_data):
     events = []
-    strategy = SimpleNamespace(EXECUTION_TIMEFRAME="1h", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
+    strategy = SimpleNamespace(LOW_TIMEFRAME="1h", generate_signals=lambda *_args, **_kwargs: pd.DataFrame())
 
     class TempDir:
         def __enter__(self):
@@ -704,7 +720,7 @@ def test_split_run_sends_cutoff_to_workers_and_shows_split_columns_and_ranges(mo
         "OOS Trades", "OOS Return", "OOS Max DD", "OOS Sharpe", "OOS Return / DD", "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected"
     ]
     (split,) = args[3]
-    assert (split.asset, split.execution_timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
+    assert (split.asset, split.low_timeframe, split.cutoff, split.bar_count) == ("TEST", "1h", 24, 48)
     out = capsys.readouterr().out
     assert "TEST 1h in-sample 2025-01-01 00:00 to 2025-01-01 23:00 UTC" in out
     assert "TEST 1h out-of-sample 2025-01-02 00:00 to 2025-01-02 23:00 UTC" in out

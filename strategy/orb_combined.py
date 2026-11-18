@@ -14,7 +14,7 @@ from strategy.utils.orb import (
 )
 
 
-EXECUTION_TIMEFRAME = "1m"
+LOW_TIMEFRAME = "1m"
 FVG_BOX_BARS = 22
 EXT_LINE_BARS = 22
 REQUIRED_FLAGS = {"sessions": REQUIRED_SESSION_MESSAGE}
