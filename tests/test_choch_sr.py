@@ -1,12 +1,16 @@
 from __future__ import annotations
 
+import dataclasses
+
 import pandas as pd
+import plotly.graph_objects as go
 import pytest
 
 from strategy import choch_sr
-from strategy.choch_sr import generate_signals
+from strategy.choch_sr import generate_signals, plot_indicators
 from strategy.utils.market_structure import market_structure
-from tests.choch_sr_bars import long_setup, mirror, repeated_setup, role_flip_setup, shifted_trigger, two_channel_setup
+from tests.choch_sr_bars import RECOVERY_CLOSES, append, long_setup, mirror, repeated_setup, role_flip_setup, shifted_trigger, two_channel_setup
+from tester_framework.backtest import run_backtest
 from tester_framework.sessions import parse_sessions
 from tester_framework.strategy_loader import load_strategy
 
@@ -111,6 +115,62 @@ def test_choch_uses_the_matching_touch_with_the_latest_contact():
     assert (second["zone_top"], second["zone_bottom"]) == (101.7, 101.5)
     assert second["touch_time"] == at("09:34")
     assert second["setup_time"] == at("09:34")
+
+
+def with_contracts(df, roll_time=None):
+    """`df` with a `contract` column: one code throughout, or a second code from `roll_time`."""
+    codes = [2 if roll_time is not None and time >= roll_time else 1 for time in df.index]
+    return df.assign(contract=codes)
+
+
+def test_contract_change_mid_setup_gives_no_signal_from_pre_roll_touches():
+    rolled = run(with_contracts(long_setup(), roll_time=at("04:35")))  # the roll lands on the CHoCH bar
+
+    assert rolled.empty
+
+
+def test_data_with_one_contract_or_without_a_contract_column_never_resets():
+    assert list(run(with_contracts(long_setup()))["time"]) == [at("04:35")]
+    assert list(run(long_setup())["time"]) == [at("04:35")]
+
+
+def test_contract_change_rebuilds_state_from_the_new_contract_bars():
+    first = long_setup()
+    second = long_setup()
+    offset = first.index[-1] - first.index[0] + pd.Timedelta(minutes=1)
+    second.index = second.index + offset
+    df = pd.concat([first.assign(contract=1), second.assign(contract=2)])
+
+    signals = run(df)
+
+    assert list(signals["time"]) == [at("04:35"), at("04:35") + offset]
+    second_row = signals.iloc[1]
+    assert second_row["touch_time"] == at("04:32") + offset  # the first contract's touch did not carry over
+    assert (second_row["zone_top"], second_row["zone_bottom"]) == (100.2, 100.0)
+
+
+def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg):
+    df = append(long_setup(), RECOVERY_CLOSES)  # the long exits at its target during the recovery
+    signals = run(df)
+    _, (trade,) = run_backtest(
+        df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10_000, with_costs=False,
+        asset_cfg=dataclasses.replace(test_asset_cfg, tick_size=0.01),
+    )
+    fig = go.Figure()
+
+    plot_indicators(fig, df, df, "TEST", "5m", {"trade": trade, "tick_size": 0.01})
+
+    shapes = {shape.name: shape for shape in fig.layout.shapes}
+    channel = shapes["support channel"]
+    assert (channel.x0, channel.x1, channel.y0, channel.y1) == (at("04:32"), trade["exit_time"], 100.0, 100.2)
+    choch = shapes["CHoCH"]
+    assert (choch.x0, choch.x1, choch.y0, choch.y1) == (at("04:30"), at("04:35"), 100.52, 100.52)
+    assert choch.label.text == "CHoCH"
+    markers = {marker.name: (list(marker.x), list(marker.y)) for marker in fig.data}
+    assert markers["touch"] == ([at("04:32")], [100.2])
+    assert markers["stop swing (LL)"] == ([at("04:32")], [100.13])
+    assert trade["plot_start_time"] == at("04:30")  # the chart opens on the earliest bar it draws
 
 
 def test_session_window_does_not_gate_channels_or_touches():
