@@ -17,6 +17,7 @@ def generate_signals(df, asset, timeframe, params):
 
 - `side` must be `long` or `short`.
 - `params["tick_size"]` contains the configured asset price tick.
+- `params["pip_size"]` contains the asset pip (`pip_size` in `config/assets.json`, defaulting to `tick_size`).
 - The input `df` is shared across timeframes; strategies must not mutate it.
 - Local futures `df` also carries a numeric `contract` column: one code per contract, changing at each roll.
 - A strategy can load data at a different execution timeframe by setting `EXECUTION_TIMEFRAME = "5m"`.

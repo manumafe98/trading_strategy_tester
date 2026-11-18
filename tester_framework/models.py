@@ -48,11 +48,15 @@ class AssetConfig:
     session_timezone: str
     session_start: str
     bars_per_year: dict[str, int]
+    # Unit of `pips` widths and distances; defaults to tick_size. Forex quotes it as 0.0001.
+    pip_size: float | None = None
 
     def __post_init__(self) -> None:
+        if self.pip_size is None:
+            object.__setattr__(self, "pip_size", self.tick_size)
         if not self.ticker.strip():
             raise ValueError("ticker must not be empty")
-        for name in ("point_value", "tick_size", "qty_step", "min_qty"):
+        for name in ("point_value", "tick_size", "qty_step", "min_qty", "pip_size"):
             raw = getattr(self, name)
             value = float(raw)
             if isinstance(raw, bool) or not math.isfinite(value) or value <= 0:
