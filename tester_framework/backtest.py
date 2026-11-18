@@ -17,7 +17,7 @@ from .utils import csv_items, decimal_places
 
 
 DEFAULT_RISK = 1.0
-CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry"})
+CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry", "setup_time"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
 # Bar length per low timeframe; a close entry fills at its bar's start plus this.
 BAR_DURATIONS = {
@@ -92,6 +92,10 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
     signals["stop"] = pd.to_numeric(signals["stop"], errors="coerce")
     if "entry" in signals.columns:
         signals["entry"] = pd.to_numeric(signals["entry"], errors="coerce")
+    if "setup_time" in signals.columns:
+        signals["setup_time"] = pd.to_datetime(signals["setup_time"])
+        if (signals["setup_time"] > signals["time"]).any():
+            raise ValueError("Signals setup_time must not be after time")
     if "plot_start_time" in signals.columns:
         signals["plot_start_time"] = pd.to_datetime(signals["plot_start_time"])
     signals = signals.dropna(subset=["time", "side", "stop"]).copy()
@@ -453,6 +457,9 @@ def run_backtest(
     trades = []
     discarded_signals = 0
     busy_until = -1
+    # Open of the first high-timeframe bar after the previous trade's exit bar; a later setup time before it is discarded.
+    fresh_from = None
+    high_bar = BAR_DURATIONS.get(timeframe)
     # With a session exit, open trades close at the close of their session window's last bar.
     if session_exit is not None:
         in_window, window_last_bar = session_exit_bars(data.index, session_exit)
@@ -469,6 +476,8 @@ def run_backtest(
         signals = normalize_signals(signals)
     except ValueError as exc:
         raise ValueError(f"{asset} {timeframe}: {exc}") from exc
+    if "setup_time" in signals.columns and high_bar is None:
+        raise ValueError(f"Unknown high timeframe for setup_time: {timeframe}")
     if operation == "long_only":
         signals = signals[signals["side"] == Side.LONG]
     if operation == "short_only":
@@ -481,6 +490,10 @@ def run_backtest(
         entry_i = data.index.searchsorted(signal["time"], side="left" if close_entry else "right")
         # A close entry needs a bar after its fill bar.
         if entry_i + int(close_entry) >= bar_count or entry_i <= busy_until:
+            discarded_signals += 1
+            continue
+        setup_time = signal.get("setup_time")
+        if fresh_from is not None and pd.notna(setup_time) and setup_time < fresh_from:
             discarded_signals += 1
             continue
         if close_entry and data.index[entry_i] != signal["time"]:
@@ -585,6 +598,9 @@ def run_backtest(
         bar_net_equity[trade["exit_i"]] = current_net
         last_bar_idx = trade["exit_i"] + 1
         busy_until = trade["exit_i"]
+        if high_bar is not None:
+            # High-timeframe bars are clock-aligned, as resample_data aligns intraday rules.
+            fresh_from = pd.Timestamp(data.index[busy_until]).floor(high_bar) + high_bar
         trades.append(trade)
         if max_trades is not None and len(trades) >= max_trades:
             break

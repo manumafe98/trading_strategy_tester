@@ -20,7 +20,8 @@ def generate_signals(df, asset, timeframe, params):
 - The input `df` is shared across timeframes; strategies must not mutate it.
 - Local futures `df` also carries a numeric `contract` column: one code per contract, changing at each roll.
 - `timeframe` is the high timeframe. A strategy can load a smaller low timeframe by setting `LOW_TIMEFRAME = "5m"`; `df` then holds low-timeframe bars.
-- Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
+- An optional `setup_time` column marks the start of the latest bar a signal's setup depends on (no later than `time`); the engine discards a signal whose setup time is before the first high-timeframe bar after the previous trade's exit.
+- Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
 
 Optional hooks:
 

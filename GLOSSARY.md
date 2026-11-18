@@ -64,6 +64,9 @@ _Avoid_: setup, order
 **Close entry**:
 A signal that fills at a given price on its own bar instead of at the next bar's open.
 
+**Setup time**:
+The start of the latest bar a signal's setup depends on; a signal whose setup time is before the first high-timeframe bar after the previous trade's exit is discarded.
+
 **Trade**:
 A filled signal, from entry to its final exit.
 _Avoid_: position, deal
@@ -102,7 +105,7 @@ An exit filled at a bar's open because the price gapped through the stop or a ta
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a calendar filter, a fill in the 60 minutes before a roll or across one, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a calendar filter, a fill in the 60 minutes before a roll or across one, a setup time before the first high-timeframe bar after the previous trade's exit, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
 
 **Variant**:
