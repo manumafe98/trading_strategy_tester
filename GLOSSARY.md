@@ -68,7 +68,7 @@ _Avoid_: straddling trade, crossover trade
 
 **Signal**:
 A strategy's request to enter: a time, a side, and a stop.
-_Avoid_: setup, order
+_Avoid_: order
 
 **Close entry**:
 A signal that fills at a given price on its own bar instead of at the next bar's open.
