@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -24,6 +25,7 @@ from tests.choch_sr_bars import (
 from tester_framework.backtest import run_backtest
 from tester_framework.sessions import parse_sessions
 from tester_framework.strategy_loader import load_strategy
+from tester_framework.strategy_params import expand_strategy_params, strategy_param_values
 
 
 def at(clock: str) -> pd.Timestamp:
@@ -282,6 +284,17 @@ def test_input_is_not_mutated():
         ({"stop_max": 0.0}, "stop_max"),
         ({"stop_min": 0.6, "stop_max": 0.5}, "stop_min"),
         ({"stop_source": "last_hl"}, "stop_source"),
+        ({"max_touch_minutes": 0}, "max_touch_minutes"),
+        ({"touch_buckets": ""}, "touch_buckets"),
+        ({"touch_buckets": "0-5|five-15"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5"}, "touch_buckets"),
+        ({"touch_buckets": "1-5|5+"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|10+"}, "touch_buckets"),
+        ({"touch_buckets": "0-10|5-15"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5-5|5+"}, "touch_buckets"),
+        ({"touch_buckets": "0-15|15-5"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5+|10+"}, "touch_buckets"),
+        ({"touch_buckets": "0+|0-5"}, "touch_buckets"),
     ],
 )
 def test_validate_params_rejects_bad_settings(overrides, message):
@@ -299,6 +312,8 @@ def test_defaults_are_the_pine_defaults():
         "stop_max": 0.5,
         "stop_unit": "%",
         "stop_source": "last_ll_hh",
+        "max_touch_minutes": None,
+        "touch_buckets": "0-5|5-15|15-30|30-60|60+",
     }
     assert choch_sr.LOW_TIMEFRAME == "1m"
     choch_sr.validate_params(dict(choch_sr.PARAMS))
@@ -309,3 +324,69 @@ def test_strategy_loader_runs_it():
     params = {**strategy.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "session": None}
 
     assert len(strategy.generate_signals(long_setup(), "TEST", "5m", params)) == 1
+
+
+def test_touch_to_choch_minutes_runs_from_the_contact_start_close_to_the_choch_close():
+    assert run(long_setup()).iloc[0]["touch_to_choch_minutes"] == 3
+    assert run(role_flip_setup(100.05), stop_max=1.0).iloc[0]["touch_to_choch_minutes"] == 5
+    assert run(repeated_setup())["touch_to_choch_minutes"].tolist() == [3, 3]
+
+
+@pytest.mark.parametrize(("limit", "trades"), [(None, 1), (3, 1), (2, 0), (1, 0)])
+def test_a_touch_whose_contact_is_older_than_max_touch_minutes_gives_no_signal(limit, trades):
+    assert len(run(long_setup(), max_touch_minutes=limit)) == trades
+
+
+def test_max_touch_minutes_counts_from_the_start_of_the_current_contact():
+    assert list(run(repeated_setup(), max_touch_minutes=3)["time"]) == [at("04:35"), at("05:57")]
+
+
+def test_max_touch_minutes_is_an_optional_int():
+    assert choch_sr.PARAMS["max_touch_minutes"] is None
+    assert choch_sr.PARAM_TYPES == {"max_touch_minutes": int}
+
+
+def band_trade(minutes, gross_r, net_r):
+    return {"touch_to_choch_minutes": minutes, "realized_r": gross_r, "net_realized_r": net_r}
+
+
+BAND_TRADES = [band_trade(0.0, 2.0, 1.9), band_trade(4.0, -1.0, -1.1), band_trade(5.0, 0.05, -0.05), band_trade(90.0, -1.0, -1.1)]
+
+
+def band_metrics(trades, with_costs):
+    params = {**choch_sr.PARAMS, "touch_buckets": "0-5|5-15|15-60|60+", "with_costs": with_costs}
+    return choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", params)
+
+
+def test_metrics_report_trades_win_rate_and_avg_r_per_band_with_net_r_under_costs():
+    metrics = band_metrics(BAND_TRADES, with_costs=True)
+
+    assert {name: metrics[name] for name in ("Trades 0-5m", "Win rate 0-5m", "Avg R 0-5m")} == {
+        "Trades 0-5m": 2, "Win rate 0-5m": 50.0, "Avg R 0-5m": 0.4
+    }
+    assert (metrics["Trades 5-15m"], metrics["Win rate 5-15m"], metrics["Avg R 5-15m"]) == (1, 0.0, -0.05)
+    assert (metrics["Trades 60+m"], metrics["Win rate 60+m"], metrics["Avg R 60+m"]) == (1, 0.0, -1.1)
+    assert metrics["Trades 15-60m"] == 0
+    assert math.isnan(metrics["Win rate 15-60m"]) and math.isnan(metrics["Avg R 15-60m"])
+    assert len(metrics) == 12
+
+
+def test_metrics_use_gross_r_without_costs_and_handle_no_trades():
+    gross = band_metrics(BAND_TRADES, with_costs=False)
+    empty = band_metrics([], with_costs=False)
+
+    assert (gross["Win rate 5-15m"], gross["Avg R 5-15m"]) == (100.0, 0.05)
+    assert gross["Avg R 0-5m"] == 0.5
+    assert empty["Trades 0-5m"] == 0 and math.isnan(empty["Avg R 60+m"])
+
+
+def test_multi_band_touch_buckets_round_trip_through_strategy_params():
+    strategies = {"choch_sr": load_strategy("choch_sr")}
+    values = strategy_param_values(strategies, "touch_buckets=0-10|10+,0-30|30+")
+
+    (first, second) = expand_strategy_params(strategies, values)["choch_sr"]
+
+    assert (first["touch_buckets"], second["touch_buckets"]) == ("0-10|10+", "0-30|30+")
+    trades = [band_trade(12.0, 1.0, 1.0)]
+    metrics = choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", {**first, "with_costs": False})
+    assert (metrics["Trades 0-10m"], metrics["Trades 10+m"]) == (0, 1)
