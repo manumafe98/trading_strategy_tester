@@ -95,6 +95,21 @@ def test_setup_is_skipped_when_the_stop_distance_is_outside_the_limits(overrides
     assert len(run(long_setup(), **overrides)) == trades
 
 
+@pytest.mark.parametrize(("side", "entry", "kept"), [("long", 100.55, True), ("long", 100.12, False), ("short", 103.0, True), ("short", 103.5, False)])
+def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept):
+    # On the long setup's CHoCH bar the last LL is 100.13 and the last HH 103.12: stops at 100.12 and 103.13.
+    # With no minimum distance, only the side check rejects a stop at or beyond the entry.
+    df = long_setup()
+    bar = len(df) - 1
+    structure = market_structure(df, 2)
+    touch = choch_sr.Touch(100.2, 100.0, choch_sr.SUPPORT, bar - 3)
+    params = {**choch_sr.PARAMS, "swing_length": 2, "pip_size": 0.01, "stop_min": 0.0, "stop_max": 100.0}
+
+    row = choch_sr.signal_row(structure, bar, side, touch, entry, 103.0, df.index, 0.01, params)
+
+    assert (row is not None) == kept
+
+
 def test_role_flip_drops_the_pending_touch():
     inside = run(role_flip_setup(100.05), stop_max=1.0)  # closes inside the channel: the touch stays pending
     flipped = run(role_flip_setup(99.95), stop_max=1.0)  # closes below it: the channel turns resistance
