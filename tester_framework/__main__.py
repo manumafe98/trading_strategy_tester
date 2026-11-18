@@ -255,7 +255,7 @@ def run(config: RunConfig) -> None:
     validate_required_flags(strategies, session_specs)
     strategy_params = resolve_strategy_params(strategies, config.strategy_params)
     assets = list(dict.fromkeys(x.upper() for x in (csv_items(config.asset) or asset_configs.keys())))
-    timeframes = list(dict.fromkeys(csv_items(config.timeframe) or DEFAULT_TIMEFRAMES))
+    timeframes = list(dict.fromkeys(csv_items(config.high_timeframe) or DEFAULT_TIMEFRAMES))
     ratios = list(dict.fromkeys(risk_reward_ratios(config.risk_reward_ratio)))
     variants = {ratio: exit_mode_variants(config.exit_mode, ratio) for ratio in ratios}
     if not any(variants.values()):
@@ -291,7 +291,7 @@ def run(config: RunConfig) -> None:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
     low_timeframe_flags = list(dict.fromkeys(csv_items(config.low_timeframe)))
     # One entry per strategy, high timeframe and low timeframe; each is a batch per asset and session window.
-    timeframe_pairs = []
+    strategy_high_low_timeframes = []
     for strategy_name, strategy in strategies.items():
         declared = getattr(strategy, "LOW_TIMEFRAME", None)
         if low_timeframe_flags and declared is None:
@@ -309,8 +309,8 @@ def run(config: RunConfig) -> None:
                         raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must be smaller than high timeframe {timeframe}")
                     if high % low:
                         raise ValueError(f"--low_timeframe: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
-                timeframe_pairs.append((strategy_name, strategy, timeframe, low_timeframe))
-    batch_count = sum(len(strategy_params[name]) for name, *_ in timeframe_pairs) * len(assets) * len(session_variants)
+                strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
+    batch_count = sum(len(strategy_params[name]) for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
     task_count = batch_count * len(variant_pairs)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
@@ -335,7 +335,7 @@ def run(config: RunConfig) -> None:
                 asset_cfg = asset_configs[asset]
                 risk_pct = risks[asset]
                 timeframe_groups = {}
-                for strategy_name, strategy, timeframe, low_timeframe in timeframe_pairs:
+                for strategy_name, strategy, timeframe, low_timeframe in strategy_high_low_timeframes:
                     timeframe_groups.setdefault(low_timeframe, []).append((strategy_name, strategy, timeframe))
                 for data_timeframe, strategy_timeframes in timeframe_groups.items():
                     status.update(phase="Loading data", detail=f"{asset} {data_timeframe}", total=task_count)
@@ -561,7 +561,7 @@ def main() -> None:
         config = RunConfig(
             strategies=strategies,
             asset=args.asset,
-            timeframe=args.high_timeframe,
+            high_timeframe=args.high_timeframe,
             sessions=args.sessions,
             time_period=args.time_period,
             data_source=args.data_source,
