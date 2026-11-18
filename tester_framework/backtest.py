@@ -17,7 +17,7 @@ from .utils import csv_items, decimal_places
 
 
 DEFAULT_RISK = 1.0
-CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry", "setup_time"})
+CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry", "stop_entry", "setup_time"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
 # Bar length per low timeframe; a close entry fills at its bar's start plus this.
 BAR_DURATIONS = {
@@ -92,6 +92,10 @@ def normalize_signals(signals: pd.DataFrame) -> pd.DataFrame:
     signals["stop"] = pd.to_numeric(signals["stop"], errors="coerce")
     if "entry" in signals.columns:
         signals["entry"] = pd.to_numeric(signals["entry"], errors="coerce")
+    if "stop_entry" in signals.columns:
+        signals["stop_entry"] = pd.to_numeric(signals["stop_entry"], errors="coerce")
+        if "entry" in signals.columns and (signals["entry"].notna() & signals["stop_entry"].notna()).any():
+            raise ValueError("Signals must not set both entry and stop_entry")
     if "setup_time" in signals.columns:
         signals["setup_time"] = pd.to_datetime(signals["setup_time"])
         if (signals["setup_time"] > signals["time"]).any():
@@ -143,7 +147,7 @@ def partial_targets(qty: float, risk_reward_ratio: float, step: float, min_qty: 
 
 def _prepare_trade(
     signal: pd.Series,
-    entry_open: float,
+    raw_entry: float,
     entry_time,
     asset_cfg: AssetConfig,
     current_net: float,
@@ -154,12 +158,11 @@ def _prepare_trade(
     timeframe: str,
     strategy: str,
     entry_i: int,
-    close_entry: bool,
     with_costs: bool,
 ) -> dict | None:
     """Validate a signal and build the trade record, or return None if it should be discarded."""
     side = Side(signal["side"])
-    raw_entry = float(signal["entry"] if close_entry else entry_open)
+    raw_entry = float(raw_entry)
     stop = float(signal["stop"])
     if not math.isfinite(raw_entry) or not math.isfinite(stop):
         return None
@@ -375,6 +378,16 @@ def _bar_path(opened: float, high: float, low: float, close: float, side: Side) 
     return opened, low, high, close
 
 
+def _path_after_stop_entry(path: tuple[float, ...], level: float, side: Side) -> tuple[float, ...] | None:
+    direction = 1 if side == Side.LONG else -1
+    if path[0] * direction >= level * direction:
+        return path
+    for leg, (start, end) in enumerate(zip(path, path[1:])):
+        if start * direction < level * direction <= end * direction:
+            return (level, *path[leg + 1 :])
+    return None
+
+
 def run_backtest(
     data: pd.DataFrame,
     signals: pd.DataFrame,
@@ -485,9 +498,10 @@ def run_backtest(
 
     # Independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
     for _, signal in signals.iterrows():
-        signal_entry = signal.get("entry")
-        close_entry = pd.notna(signal_entry)
-        entry_i = data.index.searchsorted(signal["time"], side="left" if close_entry else "right")
+        close_entry = pd.notna(signal.get("entry"))
+        stop_entry = pd.notna(signal.get("stop_entry"))
+        fills_on_signal_bar = close_entry or stop_entry
+        entry_i = data.index.searchsorted(signal["time"], side="left" if fills_on_signal_bar else "right")
         # A close entry needs a bar after its fill bar.
         if entry_i + int(close_entry) >= bar_count or entry_i <= busy_until:
             discarded_signals += 1
@@ -496,7 +510,7 @@ def run_backtest(
         if fresh_from is not None and pd.notna(setup_time) and setup_time < fresh_from:
             discarded_signals += 1
             continue
-        if close_entry and data.index[entry_i] != signal["time"]:
+        if fills_on_signal_bar and data.index[entry_i] != signal["time"]:
             discarded_signals += 1
             continue
         entry_time = pd.Timestamp(data.index[entry_i])
@@ -516,10 +530,19 @@ def run_backtest(
             discarded_signals += 1
             continue
         # A signal from before a roll carries an old-contract stop, so it never fills on or after the roll bar.
-        roll_after_signal = roll_times.searchsorted(signal["time"], side="right")
+        roll_after_signal = roll_times.searchsorted(signal["time"], side="left" if stop_entry else "right")
         if roll_after_signal < len(roll_times) and roll_times[roll_after_signal] <= entry_time:
             discarded_signals += 1
             continue
+        side = signal["side"]
+        entry_path = _bar_path(opens[entry_i], highs[entry_i], lows[entry_i], closes[entry_i], side)
+        if stop_entry:
+            level = float(signal["stop_entry"])
+            entry_path = _path_after_stop_entry(entry_path, level, side)
+            stop_on_wrong_side = signal["stop"] >= level if side == Side.LONG else signal["stop"] <= level
+            if entry_path is None or stop_on_wrong_side:
+                discarded_signals += 1
+                continue
 
         # Fill flat equity up to the first simulated bar; a close entry's fill bar has no P&L yet.
         start_i = entry_i + int(close_entry)
@@ -529,18 +552,17 @@ def run_backtest(
             last_bar_idx = start_i
 
         trade = _prepare_trade(
-            signal, opens[entry_i], data.index[entry_i], asset_cfg, current_net, risk_pct, risk_reward_ratio, exit_mode,
-            asset, timeframe, strategy, entry_i, close_entry, with_costs,
+            signal, signal["entry"] if close_entry else entry_path[0], data.index[entry_i], asset_cfg, current_net, risk_pct,
+            risk_reward_ratio, exit_mode, asset, timeframe, strategy, entry_i, with_costs,
         )
         if trade is None:
             discarded_signals += 1
             continue
 
         open_trade = _OpenTrade(trade, asset_cfg, with_costs, target_fill)
-        side = trade["side"]
         trailing = exit_mode == "trailing"
         for i in range(start_i, bar_count):
-            path = _bar_path(opens[i], highs[i], lows[i], closes[i], side)
+            path = entry_path if i == entry_i else _bar_path(opens[i], highs[i], lows[i], closes[i], side)
             opened = path[0]
             bar_time = data.index[i]
 
@@ -557,7 +579,7 @@ def run_backtest(
                 open_trade.trail(opened)
 
             # Stop-first: a bar that can reach both the stop and the next target exits at the stop.
-            if intrabar == IntrabarRule.STOP_FIRST and open_trade.stop_and_target_reachable(opened, highs[i], lows[i]):
+            if intrabar == IntrabarRule.STOP_FIRST and open_trade.stop_and_target_reachable(opened, max(path), min(path)):
                 open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
                 break
 

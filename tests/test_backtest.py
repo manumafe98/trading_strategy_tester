@@ -1606,3 +1606,220 @@ def test_setup_time_after_signal_time_is_an_error():
     )
     with pytest.raises(ValueError, match="setup_time"):
         normalize_signals(signals)
+
+
+@pytest.mark.parametrize(
+    ("path", "side", "level", "remainder"),
+    [
+        pytest.param((100.0, 101.0, 99.0, 100.5), Side.LONG, 100.5, (100.5, 101.0, 99.0, 100.5), id="high-first-long"),
+        pytest.param((100.0, 101.0, 99.0, 100.5), Side.SHORT, 99.5, (99.5, 99.0, 100.5), id="high-first-short"),
+        pytest.param((100.0, 99.0, 101.0, 100.5), Side.LONG, 100.5, (100.5, 101.0, 100.5), id="low-first-long"),
+        pytest.param((100.0, 99.0, 101.0, 100.5), Side.SHORT, 99.5, (99.5, 99.0, 101.0, 100.5), id="low-first-short"),
+        pytest.param((100.0, 101.0, 99.0, 100.5), Side.LONG, 101.0, (101.0, 101.0, 99.0, 100.5), id="long-touching-the-high"),
+        pytest.param((101.0, 101.2, 100.9, 101.0), Side.LONG, 100.5, (101.0, 101.2, 100.9, 101.0), id="long-gap"),
+        pytest.param((99.0, 99.1, 98.8, 99.0), Side.SHORT, 99.5, (99.0, 99.1, 98.8, 99.0), id="short-gap"),
+        pytest.param((100.0, 100.4, 99.0, 100.0), Side.LONG, 100.5, None, id="long-never-reached"),
+        pytest.param((100.0, 101.0, 99.6, 100.0), Side.SHORT, 99.5, None, id="short-never-reached"),
+    ],
+)
+def test_path_after_stop_entry_starts_at_the_first_point_reaching_the_level(path, side, level, remainder):
+    assert backtest._path_after_stop_entry(path, level, side) == remainder
+
+
+def _stop_entry(data, side, level, stop, bar=0):
+    return {"time": data.index[bar], "side": side, "stop_entry": level, "stop": stop}
+
+
+@pytest.mark.parametrize(
+    ("side", "fill_bar", "level", "stop", "fill"),
+    [
+        pytest.param("long", [100.0, 101.0, 99.8, 100.8], 100.5, 99.5, 100.5, id="long-mid-bar"),
+        pytest.param("short", [100.0, 100.2, 99.0, 99.2], 99.5, 100.5, 99.5, id="short-mid-bar"),
+        pytest.param("long", [101.0, 101.2, 100.9, 101.0], 100.5, 99.5, 101.0, id="long-gap-fills-at-the-open"),
+        pytest.param("short", [99.0, 99.1, 98.8, 99.0], 99.5, 100.5, 99.0, id="short-gap-fills-at-the-open"),
+    ],
+)
+def test_stop_entry_fills_on_its_own_bar_at_the_level_or_a_gapped_open(test_asset_cfg, side, fill_bar, level, stop, fill):
+    data = _bars(fill_bar, [fill_bar[3]] * 4)
+
+    metrics, trades = _run(data, [_stop_entry(data, side, level, stop)], test_asset_cfg)
+
+    (trade,) = trades
+    assert (trade["entry_i"], trade["entry_time"], trade["entry"], trade["exit_reason"]) == (0, data.index[0], fill, ExitReason.END)
+    assert trade["initial_risk"] == pytest.approx(abs(fill - stop))
+    assert metrics["Discarded"] == 0
+
+
+@pytest.mark.parametrize(
+    ("side", "fill_bar", "level", "stop"),
+    [
+        pytest.param("long", [100.0, 100.4, 99.0, 100.0], 100.5, 99.5, id="long-high-below-the-level"),
+        pytest.param("short", [100.0, 101.0, 99.6, 100.0], 99.5, 100.5, id="short-low-above-the-level"),
+        pytest.param("long", [100.0, 101.0, 99.8, 100.8], 100.5, 100.5, id="long-stop-at-the-level"),
+        pytest.param("short", [100.0, 100.2, 99.0, 99.2], 99.5, 99.5, id="short-stop-at-the-level"),
+        pytest.param("long", [102.0, 102.5, 101.5, 102.0], 100.5, 100.7, id="long-stop-above-the-level-on-a-gap"),
+        pytest.param("short", [98.0, 98.5, 97.5, 98.0], 99.5, 99.3, id="short-stop-below-the-level-on-a-gap"),
+    ],
+)
+def test_stop_entry_that_never_reaches_its_level_or_has_a_wrong_side_stop_is_discarded(test_asset_cfg, side, fill_bar, level, stop):
+    data = _bars(fill_bar, [fill_bar[3]] * 4)
+
+    metrics, trades = _run(data, [_stop_entry(data, side, level, stop)], test_asset_cfg)
+
+    assert (metrics["Discarded"], trades) == (1, [])
+
+
+@pytest.mark.parametrize(
+    ("side", "fill_bar", "level", "stop"),
+    [
+        pytest.param("long", [100.0, 100.8, 99.0, 99.5], 100.5, 99.8, id="long-high-first"),
+        pytest.param("long", [100.0, 101.0, 99.7, 99.7], 100.5, 99.9, id="long-low-first"),
+        pytest.param("short", [100.0, 100.2, 99.0, 100.2], 99.5, 100.2, id="short-high-first"),
+        pytest.param("short", [100.0, 101.0, 99.8, 100.5], 99.9, 100.5, id="short-low-first"),
+    ],
+)
+def test_stop_entry_stops_out_on_its_fill_bar_after_the_fill(test_asset_cfg, side, fill_bar, level, stop):
+    data = _bars(fill_bar, [fill_bar[3]] * 4)
+
+    _, trades = _run(data, [_stop_entry(data, side, level, stop)], test_asset_cfg)
+
+    assert [(t["exit_i"], t["exit_reason"], t["exit"]) for t in trades] == [(0, ExitReason.STOP, stop)]
+
+
+@pytest.mark.parametrize("intrabar", ["path", "stop_first"])
+@pytest.mark.parametrize(
+    ("side", "fill_bar", "level", "stop", "target"),
+    [
+        pytest.param("long", [100.0, 101.5, 99.7, 100.8], 100.5, 99.9, 101.1, id="long-low-before-the-fill"),
+        pytest.param("short", [100.0, 100.3, 98.5, 99.2], 99.5, 100.1, 98.9, id="short-high-before-the-fill"),
+    ],
+)
+def test_stop_entry_ignores_prices_before_its_fill_and_takes_a_same_bar_target(test_asset_cfg, intrabar, side, fill_bar, level, stop, target):
+    data = _bars(fill_bar, [fill_bar[3]] * 4)
+
+    _, trades = _run(data, [_stop_entry(data, side, level, stop)], test_asset_cfg, intrabar=intrabar)
+
+    assert [(t["exit_i"], t["exit_reason"], t["exit"]) for t in trades] == [(0, ExitReason.TARGET, target)]
+
+
+@pytest.mark.parametrize(
+    ("side", "fill_bar", "level", "stop", "target"),
+    [
+        pytest.param("long", [100.0, 100.8, 98.5, 99.0], 100.3, 100.0, 100.6, id="long"),
+        pytest.param("short", [100.0, 101.5, 99.2, 101.0], 99.7, 100.0, 99.4, id="short"),
+    ],
+)
+def test_stop_first_exits_a_stop_entry_at_the_stop_when_its_remainder_reaches_both(test_asset_cfg, side, fill_bar, level, stop, target):
+    data = _bars(fill_bar, [fill_bar[3]] * 4)
+    signals = [_stop_entry(data, side, level, stop)]
+
+    _, path = _run(data, signals, test_asset_cfg)
+    _, stop_first = _run(data, signals, test_asset_cfg, intrabar="stop_first")
+
+    assert [(t["exit_reason"], t["exit"]) for t in path] == [(ExitReason.TARGET, target)]
+    assert [(t["exit_reason"], t["exit"]) for t in stop_first] == [(ExitReason.STOP, stop)]
+
+
+def test_trailing_stop_entry_trails_from_the_fill_on_its_fill_bar(test_asset_cfg):
+    data = _bars([100.0, 102.0, 99.7, 101.0], [101.0] * 4)
+
+    _, trades = _run(data, [_stop_entry(data, "long", 100.5, 99.5)], test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
+
+    assert [(t["exit_i"], t["exit_reason"], t["exit"]) for t in trades] == [(0, ExitReason.STOP, 101.5)]
+
+
+def test_signal_with_both_entry_and_stop_entry_is_an_error():
+    signals = pd.DataFrame(
+        [{"time": pd.Timestamp("2025-01-01"), "side": "long", "stop": 99.0, "entry": 100.0, "stop_entry": 100.5}]
+    )
+    with pytest.raises(ValueError, match="both entry and stop_entry"):
+        normalize_signals(signals)
+
+
+def test_stop_entry_with_costs_sizes_from_the_fill_and_pays_costs_on_both_sides(cost_asset_cfg):
+    data = _bars([100.0, 101.0, 99.8, 100.8], [100.8] * 4)
+
+    _, trades = _run(data, [_stop_entry(data, "long", 100.5, 99.5)], cost_asset_cfg, with_costs=True)
+
+    (trade,) = trades
+    assert (trade["qty"], trade["net_entry"]) == (100.0, pytest.approx(100.7))
+    assert trade["net_pnl"] == pytest.approx((100.6 - 100.7) * 100 - 0.1 * 100 * 2)
+
+
+def test_stop_entry_on_the_last_bar_fills_and_takes_an_end_exit(test_asset_cfg):
+    data = _bars([100.0] * 4, [100.0, 101.0, 99.8, 100.8])
+
+    _, trades = _run(data, [_stop_entry(data, "long", 100.5, 99.5, bar=1)], test_asset_cfg)
+
+    assert [(t["entry_i"], t["entry"], t["exit_i"], t["exit_reason"], t["exit"]) for t in trades] == [(1, 100.5, 1, ExitReason.END, 100.8)]
+
+
+def test_stop_entry_time_not_on_a_bar_is_discarded(test_asset_cfg):
+    data = _bars([100.0, 101.0, 99.8, 100.8], [100.0, 101.0, 99.8, 100.8], [100.8] * 4)
+    signal = {"time": data.index[0] + pd.Timedelta(minutes=30), "side": "long", "stop_entry": 100.5, "stop": 99.5}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    assert (metrics["Discarded"], trades) == (1, [])
+
+
+def test_stop_entry_on_the_exit_bar_of_the_previous_trade_is_discarded(test_asset_cfg):
+    data = _bars([100.0, 101.0, 99.8, 100.8], [100.8, 102.0, 100.8, 101.5], [101.5] * 4)
+    signals = [_stop_entry(data, "long", 100.5, 99.5), _stop_entry(data, "long", 101.0, 100.0, bar=1)]
+
+    metrics, trades = _run(data, signals, test_asset_cfg)
+
+    assert [(t["entry_i"], t["exit_i"]) for t in trades] == [(0, 1)]
+    assert metrics["Discarded"] == 1
+
+
+@pytest.mark.parametrize(("setup_time", "accepted"), [("2025-01-01 00:45", False), ("2025-01-01 01:00", True)])
+def test_stop_entry_with_a_setup_before_the_first_high_timeframe_bar_after_exit_is_discarded(test_asset_cfg, setup_time, accepted):
+    flat = [100.0, 100.0, 100.0, 100.0]
+    data = _quarter_hour_bars(flat, [100.0, 101.5, 100.0, 101.0], flat, flat, [100.0, 101.0, 99.8, 100.8], flat)
+    signals = [
+        {"time": data.index[0], "side": "long", "stop": 99.0},
+        {**_stop_entry(data, "long", 100.5, 99.5, bar=4), "setup_time": pd.Timestamp(setup_time)},
+    ]
+
+    metrics, trades = _run(data, signals, _quarter_hour_cfg(test_asset_cfg), low_timeframe="15m")
+
+    assert [t["entry_i"] for t in trades] == ([1, 4] if accepted else [1])
+    assert metrics["Discarded"] == (0 if accepted else 1)
+
+
+@pytest.mark.parametrize(
+    ("signal_time", "discarded"),
+    [("2025-01-02 15:00", 0), ("2025-01-02 16:00", 1)],
+)
+def test_session_exit_takes_a_stop_entry_whose_bar_starts_inside_the_window(test_asset_cfg, signal_time, discarded):
+    bar = (100.0, 101.0, 99.8, 100.8)
+    data = _timed_bars({"2025-01-02 14:00": FLAT, "2025-01-02 15:00": bar, "2025-01-02 16:00": bar, "2025-01-02 17:00": FLAT})
+    signal = {"time": pd.Timestamp(signal_time), "side": "long", "stop_entry": 100.5, "stop": 99.5}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg, session_exit=NY_MORNING)
+
+    assert metrics["Discarded"] == discarded
+    assert [(t["entry_i"], t["exit_i"], t["exit_reason"]) for t in trades] == [(1, 1, ExitReason.SESSION)] * (1 - discarded)
+
+
+@pytest.mark.parametrize(("signal_bar", "discarded"), [("19:00", 0), ("20:00", 1)])
+def test_stop_entry_roll_block_measures_from_its_bar_start(test_asset_cfg, signal_bar, discarded):
+    bars = {f"2025-01-02 {hour}:00": (100.0, 100.6, 100.0, 100.0, "FUTZ4") for hour in (17, 18, 19, 20)}
+    bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
+    data = _contract_bars(bars)
+    signal = {"time": pd.Timestamp(f"2025-01-02 {signal_bar}"), "side": "long", "stop_entry": 100.5, "stop": 99.5}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    assert metrics["Discarded"] == discarded
+    assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)
+
+
+def test_stop_entry_on_the_roll_bar_is_discarded(test_asset_cfg):
+    data = _contract_bars(ROLL_BARS)
+    signal = {"time": pd.Timestamp("2025-01-02 22:00"), "side": "long", "stop_entry": 150.0, "stop": 149.0}
+
+    metrics, trades = _run(data, [signal], test_asset_cfg)
+
+    assert (metrics["Discarded"], trades) == (1, [])
