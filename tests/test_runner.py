@@ -146,6 +146,25 @@ def test_run_variants_drops_signals_at_or_after_session_window_end(monkeypatch, 
     assert row["Trades"] == 1
 
 
+def test_run_variants_filters_sydney_signals_by_sydney_local_time_across_dst(monkeypatch, tmp_path, test_asset_cfg):
+    data = pd.DataFrame(
+        {"open": 100.0, "high": 102.0, "low": 100.0, "close": 100.0, "volume": 0},
+        index=pd.date_range("2025-04-04 18:00", "2025-04-06 23:00", freq="1h"),
+    )
+    sydney_starts = ["2025-04-05 06:00", "2025-04-05 07:00", "2025-04-07 06:00", "2025-04-07 07:00"]
+    signals = pd.DataFrame(
+        [
+            {"time": pd.Timestamp(start, tz="Australia/Sydney").tz_convert("UTC").tz_localize(None), "side": "long", "stop": 99.0}
+            for start in sydney_starts
+        ]
+    )
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    row = runner.run_variants(_task(data, tmp_path, test_asset_cfg, session=parse_sessions("sydney")[0]))[0]
+
+    assert (row["Session"], row["Trades"]) == ("sydney", 2)
+
+
 def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
     monkeypatch, tmp_path, base_data, hourly_index, test_asset_cfg
 ):

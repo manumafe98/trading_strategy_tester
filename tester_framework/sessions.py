@@ -19,12 +19,13 @@ class SessionSpec(TypedDict):
 
 
 SESSION_PRESETS = {
+    "sydney": ("Australia/Sydney", 7 * 60, 16 * 60),
     "asia": ("Asia/Tokyo", 9 * 60, 15 * 60),
     "london": ("Europe/London", 8 * 60, 16 * 60 + 30),
     "ny": ("America/New_York", 9 * 60 + 30, 16 * 60),
     "ny_bank": ("America/New_York", 8 * 60, 17 * 60),
 }
-ALL_SESSIONS = ("asia", "london", "ny")
+REGION_SESSIONS = ("sydney", "asia", "london", "ny")
 
 
 def _parse_clock(value: str) -> int:
@@ -47,7 +48,7 @@ def _format_clock(minutes: int) -> str:
 
 def _session_spec(name: str, start_minute: int | None = None, end_minute: int | None = None) -> SessionSpec:
     if name not in SESSION_PRESETS:
-        raise ValueError(f"--sessions supports only asia, london, ny, ny_bank, all, or none; got: {name}")
+        raise ValueError(f"--sessions supports only sydney, asia, london, ny, ny_bank, regions, or none; got: {name}")
     timezone, preset_start, preset_end = SESSION_PRESETS[name]
     start_minute = preset_start if start_minute is None else start_minute
     end_minute = preset_end if end_minute is None else end_minute
@@ -86,9 +87,11 @@ def parse_sessions(value: str | None) -> list[SessionSpec]:
         name, has_window, window = item.partition("=")
         key = name.strip().lower()
         if key == "all":
+            raise ValueError("--sessions all was renamed to regions")
+        if key == "regions":
             if has_window:
-                raise ValueError("--sessions all does not accept a custom time range")
-            expanded = [_session_spec(session_name) for session_name in ALL_SESSIONS]
+                raise ValueError("--sessions regions does not accept a custom time range")
+            expanded = [_session_spec(session_name) for session_name in REGION_SESSIONS]
         else:
             if has_window:
                 start_text, dash, end_text = window.partition("-")

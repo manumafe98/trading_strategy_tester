@@ -41,7 +41,7 @@ FILTER_SPECS = (
 FILTER_ORDERS = {
     "high-timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
     "low-timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
-    "session": {value: index for index, value in enumerate(("asia", "london", "ny"))},
+    "session": {value: index for index, value in enumerate(("sydney", "asia", "london", "ny"))},
     "exit-mode": {value: index for index, value in enumerate(("fixed", "trailing", "partial"))},
 }
 RESULTS_TEMPLATE = Path(__file__).resolve().parent / "templates" / "results.html"
