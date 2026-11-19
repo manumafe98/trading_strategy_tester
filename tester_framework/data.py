@@ -8,7 +8,7 @@ import re
 import pandas as pd
 
 from .models import AssetConfig
-from .settings import ROOT, TIMEFRAMES
+from .settings import TIMEFRAMES, default_data_dir
 
 
 __all__ = ["load_data", "market_session_starts", "normalize_data", "session_labels", "time_period_args"]
@@ -150,7 +150,7 @@ def load_local_data(
 ) -> pd.DataFrame:
     if timeframe not in LOCAL_RESAMPLE_RULES:
         raise ValueError(f"Unknown timeframe {timeframe}. Add it to local timeframe rules in tester_framework/data.py")
-    path = local_csv_path(asset, data_dir or ROOT / "data")
+    path = local_csv_path(asset, data_dir or default_data_dir())
     try:
         df = read_local_csv(
             path,

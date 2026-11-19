@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 
 from .models import AssetConfig
@@ -19,6 +20,7 @@ CONFIG_DIR = ROOT / "config"
 RESULTS_DIR = ROOT / "results"
 STRATEGY_DIR = ROOT / "strategy"
 TRADES_DIR = ROOT / "trades"
+DATA_DIR_ENV = "TESTER_DATA_DIR"
 
 TIMEFRAMES = {
     "1m": ("1m", None),
@@ -30,6 +32,10 @@ TIMEFRAMES = {
     "1h": ("1h", None),
     "1d": ("1d", None),
 }
+
+
+def default_data_dir() -> Path:
+    return Path(os.environ.get(DATA_DIR_ENV) or ROOT / "data")
 
 
 def load_assets() -> dict[str, AssetConfig]:
@@ -78,6 +84,7 @@ def load_assets() -> dict[str, AssetConfig]:
 
 __all__ = [
     "CONFIG_DIR",
+    "DATA_DIR_ENV",
     "DEFAULT_MAX_VARIANTS",
     "DEFAULT_SELECT_BY",
     "DEFAULT_SELECT_TOP",
@@ -91,5 +98,6 @@ __all__ = [
     "STRATEGY_DIR",
     "TIMEFRAMES",
     "TRADES_DIR",
+    "default_data_dir",
     "load_assets",
 ]

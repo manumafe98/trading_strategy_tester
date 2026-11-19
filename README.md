@@ -18,7 +18,7 @@ PY="$(git rev-parse --path-format=absolute --git-common-dir)/../.venv/Scripts/py
 "$PY" -m pytest -q
 ```
 
-The local smoke run and its expected result are documented in `AGENTS.md`.
+`"$PY" -m pytest -q -m smoke` runs reference backtests on local `data/` and asserts their known results; it skips without the data.
 
 ## Run
 
@@ -33,6 +33,8 @@ Each normal run clears `results/` and `trades/` first, then writes a result bund
 When `--operation all` is used, results include total, long, and short trade counts. For `long_only` or `short_only`, only total trades is shown.
 
 Asset aliases, tick/point values, trading-session boundaries, annualization factors, and cost assumptions live in `config/assets.json`. Every configured asset must provide every supported timeframe's `bars_per_year`; there are no cross-market fallbacks.
+
+`--data_source local` reads one CSV per asset from `data/<any folder>/<ASSET>/*.csv` in the checkout, or under the folder the `TESTER_DATA_DIR` environment variable names, such as the main checkout's `data/` from a linked worktree.
 
 ## Command Examples
 
@@ -148,7 +150,7 @@ def generate_signals(df, asset, timeframe, params):
 
 `params["tick_size"]` contains the configured price tick for the current asset. `params["pip_size"]` contains its pip, the unit of `pips` settings: the optional `pip_size` asset field (0.0001 for EURUSD and GBPUSD), defaulting to `tick_size`. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`.
 
-The input `df` is shared across timeframes; strategies **must not mutate** it. Copy inside the strategy if needed.
+The input `df` is shared across timeframes; strategies **must not mutate** it. Copy inside the strategy if needed. The loader runs a strategy module outside `sys.modules`, so a strategy can't define `@dataclass` classes.
 
 `timeframe` is the high timeframe. A strategy can read a smaller low timeframe by setting a module-level constant; `df` then holds low-timeframe bars, which the engine also fills on:
 

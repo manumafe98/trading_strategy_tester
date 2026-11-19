@@ -37,3 +37,13 @@ def test_configured_pip_sizes_default_to_tick_size_outside_forex():
     assert {name: asset.pip_size for name, asset in assets.items()} == {
         "MNQ": 0.25, "MES": 0.25, "MGC": 0.1, "EURUSD": 0.0001, "GBPUSD": 0.0001, "BTCUSD": 0.01,
     }
+
+
+def test_default_data_dir_reads_tester_data_dir(tmp_path, monkeypatch):
+    monkeypatch.setenv("TESTER_DATA_DIR", str(tmp_path))
+    assert settings.default_data_dir() == tmp_path
+
+
+def test_default_data_dir_falls_back_to_checkout_data(monkeypatch):
+    monkeypatch.delenv("TESTER_DATA_DIR", raising=False)
+    assert settings.default_data_dir() == settings.ROOT / "data"
