@@ -1845,3 +1845,16 @@ def test_stop_entry_on_the_roll_bar_is_discarded(test_asset_cfg):
     metrics, trades = _run(data, [signal], test_asset_cfg)
 
     assert (metrics["Discarded"], trades) == (1, [])
+
+
+@pytest.mark.parametrize(
+    ("price", "direction", "expected"),
+    [
+        (4488.8 + 2 * (4488.8 - 4479.5), 1, 4507.4),
+        (4488.8 - 2 * (4488.8 - 4479.5), -1, 4470.2),
+        (4507.41, 1, 4507.5),
+        (4507.49, -1, 4507.4),
+    ],
+)
+def test_tick_price_ignores_float_noise_but_rounds_off_grid_prices(price, direction, expected):
+    assert backtest.tick_price(price, 0.1, direction) == expected

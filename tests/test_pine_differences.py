@@ -2,16 +2,21 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
+
 import pandas as pd
 import pytest
 
 from strategy import choch_sr
 from strategy.orb_fvg import generate_signals
 from strategy.utils.market_structure import market_structure
-from tests.choch_sr_bars import long_setup, mirror
+from strategy.utils.sr_channels import build_channels
+from tests.choch_sr_bars import long_setup, mirror, two_channel_setup
 from tester_framework.backtest import run_backtest
+from tester_framework.data import resample_data
 from tester_framework.models import ExitReason
 from tester_framework.sessions import parse_sessions
+from tester_framework.settings import load_assets
 
 
 FLAT = (100.0, 100.0, 100.0, 100.0)
@@ -222,3 +227,66 @@ def test_a_choch_made_by_an_earlier_break_inside_the_same_bar_never_fills(reflec
 
     assert list(signals["time"]) == [pd.Timestamp("2025-01-06 04:35")]
     assert list(signals["side"]) == [side]
+
+def _quarter_hours(*bars):
+    index = pd.date_range("2025-01-01", periods=len(bars), freq="15min")
+    return pd.DataFrame(bars, index=index, columns=["open", "high", "low", "close"], dtype=float)
+
+
+def test_a_retest_must_open_a_new_high_timeframe_bar_after_the_exit_not_after_the_entry(test_asset_cfg):
+    # Entry at 00:15 (1h bar 00:00), target at 01:15 (1h bar 01:00). A setup at 01:30 is in a later 1h bar than
+    # the entry, which the Pine accepts, but in the exit's own 1h bar, which we discard.
+    flat = [100.0, 100.0, 100.0, 100.0]
+    data = _quarter_hours(flat, flat, flat, flat, flat, [100.0, 102.5, 100.0, 102.0], flat, flat, flat, flat)
+    signals = [
+        {"time": data.index[0], "side": "long", "stop": 99.0, "setup_time": data.index[0]},
+        {"time": data.index[7], "side": "long", "stop": 99.0, "setup_time": data.index[6]},
+    ]
+    cfg = replace(test_asset_cfg, bars_per_year=test_asset_cfg.bars_per_year | {"15m": 1716 * 4})
+
+    metrics, trades = _run(data, signals, cfg, low_timeframe="15m")
+
+    assert [trade["entry_time"] for trade in trades] == [data.index[1]]
+    assert metrics["Discarded"] == 1
+
+
+def _choch_sr(df):
+    params = {**choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "session": None}
+    return choch_sr.generate_signals(df, asset="TEST", timeframe="5m", params=params)
+
+
+def test_a_contract_change_clears_channels_touches_and_swings():
+    df = long_setup()
+    rolled = df.assign(contract=[2 if time >= pd.Timestamp("2025-01-06 04:35") else 1 for time in df.index])
+
+    assert len(_choch_sr(df)) == 1
+    assert _choch_sr(rolled).empty
+
+
+def test_a_choch_uses_the_matching_touch_with_the_latest_retest_not_the_first_pending_touch():
+    second = _choch_sr(two_channel_setup()).iloc[1]
+
+    assert (second["channel_top"], second["channel_bottom"]) == (101.7, 101.5)
+
+
+def test_pip_size_comes_from_the_asset_config_not_the_symbol_type():
+    assets = load_assets()
+
+    assert assets["EURUSD"].pip_size == 0.0001
+    assert assets["MGC"].pip_size == assets["MGC"].tick_size
+
+
+def test_channel_widths_follow_the_repo_script_not_the_published_original():
+    assert (choch_sr.PARAMS["channel_min_width"], choch_sr.PARAMS["channel_max_width"], choch_sr.PARAMS["channel_unit"]) == (0.1, 0.4, "%")
+
+
+def test_resampled_channels_on_a_high_timeframe_bar_ignore_that_bar():
+    df = long_setup()
+    bars = resample_data(df, "5min")
+    changed = bars.copy()
+    changed.iloc[-1, changed.columns.get_loc("high")] += 50
+
+    def channels(frame):
+        return build_channels(frame, 0.1, 0.4, "%", 0.01).iloc[-1]
+
+    pd.testing.assert_series_equal(channels(bars), channels(changed))

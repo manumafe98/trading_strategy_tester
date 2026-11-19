@@ -5,7 +5,7 @@ opposite way on the low timeframe: a support touch then a bullish CHoCH is a lon
 a bearish CHoCH a short.
 
 The strategy ignores positions: it never clears touches or waits after its own signals. Each signal carries
-`setup_time`, the latest contact bar of its touch, and the engine's setup-time rule discards retests that
+`setup_time`, and the engine's setup-time rule discards retests that
 are not in a new high-timeframe bar after the previous trade's exit.
 
 A futures roll (a change in the `contract` column) clears pivots, channels, pending touches and swings;
@@ -127,8 +127,7 @@ def parse_touch_buckets(text: str) -> list[tuple[float, float, str]]:
 
 
 class Touch:
-    """A pending touch: the channel it follows, the role it was touched with, the bar it was first seen on, and
-    the first and latest bars of its current contact.
+    """A pending touch: the channel it follows, the role it was touched with and the bar it was first seen on.
 
     Contact is interrupted on a bar whose developing high-timeframe range does not overlap the channel, which
     happens when a high-timeframe bar opens clear of it; the next contact starts a new run.
@@ -137,16 +136,17 @@ class Touch:
     # A plain class: the strategy loader runs this module outside sys.modules, which dataclasses need.
     def __init__(self, top: float, bottom: float, role: int, bar: int):
         self.top, self.bottom, self.role = top, bottom, role
-        self.first_bar = self.contact_start = self.latest_bar = bar
-        self.prior_contact_start = self.prior_latest_bar = bar
+        self.first_bar = self.contact_start = self.latest_retest_bar = bar
+        self.prior_contact_start = self.prior_latest_retest_bar = bar
         self.in_contact = True
 
-    def update_contact(self, bar: int, overlaps: bool) -> None:
-        self.prior_contact_start, self.prior_latest_bar = self.contact_start, self.latest_bar
+    def update_contact(self, bar: int, overlaps: bool, holds_role: bool) -> None:
+        self.prior_contact_start, self.prior_latest_retest_bar = self.contact_start, self.latest_retest_bar
         if overlaps:
             if not self.in_contact:
                 self.contact_start = bar
-            self.latest_bar = bar
+            if holds_role:
+                self.latest_retest_bar = bar
         self.in_contact = overlaps
 
     @property
@@ -263,7 +263,7 @@ def segment_signals(df, rule, tick_size, params):
             if role != 0 and role != touch.role:
                 continue
             touch.top, touch.bottom = channel
-            touch.update_contact(bar, range_high >= touch.bottom and range_low <= touch.top)
+            touch.update_contact(bar, range_high >= touch.bottom and range_low <= touch.top, role == touch.role)
             kept.append(touch)
         touches = kept
 
@@ -278,12 +278,12 @@ def segment_signals(df, rule, tick_size, params):
             if not is_choch[bar]:
                 continue
             # Any channel with the matching role counts. Touches are never cleared, so the Pine's first pending
-            # touch could be a stale one; the latest contact is the one the setup-time rule can accept.
+            # touch could be a stale one.
             usable = [
                 t for t in touches if t.role == role and t.first_bar < bar and within_touch_limit(t, bar, times, params)
             ]
             if usable:
-                touch = max(usable, key=lambda t: t.prior_latest_bar)
+                touch = max(usable, key=lambda t: t.prior_latest_retest_bar)
                 row = signal_row(
                     structure, bar, side, touch, closes[bar], opens[bar], reference_close, times, tick_size, params
                 )
@@ -334,7 +334,7 @@ def signal_row(structure, bar, side, touch, entry, bar_open, reference_close, ti
         "stop": stop,
         "entry": math.nan if is_stop_entry else entry,
         "stop_entry": entry if is_stop_entry else math.nan,
-        "setup_time": times[touch.prior_latest_bar],
+        "setup_time": times[touch.prior_latest_retest_bar],
         "channel_top": touch.top,
         "channel_bottom": touch.bottom,
         "channel_role": ROLE_NAMES[channel_role(touch.top, touch.bottom, reference_close)],

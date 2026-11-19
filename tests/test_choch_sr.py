@@ -175,6 +175,16 @@ def test_channels_are_built_once_per_data_and_channel_settings(monkeypatch):
     assert len(calls) == 2
 
 
+def test_contact_while_the_channel_is_in_price_is_not_a_retest():
+    df = append(long_setup().iloc[:-1], [100.25, 100.2, 100.1, 100.0, 100.05, 100.15, 100.55])
+
+    (row,) = run(df, stop_max=1.0).to_dict("records")
+
+    assert row["time"] == at("04:41")
+    assert row["channel_role"] == "in-price"
+    assert row["setup_time"] == at("04:39")
+
+
 def test_contact_on_the_choch_bar_is_not_the_setup_time():
     # A pending touch from the first setup, no contact during the recovery, then a CHoCH whose wick is its only contact.
     lifted = TRIGGER_CLOSES[:7] + [round(close + 0.5, 4) for close in TRIGGER_CLOSES[7:]]
