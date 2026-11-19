@@ -37,8 +37,12 @@ The configured trading day of an asset, starting at its local session start time
 _Avoid_: session, trading day
 
 **Session window**:
-A named local time range that limits entries for a variant and, for ORB strategies, anchors the opening range.
+A named local time range that limits entries for a variant and, for ORB strategies, anchors the opening range; it may cross midnight, and its day starts at its own start time.
 _Avoid_: session, trading hours
+
+**Daily break**:
+The span around the 17:00 New York close when FX spreads widen until liquidity returns, taken as 16:45-18:15 New York time.
+_Avoid_: rollover, spread hours
 
 **High timeframe**:
 The bar size a strategy builds its context on, selected per variant.
@@ -100,6 +104,7 @@ _Avoid_: EOD exit, end-of-day exit
 
 **Roll**:
 The first bar of a market session where the chosen contract of a continuous series changes.
+_Avoid_: rollover
 
 **Roll exit**:
 The forced close of a trade at the close of the last bar before a roll.
