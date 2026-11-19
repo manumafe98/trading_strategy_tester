@@ -12,47 +12,11 @@ Write no comments or docstrings in code. Names, small functions and tests carry 
 
 ## Strategy Contract
 
-Each strategy is `strategy/<name>.py` and must expose:
-
-```python
-def generate_signals(df, asset, timeframe, params):
-    return signals  # columns: time, side, stop
-```
-
-- `side` must be `long` or `short`.
-- `params["tick_size"]` contains the configured asset price tick.
-- `params["pip_size"]` contains the asset pip (`pip_size` in `config/assets.json`, defaulting to `tick_size`).
-- The input `df` is shared across timeframes; strategies must not mutate it.
-- The loader runs a strategy module outside `sys.modules`, so it can't define `@dataclass` classes.
-- Local futures `df` also carries a numeric `contract` column: one code per contract, changing at each roll.
-- `timeframe` is the high timeframe. A strategy can load a smaller low timeframe by setting `LOW_TIMEFRAME = "5m"`; `df` then holds low-timeframe bars.
-- An optional `setup_time` column marks the start of the latest bar a signal's setup depends on (no later than `time`); the engine discards a signal whose setup time is before the first high-timeframe bar after the previous trade's exit.
-- An optional `stop_entry` column makes a signal a stop entry: it fills on its own bar at `max(open, stop_entry)` for a long or `min(open, stop_entry)` for a short once price reaches the level, and is discarded otherwise. A signal sets at most one of `entry` and `stop_entry`. The level must be computed only from earlier bars; the engine can't check this.
-- Extra non-NA signal columns (beyond `time`, `side`, `stop`, `entry`, `stop_entry`, `setup_time`) are copied onto the trade passed to `plot_indicators` as `params["trade"]`; engine-owned trade keys win on name clashes.
-- A strategy can declare tunable parameters as `PARAMS = {"name": default}` (int, float, bool, str or `None`), plus `PARAM_TYPES = {"name": int}` for `None` defaults. Every key the engine puts in `params` (`tick_size`, `pip_size`, `session`, `trade`, `capital`, `exit_mode`, ...; see `RESERVED_PARAMS` in `tester_framework/strategy_params.py`) is reserved. `--strategy_params "name=value,value;..."` sets them, each combination of listed values running as its own variants, and `params` in every hook holds every declared parameter, defaults filled in.
-
-Optional hooks:
-
-```python
-def plot_indicators(fig, data, view, asset, timeframe, params):
-    ...
-
-def calculate_metrics(data, signals, trades, asset, timeframe, params):
-    return {"My metric": value}  # flat dict of scalars
-
-def validate_params(params):
-    raise ValueError("...")  # runs before data loads; params holds every declared parameter
-```
-
-Strategies own indicators and stops. The framework owns data loading, fills, exits, risk sizing, costs, result HTML, and trade HTML.
-
-## Review
-
-Use `/ponytail-review` to review a change and `/ponytail-audit` for a whole-repo audit.
+Writing or changing a strategy: read the README's "Strategy API" section, and "Execution Model" for stop entries and rolls. Strategies own indicators and stops. The framework owns data loading, fills, exits, risk sizing, costs, result HTML, and trade HTML.
 
 ## Pine Claims
 
-Claims about Pine behaviour are checked against the reference scripts in `pine_scripts_examples/` and recorded in the README's "Differences From Pine" section.
+Claims about Pine behaviour are checked against the reference scripts in `pine_scripts_examples/` and recorded in the README's "Differences From Pine" section. Checking a port against TradingView: follow `docs/agents/pine-parity.md`.
 
 ## Checks
 
@@ -61,12 +25,16 @@ Run the smallest useful checks after changes:
 ```bash
 PY="$(git rev-parse --path-format=absolute --git-common-dir)/../.venv/Scripts/python.exe"
 "$PY" -m pytest -q
-"$PY" -m tester_framework --strategies ema50 --asset MGC --high_timeframe 1h --time_period 2021 --data_source local --operation all --risk_reward_ratio 1 --risk 1 --capital 10000 --with_costs --trade_html 0
+"$PY" -m pytest -q -m smoke
 ```
 
-The smoke run takes about 20 seconds and prints 139 trades, Avg Duration 8h 10m and Return -5.62% / -14.86% (gross / net); adding `--target_fill touch --intrabar path` prints the same trades and returns with Avg Duration 8h 9m. A different result signals a behaviour change. It reads `data/` from the checkout it runs in, and local `data/` only exists on the machine that holds it; agents elsewhere skip the smoke run, and a linked worktree should point at the main checkout's `data/` or run the smoke command there.
+The smoke tests run reference backtests on local `data/` (about 80 seconds) and assert their known results; a failure signals a behaviour change, and an intended one is an edit to `tests/test_smoke.py`. They skip where the data is missing. From a linked worktree, set `TESTER_DATA_DIR` to the main checkout's `data/` instead of linking the folder.
 
 ## Agent skills
+
+### Spec workflow
+
+User-invoked, so missing from the skill list: `/grill-with-docs` → `/to-spec` → `/to-tickets` → `/implement-spec`.
 
 ### Issue tracker
 
