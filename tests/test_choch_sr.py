@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import dataclasses
+import math
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -13,6 +14,7 @@ from tests.choch_sr_bars import (
     RECOVERY_CLOSES,
     TRIGGER_CLOSES,
     append,
+    higher_low_setup,
     long_setup,
     mirror,
     repeated_setup,
@@ -23,6 +25,7 @@ from tests.choch_sr_bars import (
 from tester_framework.backtest import run_backtest
 from tester_framework.sessions import parse_sessions
 from tester_framework.strategy_loader import load_strategy
+from tester_framework.strategy_params import expand_strategy_params, strategy_param_values
 
 
 def at(clock: str) -> pd.Timestamp:
@@ -51,6 +54,7 @@ def test_support_touch_then_bullish_choch_gives_one_long():
     assert row["choch_level"] == 100.52
     assert row["swing_time"] == at("04:30")
     assert row["stop_swing_time"] == at("04:32")
+    assert row["entry_mode"] == "close"
 
 
 def test_resistance_touch_then_bearish_choch_gives_one_short():
@@ -106,9 +110,33 @@ def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept
     touch = choch_sr.Touch(100.2, 100.0, choch_sr.SUPPORT, bar - 3)
     params = {**choch_sr.PARAMS, "swing_length": 2, "pip_size": 0.01, "stop_min": 0.0, "stop_max": 100.0}
 
-    row = choch_sr.signal_row(structure, bar, side, touch, entry, 103.0, df.index, 0.01, params)
+    row = choch_sr.signal_row(structure, bar, side, touch, entry, entry, 103.0, df.index, 0.01, params)
 
     assert (row is not None) == kept
+
+
+@pytest.mark.parametrize(
+    ("stop_source", "stop", "stop_swing_time", "stop_swing_price"),
+    [("last_ll_hh", 100.12, "04:32", 100.13), ("last_swing", 100.19, "04:37", 100.20)],
+)
+def test_stop_source_picks_the_swing_behind_the_stop(stop_source, stop, stop_swing_time, stop_swing_price):
+    (row,) = run(higher_low_setup(), stop_source=stop_source).to_dict("records")
+
+    assert row["stop"] == stop
+    assert row["stop_swing_time"] == at(stop_swing_time)
+    assert row["stop_swing_price"] == stop_swing_price
+    assert row["stop_source"] == stop_source
+
+
+def test_last_swing_stop_short_is_one_tick_above_the_last_swing_high():
+    (row,) = run(mirror(higher_low_setup()), stop_source="last_swing").to_dict("records")
+
+    assert (row["side"], row["stop"], row["stop_swing_price"]) == ("short", 99.81, 99.80)
+
+
+@pytest.mark.parametrize(("stop_max", "trades"), [(0.36, 1), (0.35, 0)])
+def test_last_swing_stop_is_checked_against_the_stop_distance_limits(stop_max, trades):
+    assert len(run(higher_low_setup(), stop_source="last_swing", stop_max=stop_max)) == trades
 
 
 def test_role_flip_drops_the_pending_touch():
@@ -203,9 +231,10 @@ def test_contract_change_rebuilds_state_from_the_new_contract_bars():
     assert (second_row["channel_top"], second_row["channel_bottom"]) == (100.2, 100.0)
 
 
-def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg):
+@pytest.mark.parametrize(("stop_source", "stop_swing_name"), [("last_ll_hh", "stop swing (LL)"), ("last_swing", "stop swing (swing)")])
+def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg, stop_source, stop_swing_name):
     df = append(long_setup(), RECOVERY_CLOSES)  # the long exits at its target during the recovery
-    signals = run(df)
+    signals = run(df, stop_source=stop_source)
     _, (trade,) = run_backtest(
         df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
         operation="all", risk_pct=1, capital=10_000, with_costs=False,
@@ -223,7 +252,7 @@ def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg
     assert choch.label.text == "CHoCH"
     markers = {marker.name: (list(marker.x), list(marker.y)) for marker in fig.data}
     assert markers["touch"] == ([at("04:32")], [100.2])
-    assert markers["stop swing (LL)"] == ([at("04:32")], [100.13])
+    assert markers[stop_swing_name] == ([at("04:32")], [100.13])
     assert trade["plot_start_time"] == at("04:30")  # the chart opens on the earliest bar it draws
 
 
@@ -254,6 +283,19 @@ def test_input_is_not_mutated():
         ({"stop_min": -1.0}, "stop_min"),
         ({"stop_max": 0.0}, "stop_max"),
         ({"stop_min": 0.6, "stop_max": 0.5}, "stop_min"),
+        ({"stop_source": "last_hl"}, "stop_source"),
+        ({"entry_mode": "touch"}, "entry_mode"),
+        ({"max_touch_minutes": 0}, "max_touch_minutes"),
+        ({"touch_buckets": ""}, "touch_buckets"),
+        ({"touch_buckets": "0-5|five-15"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5"}, "touch_buckets"),
+        ({"touch_buckets": "1-5|5+"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|10+"}, "touch_buckets"),
+        ({"touch_buckets": "0-10|5-15"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5-5|5+"}, "touch_buckets"),
+        ({"touch_buckets": "0-15|15-5"}, "touch_buckets"),
+        ({"touch_buckets": "0-5|5+|10+"}, "touch_buckets"),
+        ({"touch_buckets": "0+|0-5"}, "touch_buckets"),
     ],
 )
 def test_validate_params_rejects_bad_settings(overrides, message):
@@ -270,6 +312,10 @@ def test_defaults_are_the_pine_defaults():
         "stop_min": 0.1,
         "stop_max": 0.5,
         "stop_unit": "%",
+        "stop_source": "last_ll_hh",
+        "entry_mode": "close",
+        "max_touch_minutes": None,
+        "touch_buckets": "0-5|5-15|15-30|30-60|60+",
     }
     assert choch_sr.LOW_TIMEFRAME == "1m"
     choch_sr.validate_params(dict(choch_sr.PARAMS))
@@ -280,3 +326,130 @@ def test_strategy_loader_runs_it():
     params = {**strategy.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "session": None}
 
     assert len(strategy.generate_signals(long_setup(), "TEST", "5m", params)) == 1
+
+
+def wick_only_break() -> pd.DataFrame:
+    df = long_setup()
+    df.iloc[-1] = [100.30, 100.56, 100.28, 100.50, 1.0]
+    return df
+
+
+def test_wick_only_break_gives_a_stop_entry_in_break_mode_only():
+    assert run(wick_only_break()).empty
+
+    (row,) = run(wick_only_break(), entry_mode="break").to_dict("records")
+
+    assert row["time"] == at("04:35")
+    assert row["side"] == "long"
+    assert row["stop_entry"] == 100.53
+    assert pd.isna(row["entry"])
+    assert row["stop"] == 100.12
+    assert row["setup_time"] == at("04:34")
+    assert row["choch_level"] == 100.52
+    assert row["entry_mode"] == "break"
+
+
+def test_entry_mode_break_needs_a_wick_one_tick_beyond_the_swing():
+    df = wick_only_break()
+    df.iloc[-1, df.columns.get_loc("high")] = 100.525
+
+    assert run(df, entry_mode="break").empty
+
+
+def backtest(df, signals, asset_cfg):
+    return run_backtest(
+        df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
+        operation="all", risk_pct=1, capital=10_000, with_costs=False,
+        asset_cfg=dataclasses.replace(asset_cfg, tick_size=0.01),
+    )
+
+
+@pytest.mark.parametrize(
+    ("setup", "fill"),
+    [(wick_only_break, 100.53), (long_setup, 100.55)],
+)
+def test_entry_mode_break_fills_at_the_level_or_at_an_open_beyond_it(test_asset_cfg, setup, fill):
+    df = append(setup(), RECOVERY_CLOSES)
+
+    _, (trade,) = backtest(df, run(df, entry_mode="break"), test_asset_cfg)
+
+    assert trade["entry_time"] == at("04:35")
+    assert trade["entry"] == fill
+    assert trade["entry_mode"] == "break"
+
+
+@pytest.mark.parametrize(("setup", "stop_max", "trades"), [(long_setup, 0.42, 0), (long_setup, 0.43, 1), (wick_only_break, 0.42, 1)])
+def test_entry_mode_break_measures_the_stop_distance_from_the_fill(setup, stop_max, trades):
+    assert len(run(setup(), entry_mode="break", stop_max=stop_max)) == trades
+
+
+def test_entry_mode_break_ignores_a_stop_swing_confirmed_on_the_choch_bar():
+    df = long_setup().iloc[:-1].copy()
+    df.iloc[-1] = [100.30, 100.56, 100.28, 100.30, 1.0]
+    assert market_structure(df, 2, "wick", tick_size=0.01)["last_ll_time"].iloc[-1] == at("04:34")
+
+    assert run(df, entry_mode="break").empty
+def test_touch_to_choch_minutes_runs_from_the_contact_start_close_to_the_choch_close():
+    assert run(long_setup()).iloc[0]["touch_to_choch_minutes"] == 3
+    assert run(role_flip_setup(100.05), stop_max=1.0).iloc[0]["touch_to_choch_minutes"] == 5
+    assert run(repeated_setup())["touch_to_choch_minutes"].tolist() == [3, 3]
+
+
+@pytest.mark.parametrize(("limit", "trades"), [(None, 1), (3, 1), (2, 0), (1, 0)])
+def test_a_touch_whose_contact_is_older_than_max_touch_minutes_gives_no_signal(limit, trades):
+    assert len(run(long_setup(), max_touch_minutes=limit)) == trades
+
+
+def test_max_touch_minutes_counts_from_the_start_of_the_current_contact():
+    assert list(run(repeated_setup(), max_touch_minutes=3)["time"]) == [at("04:35"), at("05:57")]
+
+
+def test_max_touch_minutes_is_an_optional_int():
+    assert choch_sr.PARAMS["max_touch_minutes"] is None
+    assert choch_sr.PARAM_TYPES == {"max_touch_minutes": int}
+
+
+def band_trade(minutes, gross_r, net_r):
+    return {"touch_to_choch_minutes": minutes, "realized_r": gross_r, "net_realized_r": net_r}
+
+
+BAND_TRADES = [band_trade(0.0, 2.0, 1.9), band_trade(4.0, -1.0, -1.1), band_trade(5.0, 0.05, -0.05), band_trade(90.0, -1.0, -1.1)]
+
+
+def band_metrics(trades, with_costs):
+    params = {**choch_sr.PARAMS, "touch_buckets": "0-5|5-15|15-60|60+", "with_costs": with_costs}
+    return choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", params)
+
+
+def test_metrics_report_trades_win_rate_and_avg_r_per_band_with_net_r_under_costs():
+    metrics = band_metrics(BAND_TRADES, with_costs=True)
+
+    assert {name: metrics[name] for name in ("Trades 0-5m", "Win rate 0-5m", "Avg R 0-5m")} == {
+        "Trades 0-5m": 2, "Win rate 0-5m": 50.0, "Avg R 0-5m": 0.4
+    }
+    assert (metrics["Trades 5-15m"], metrics["Win rate 5-15m"], metrics["Avg R 5-15m"]) == (1, 0.0, -0.05)
+    assert (metrics["Trades 60+m"], metrics["Win rate 60+m"], metrics["Avg R 60+m"]) == (1, 0.0, -1.1)
+    assert metrics["Trades 15-60m"] == 0
+    assert math.isnan(metrics["Win rate 15-60m"]) and math.isnan(metrics["Avg R 15-60m"])
+    assert len(metrics) == 12
+
+
+def test_metrics_use_gross_r_without_costs_and_handle_no_trades():
+    gross = band_metrics(BAND_TRADES, with_costs=False)
+    empty = band_metrics([], with_costs=False)
+
+    assert (gross["Win rate 5-15m"], gross["Avg R 5-15m"]) == (100.0, 0.05)
+    assert gross["Avg R 0-5m"] == 0.5
+    assert empty["Trades 0-5m"] == 0 and math.isnan(empty["Avg R 60+m"])
+
+
+def test_multi_band_touch_buckets_round_trip_through_strategy_params():
+    strategies = {"choch_sr": load_strategy("choch_sr")}
+    values = strategy_param_values(strategies, "touch_buckets=0-10|10+,0-30|30+")
+
+    (first, second) = expand_strategy_params(strategies, values)["choch_sr"]
+
+    assert (first["touch_buckets"], second["touch_buckets"]) == ("0-10|10+", "0-30|30+")
+    trades = [band_trade(12.0, 1.0, 1.0)]
+    metrics = choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", {**first, "with_costs": False})
+    assert (metrics["Trades 0-10m"], metrics["Trades 10+m"]) == (0, 1)
