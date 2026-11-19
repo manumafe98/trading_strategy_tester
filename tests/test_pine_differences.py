@@ -1,4 +1,4 @@
-"""Intentional differences from the Pine references, documented in README "Differences From Pine"."""
+"""Intentional differences from the Pine ORB references, documented in README "Differences From Pine"."""
 
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ def test_double_wick_break_fills_the_choch_that_rested_before_the_bar_opened(ope
 @pytest.mark.parametrize("reflect", [False, True])
 def test_double_wick_break_records_both_breaks_in_path_order(reflect):
     df = _choch_bar_breaking_both_swings(100.20)
-    choch_bar = market_structure(mirror(df) if reflect else df, 2, "wick").iloc[-1]
+    choch_bar = market_structure(mirror(df) if reflect else df, 2, "wick", tick_size=0.01).iloc[-1]
     first, second = ("bullish", "bearish") if reflect else ("bearish", "bullish")
 
     assert (choch_bar[f"{first}_choch"], choch_bar[f"{first}_choch_at_open"]) == (False, False)
@@ -191,7 +191,7 @@ def test_double_wick_break_records_both_breaks_in_path_order(reflect):
 @pytest.mark.parametrize(("opened", "high"), [(100.45, 100.56), (100.60, 101.50)])
 def test_a_break_that_becomes_a_choch_only_inside_the_bar_is_not_a_choch_at_open(opened, high, reflect):
     df = _choch_bar_breaking_both_swings(opened, high)
-    choch_bar = market_structure(mirror(df) if reflect else df, 2, "wick").iloc[-1]
+    choch_bar = market_structure(mirror(df) if reflect else df, 2, "wick", tick_size=0.01).iloc[-1]
     first, second = ("bearish", "bullish") if reflect else ("bullish", "bearish")
 
     assert (choch_bar[f"{first}_choch"], choch_bar[f"{first}_choch_at_open"]) == (True, True)
