@@ -19,6 +19,7 @@ from .utils import csv_items, decimal_places
 DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry", "stop_entry", "setup_time"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
+TICK_UNIT_PRECISION = Decimal("1e-6")
 # Bar length per low timeframe; a close entry fills at its bar's start plus this.
 BAR_DURATIONS = {
     timeframe: pd.Timedelta(minutes=minutes)
@@ -114,7 +115,7 @@ def rounded_qty(qty: float, step: float) -> float:
 
 def tick_price(price: float, tick_size: float, direction: int) -> float:
     tick = Decimal(str(tick_size))
-    units = Decimal(str(price)) / tick
+    units = (Decimal(str(price)) / tick).quantize(TICK_UNIT_PRECISION)
     rounding = ROUND_CEILING if direction > 0 else ROUND_FLOOR
     return float(units.to_integral_value(rounding=rounding) * tick)
 
