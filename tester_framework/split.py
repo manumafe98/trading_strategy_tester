@@ -27,14 +27,11 @@ __all__ = [
     "walk_forward_efficiency",
 ]
 
-# --select_by choices and the in-sample result column each one ranks on.
 SELECT_BY = {"return_dd": "Return / DD", "sharpe": "Sharpe Ratio", "return": "Return"}
 
 
 @dataclass(frozen=True)
 class Split:
-    """The cutoff of one asset and low timeframe, with the bar times either side of it."""
-
     asset: str
     low_timeframe: str
     cutoff: int
@@ -68,13 +65,11 @@ def oos_cutoff(
     oos_start: str | None = None,
     oos_fraction: float | None = None,
 ) -> int:
-    """Return the position of the first out-of-sample bar, always the first bar of a market session."""
     if oos_start is None and oos_fraction is None:
         raise ValueError("A split needs --oos_start or --oos_fraction")
     validate_split_args(oos_start, oos_fraction)
     labels = session_labels(index, asset_cfg.session_timezone, asset_cfg.session_start)
     if oos_start is not None:
-        # A market session label is the local date its session starts on.
         cutoff = int(labels.searchsorted(pd.Timestamp(oos_start), side="left"))
     else:
         cutoff = math.ceil((1 - oos_fraction) * len(index))
@@ -88,7 +83,6 @@ def oos_cutoff(
 
 
 def entered_in_sample(trade: dict, cutoff: int) -> bool:
-    """Trades belong to the period of their entry bar."""
     return trade["entry_i"] < cutoff
 
 
@@ -108,10 +102,6 @@ def validate_selection_args(select_by: str, select_top: int) -> None:
 
 
 def walk_forward_efficiency(curve: np.ndarray, cutoff: int, bars_per_year: int) -> float:
-    """Out-of-sample annualized return as a percentage of in-sample annualized return.
-
-    NaN when the in-sample annualized return is not positive, or when equity at the curve start or the cutoff is not.
-    """
     curve = np.asarray(curve, dtype="float64")
     bar_count = len(curve) - 1
     if not 0 < cutoff < bar_count:
@@ -129,10 +119,6 @@ def walk_forward_efficiency(curve: np.ndarray, cutoff: int, bars_per_year: int) 
 
 
 def rank_variants(table: pd.DataFrame, select_by: str, select_top: int) -> pd.DataFrame:
-    """Add IS Rank, OOS Rank and Selected per strategy and asset, and sort by IS Rank within each group.
-
-    Higher is better, NaN ranks last, ties keep the incoming order. Gross / Net pairs rank on Net.
-    """
     validate_selection_args(select_by, select_top)
     column = SELECT_BY[select_by]
     oos_column = next(oos for oos, source in OOS_FINANCIAL_COLUMNS.items() if source == column)
@@ -147,17 +133,11 @@ def rank_variants(table: pd.DataFrame, select_by: str, select_top: int) -> pd.Da
     table["IS Rank"] = rank(column)
     table["OOS Rank"] = rank(oos_column)
     table["Selected"] = table["IS Rank"] <= select_top
-    # Groups keep their incoming order; rows sort by IS Rank inside each group.
     group_order = table.groupby(groups, sort=False).ngroup()
     return table.assign(_group=group_order).sort_values(["_group", "IS Rank"], kind="stable").drop(columns="_group")
 
 
 def selection_summary(table: pd.DataFrame) -> list[dict]:
-    """Tried, OOS profitable (a count) and Equal-weight OOS per strategy and asset, on Net OOS Return when it is a Gross / Net pair.
-
-    Curves each rescaled to start at 1 average to a curve that ends at the mean of their ends, so the equal-weight
-    out-of-sample return is the mean OOS Return. A variant with no out-of-sample trades counts as a flat curve.
-    """
     returns = table["OOS Return"].map(lambda value: float(net_value(value))).where(table["OOS Trades"] > 0, 0.0)
     return [
         {

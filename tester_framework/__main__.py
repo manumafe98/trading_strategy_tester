@@ -78,7 +78,6 @@ class StatusDisplay:
         self.total = 0
         self.workers: list[WorkerState] = [None] * workers
         self._stream = sys.stderr
-        # Redraw only in a real terminal; pipes keep the old final-only output.
         self._enabled = self._stream.isatty()
         self._line_count = 0
         self._lock = Lock()
@@ -265,7 +264,6 @@ def run(config: RunConfig) -> None:
     if not split_mode and (config.select_by is not None or config.select_top is not None):
         raise ValueError("--select_by and --select_top need --oos_start or --oos_fraction")
     if split_mode:
-        # Defaults are resolved once here; everything after reads the config.
         config = replace(
             config,
             select_by=DEFAULT_SELECT_BY if config.select_by is None else config.select_by,
@@ -283,7 +281,6 @@ def run(config: RunConfig) -> None:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
     low_timeframe_flags = list(dict.fromkeys(csv_items(config.low_timeframe)))
-    # One entry per strategy, high timeframe and low timeframe; each is a batch per asset and session window.
     strategy_high_low_timeframes = []
     for strategy_name, strategy in strategies.items():
         declared = getattr(strategy, "LOW_TIMEFRAME", None)
@@ -296,7 +293,6 @@ def run(config: RunConfig) -> None:
                 for asset in assets:
                     if low_timeframe not in asset_configs[asset].bars_per_year:
                         raise ValueError(f"Missing bars_per_year for {asset} {low_timeframe}")
-                # An equal low timeframe is a single-timeframe run.
                 source = "--low_timeframe" if low_timeframe_flags else f"{strategy_name} LOW_TIMEFRAME"
                 low, high = BAR_DURATIONS[low_timeframe], BAR_DURATIONS[timeframe]
                 if low > high:
@@ -313,7 +309,6 @@ def run(config: RunConfig) -> None:
         raise ValueError("--max_variants must be a positive integer")
     if task_count > config.max_variants:
         raise ValueError(f"{task_count} variants exceed --max_variants {config.max_variants}; pass a larger --max_variants to run them")
-    # Combinations are built and validated only once the run is known to fit the cap.
     strategy_params = expand_strategy_params(strategies, param_values)
     print(variant_count(task_count), file=sys.stderr)
     rows = []
@@ -346,7 +341,6 @@ def run(config: RunConfig) -> None:
                         except ValueError as exc:
                             raise ValueError(f"{asset} {data_timeframe}: {exc}") from None
                         splits.append(Split.from_index(asset, data_timeframe, data.index, cutoff))
-                    # Clear the previous bundle only once fresh data exists, so a failed load keeps it.
                     if not outputs_reset:
                         reset_output_dirs()
                         outputs_reset = True
@@ -402,7 +396,6 @@ def run(config: RunConfig) -> None:
                     active[future] = slot
                     status.set_worker(slot, variant_label(task), started_at)
 
-                # Keep one task per slot so the dashboard shows real work, not queued futures.
                 for slot in range(workers):
                     submit(slot)
                 try:
@@ -423,7 +416,6 @@ def run(config: RunConfig) -> None:
         status.start()
 
         table = pd.DataFrame(rows)
-        # Params shows only the values that differ from their defaults, so it is hidden when every row is empty.
         include_params = "Params" in table and bool(table["Params"].astype(bool).any())
         columns = result_columns(config.operation, include_session=bool(session_specs), split=split_mode, include_params=include_params)
         if not table.empty:
@@ -433,7 +425,6 @@ def run(config: RunConfig) -> None:
             table["_asset_order"] = table["Asset"].map(order)
             table = table.sort_values(["_strategy_order", "_asset_order", "_sort_return"], ascending=[True, True, False]).drop(columns=["_strategy_order", "_asset_order"])
             if split_mode:
-                # Ranking needs every variant row, so it happens here rather than in the workers.
                 table = rank_variants(table, config.select_by, config.select_top)
         console = table.reindex(columns=columns).copy()
         for column in console.columns:
@@ -457,14 +448,11 @@ def run(config: RunConfig) -> None:
 
 
 class RemovedTimeframeFlag(argparse.Action):
-    """Fails `--timeframe` with a pointer to its replacement (ADR 0004)."""
-
     def __call__(self, parser, namespace, values, option_string=None):
         parser.error("--timeframe was renamed to --high_timeframe")
 
 
 def parser() -> argparse.ArgumentParser:
-    # Abbreviations would let the old --strategy flag reach --strategy_params.
     p = argparse.ArgumentParser(allow_abbrev=False)
     p.add_argument("--strategies", help="comma list of strategy/<name>.py to run")
     p.add_argument(

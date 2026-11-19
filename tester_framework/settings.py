@@ -8,7 +8,6 @@ from .models import AssetConfig
 
 DEFAULT_TIMEFRAMES = ["1h"]
 FINANCIAL_COLUMNS = ("Return", "Max DD", "Sharpe Ratio", "Return / DD")
-# Out-of-sample financial columns and the in-sample column each one mirrors.
 OOS_FINANCIAL_COLUMNS = {"OOS Return": "Return", "OOS Max DD": "Max DD", "OOS Sharpe": "Sharpe Ratio", "OOS Return / DD": "Return / DD"}
 SPLIT_COLUMNS = ("OOS Trades", *OOS_FINANCIAL_COLUMNS, "IS Rank", "OOS Rank", "WFE", "Spanning", "Selected")
 COST_PAIR_COLUMNS = ("W", "BE", "L", "Win Rate", "Expectancy R", *FINANCIAL_COLUMNS, *OOS_FINANCIAL_COLUMNS, "WFE")

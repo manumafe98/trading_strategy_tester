@@ -64,7 +64,6 @@ def reset_output_dirs() -> None:
 
 
 def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType, strategy_params: dict) -> Path | None:
-    # Keep plotly lazy so tests avoid chart dependencies.
     import plotly.graph_objects as go
 
     TRADES_DIR.mkdir(exist_ok=True)
@@ -88,7 +87,6 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
     )
     plot_indicators = getattr(strategy, "plot_indicators", None)
     if callable(plot_indicators):
-        # Strategies own their overlays; the framework only gives them the chart.
         plot_indicators(
             fig,
             data=data,
@@ -136,7 +134,6 @@ def format_metric(column: str, value: MetricValue) -> str:
     if column == "Selected":
         return "yes" if value else ""
     if isinstance(value, (float, int)) and not math.isfinite(float(value)):
-        # WFE is blank when the in-sample annualized return is not positive.
         return "" if column == "WFE" else "N/A"
     if column == "WFE":
         return f"{float(value):.2f}%"
@@ -334,7 +331,6 @@ def _write_variant_pages(
     title = f'{row["Strategy"]} {row["Asset"]} {row["High TF"]} {row["Low TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     trades = analytics["trades"]
-    # Rows carry their asset's cutoff only in split mode.
     oos_cutoff = row.get("_oos_cutoff")
     oos_cutoff = int(oos_cutoff) if oos_cutoff is not None and pd.notna(oos_cutoff) else None
     mode = html_escape(str(row["Exit Mode"]).title())
@@ -441,7 +437,6 @@ def _render_cell(col: str, value, color: str) -> str:
 
 
 def fill_rule_tags(config: RunConfig) -> list[str]:
-    """The target fill and intrabar rule of a run, each only when it is not the default."""
     tags = []
     if config.target_fill != TargetFill.TICK_THROUGH:
         tags.append(f"target fill {config.target_fill.replace('_', ' ')}")

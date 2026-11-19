@@ -18,7 +18,6 @@ __all__ = [
 ]
 
 
-# Every key the engine puts in a hook's params; a strategy parameter may not use one.
 RESERVED_PARAMS = (
     "tick_size",
     "pip_size",
@@ -59,7 +58,6 @@ def check_declared_params(strategy: types.ModuleType, name: str) -> None:
 
 
 def parse_strategy_params(text: str | None) -> dict[str, tuple[str, ...]]:
-    """Splits `name=value;name=value` into raw values per name, in the order given."""
     parsed: dict[str, tuple[str, ...]] = {}
     for item in (text or "").split(";"):
         if not item.strip():
@@ -75,7 +73,6 @@ def parse_strategy_params(text: str | None) -> dict[str, tuple[str, ...]]:
 
 
 def _typed_value(raw: str, value_type: type) -> object:
-    # Raises ValueError for text that is not a value of `value_type`.
     if not raw or raw.lower() == "none":
         raise ValueError
     if value_type is bool:
@@ -91,7 +88,6 @@ def _typed_value(raw: str, value_type: type) -> object:
 
 
 def parse_param_value(key: str, raw: str, default: object, value_type: type | None = None) -> object:
-    """Parses one raw value to the type of its default, or of its PARAM_TYPES entry for a None default."""
     if default is None and raw.lower() == "none":
         return None
     value_type = type(default) if default is not None else value_type or str
@@ -103,7 +99,6 @@ def parse_param_value(key: str, raw: str, default: object, value_type: type | No
 
 
 def format_param_value(value: object) -> str:
-    """A parameter value spelled the way `--strategy_params` takes it."""
     if value is None:
         return "none"
     if isinstance(value, bool):
@@ -112,14 +107,12 @@ def format_param_value(value: object) -> str:
 
 
 def params_label(defaults: dict[str, object], params: dict[str, object]) -> str:
-    """The `name=value` pairs of the parameters that differ from their defaults."""
     return " ".join(f"{key}={format_param_value(value)}" for key, value in params.items() if value != defaults[key])
 
 
 def strategy_param_values(
     strategies: dict[str, types.ModuleType], text: str | None
 ) -> dict[str, dict[str, list[object]]]:
-    """Each strategy's distinct parsed values per `--strategy_params` name, in the order given."""
     overrides = parse_strategy_params(text)
     resolved = {}
     for name, strategy in strategies.items():
@@ -136,18 +129,12 @@ def strategy_param_values(
 
 
 def combination_count(values: dict[str, list[object]]) -> int:
-    """How many parameter combinations `values` expands to, without building them."""
     return math.prod(len(listed) for listed in values.values())
 
 
 def expand_strategy_params(
     strategies: dict[str, types.ModuleType], values: dict[str, dict[str, list[object]]]
 ) -> dict[str, list[dict[str, object]]]:
-    """Every parameter combination of each strategy: defaults merged with each combination of its values.
-
-    Combinations are the cartesian product of the listed values, in the order the names were given; each is
-    checked by the strategy's `validate_params`.
-    """
     resolved = {}
     for name, strategy in strategies.items():
         declared = getattr(strategy, "PARAMS", {})

@@ -97,19 +97,17 @@ def test_orb_and_fvg_columns_reach_the_trade_chart(test_asset_cfg, low_timeframe
     df = make_combined_day(bull=True, with_ext=True)
     df.iloc[12, df.columns.get_loc("high")] = 107.0
     signals = generate_signals(df, asset="MNQ", timeframe="5m", params={"tick_size": 0.25, "session": SESSION})
-    # The fixture's FVG bars sit outside their open; widen ranges so the engine accepts them.
     prices = df[["open", "high", "low", "close"]]
     bars = df.assign(high=prices.max(axis=1), low=prices.min(axis=1))
     _, (trade,) = run_backtest(
         bars, signals, strategy="orb_combined", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
         operation="all", risk_pct=1, capital=10_000, with_costs=False, asset_cfg=test_asset_cfg,
     )
-    trade["low_timeframe"] = low_timeframe  # set by the runner before charts are written
+    trade["low_timeframe"] = low_timeframe
     fig = go.Figure()
     plot_indicators(fig, df, df, "TEST", "1m", {"trade": trade, "tick_size": 0.1})
 
     assert [(t.name, list(t.y)) for t in fig.data] == [("ORB high", [102.0, 102.0]), ("ORB low", [98.5, 98.5])]
-    # The box and the extension line each span 22 low-timeframe bars.
     span = pd.Timedelta(minutes=22 * bar_minutes)
     assert [(s.name, s.x0, s.x1, s.y0, s.y1) for s in fig.layout.shapes] == [
         ("FVG", pd.Timestamp("2025-01-02 14:38"), pd.Timestamp("2025-01-02 14:38") + span, 100.5, 102.5),

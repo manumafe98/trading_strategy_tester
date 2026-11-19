@@ -45,12 +45,12 @@ def test_support_touch_then_bullish_choch_gives_one_long():
     assert row["time"] == at("04:35")
     assert row["side"] == "long"
     assert row["entry"] == 100.55
-    assert row["stop"] == 100.12  # one tick below the LL at 100.13
+    assert row["stop"] == 100.12
     assert row["channel_top"] == 100.2
     assert row["channel_bottom"] == 100.0
     assert row["channel_role"] == "support"
     assert row["touch_time"] == at("04:32")
-    assert row["setup_time"] == at("04:34")  # the latest contact, the last bar of the touch's 5-minute bar
+    assert row["setup_time"] == at("04:34")
     assert row["choch_level"] == 100.52
     assert row["swing_time"] == at("04:30")
     assert row["stop_swing_time"] == at("04:32")
@@ -65,7 +65,7 @@ def test_resistance_touch_then_bearish_choch_gives_one_short():
     assert row["time"] == at("04:35")
     assert row["side"] == "short"
     assert row["entry"] == 99.45
-    assert row["stop"] == 99.88  # one tick above the HH at 99.87
+    assert row["stop"] == 99.88
     assert (row["channel_top"], row["channel_bottom"], row["channel_role"]) == (100.0, 99.8, "resistance")
     assert row["touch_time"] == at("04:32")
     assert row["setup_time"] == at("04:34")
@@ -80,7 +80,7 @@ def test_choch_without_a_prior_touch_gives_none():
 
 
 def test_touch_on_the_choch_bar_itself_gives_none():
-    df = shifted_trigger(choch_low=100.15)  # the CHoCH bar's wick is its only contact with the channel
+    df = shifted_trigger(choch_low=100.15)
 
     assert run(df).empty
 
@@ -88,10 +88,10 @@ def test_touch_on_the_choch_bar_itself_gives_none():
 @pytest.mark.parametrize(
     ("overrides", "trades"),
     [
-        ({}, 1),  # the stop is 0.43 below the 100.55 entry: 0.428%
+        ({}, 1),
         ({"stop_max": 0.42}, 0),
         ({"stop_min": 0.43}, 0),
-        ({"stop_unit": "pips", "stop_min": 0.0, "stop_max": 43.0}, 1),  # 43 pips of 0.01
+        ({"stop_unit": "pips", "stop_min": 0.0, "stop_max": 43.0}, 1),
         ({"stop_unit": "pips", "stop_min": 0.0, "stop_max": 42.0}, 0),
         ({"stop_unit": "pips", "stop_min": 44.0, "stop_max": 50.0}, 0),
     ],
@@ -102,8 +102,6 @@ def test_setup_is_skipped_when_the_stop_distance_is_outside_the_limits(overrides
 
 @pytest.mark.parametrize(("side", "entry", "kept"), [("long", 100.55, True), ("long", 100.12, False), ("short", 103.0, True), ("short", 103.5, False)])
 def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept):
-    # On the long setup's CHoCH bar the last LL is 100.13 and the last HH 103.12: stops at 100.12 and 103.13.
-    # With no minimum distance, only the side check rejects a stop at or beyond the entry.
     df = long_setup()
     bar = len(df) - 1
     structure = market_structure(df, 2)
@@ -140,13 +138,13 @@ def test_last_swing_stop_is_checked_against_the_stop_distance_limits(stop_max, t
 
 
 def test_role_flip_drops_the_pending_touch():
-    inside = run(role_flip_setup(100.05), stop_max=1.0)  # closes inside the channel: the touch stays pending
-    flipped = run(role_flip_setup(99.95), stop_max=1.0)  # closes below it: the channel turns resistance
+    inside = run(role_flip_setup(100.05), stop_max=1.0)
+    flipped = run(role_flip_setup(99.95), stop_max=1.0)
 
     assert len(inside) == 1
     assert inside.iloc[0]["time"] == at("04:41")
-    assert inside.iloc[0]["touch_time"] == at("04:36")  # the 04:35 five-minute bar opens clear of the channel, so contact restarts
-    assert inside.iloc[0]["setup_time"] == at("04:39")  # contact continued through the next 5-minute bar
+    assert inside.iloc[0]["touch_time"] == at("04:36")
+    assert inside.iloc[0]["setup_time"] == at("04:39")
     assert flipped.empty
 
 
@@ -155,9 +153,9 @@ def test_signals_keep_coming_after_an_earlier_signal():
 
     assert list(signals["time"]) == [at("04:35"), at("05:57")]
     second = signals.iloc[1]
-    assert second["touch_time"] == at("05:54")  # the touch is still pending, but its current contact started at the retest
-    assert second["setup_time"] == at("05:54")  # its latest contact is the retest
-    assert second["plot_start_time"] == at("05:52")  # the retest's chart opens on its own swing, not at 04:32
+    assert second["touch_time"] == at("05:54")
+    assert second["setup_time"] == at("05:54")
+    assert second["plot_start_time"] == at("05:52")
 
 
 def test_channels_are_built_once_per_data_and_channel_settings(monkeypatch):
@@ -168,7 +166,7 @@ def test_channels_are_built_once_per_data_and_channel_settings(monkeypatch):
     df = long_setup()
 
     first = run(df)
-    assert run(df, swing_length=3, stop_max=1.0) is not None  # a sweep over settings channels ignore
+    assert run(df, swing_length=3, stop_max=1.0) is not None
     assert run(df).equals(first)
     run(df, channel_max_width=0.5)
 
@@ -186,7 +184,6 @@ def test_contact_while_the_channel_is_in_price_is_not_a_retest():
 
 
 def test_contact_on_the_choch_bar_is_not_the_setup_time():
-    # A pending touch from the first setup, no contact during the recovery, then a CHoCH whose wick is its only contact.
     lifted = TRIGGER_CLOSES[:7] + [round(close + 0.5, 4) for close in TRIGGER_CLOSES[7:]]
     df = append(long_setup(), RECOVERY_CLOSES + lifted)
     df.iloc[-1, df.columns.get_loc("low")] = 100.15
@@ -195,7 +192,7 @@ def test_contact_on_the_choch_bar_is_not_the_setup_time():
 
     assert second["time"] == at("05:57")
     assert second["setup_time"] < second["time"]
-    assert second["setup_time"] < at("04:45")  # the contact before the recovery, so a retest after an exit is not met
+    assert second["setup_time"] < at("04:45")
 
 
 def test_choch_uses_the_matching_touch_with_the_latest_contact():
@@ -203,20 +200,18 @@ def test_choch_uses_the_matching_touch_with_the_latest_contact():
 
     assert list(signals["time"]) == [at("08:15"), at("09:37")]
     second = signals.iloc[1]
-    # The lower channel's touch from 08:12 is still pending, but the dip into the upper channel is fresher.
     assert (second["channel_top"], second["channel_bottom"]) == (101.7, 101.5)
     assert second["touch_time"] == at("09:34")
     assert second["setup_time"] == at("09:34")
 
 
 def with_contracts(df, roll_time=None):
-    """`df` with a `contract` column: one code throughout, or a second code from `roll_time`."""
     codes = [2 if roll_time is not None and time >= roll_time else 1 for time in df.index]
     return df.assign(contract=codes)
 
 
 def test_contract_change_mid_setup_gives_no_signal_from_pre_roll_touches():
-    rolled = run(with_contracts(long_setup(), roll_time=at("04:35")))  # the roll lands on the CHoCH bar
+    rolled = run(with_contracts(long_setup(), roll_time=at("04:35")))
 
     assert rolled.empty
 
@@ -237,13 +232,13 @@ def test_contract_change_rebuilds_state_from_the_new_contract_bars():
 
     assert list(signals["time"]) == [at("04:35"), at("04:35") + offset]
     second_row = signals.iloc[1]
-    assert second_row["touch_time"] == at("04:32") + offset  # the first contract's touch did not carry over
+    assert second_row["touch_time"] == at("04:32") + offset
     assert (second_row["channel_top"], second_row["channel_bottom"]) == (100.2, 100.0)
 
 
 @pytest.mark.parametrize(("stop_source", "stop_swing_name"), [("last_ll_hh", "stop swing (LL)"), ("last_swing", "stop swing (swing)")])
 def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg, stop_source, stop_swing_name):
-    df = append(long_setup(), RECOVERY_CLOSES)  # the long exits at its target during the recovery
+    df = append(long_setup(), RECOVERY_CLOSES)
     signals = run(df, stop_source=stop_source)
     _, (trade,) = run_backtest(
         df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
@@ -263,11 +258,11 @@ def test_trade_chart_shows_the_channel_touch_choch_and_stop_swing(test_asset_cfg
     markers = {marker.name: (list(marker.x), list(marker.y)) for marker in fig.data}
     assert markers["touch"] == ([at("04:32")], [100.2])
     assert markers[stop_swing_name] == ([at("04:32")], [100.13])
-    assert trade["plot_start_time"] == at("04:30")  # the chart opens on the earliest bar it draws
+    assert trade["plot_start_time"] == at("04:30")
 
 
 def test_session_window_does_not_gate_channels_or_touches():
-    session = parse_sessions("ny=09:30-12:00")[0]  # excludes every bar of the sample
+    session = parse_sessions("ny=09:30-12:00")[0]
 
     pd.testing.assert_frame_equal(run(repeated_setup(), session=session), run(repeated_setup()))
 

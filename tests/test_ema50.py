@@ -9,7 +9,6 @@ from strategy.ema50 import generate_signals, plot_indicators
 
 
 def make_cross(jump: float) -> pd.DataFrame:
-    """60 flat bars at 100, then the close jumps by `jump` on bar 60 and stays there."""
     closes = [100.0] * 60 + [100.0 + jump] * 5
     index = pd.date_range("2025-01-01", periods=len(closes), freq="h")
     return pd.DataFrame(

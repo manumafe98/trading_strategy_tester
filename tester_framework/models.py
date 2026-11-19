@@ -16,7 +16,6 @@ OPERATIONS = ("all", "long_only", "short_only")
 
 
 class ExitReason(StrEnum):
-    # Declaration order is the order of the completion counts in analytics and reports.
     TARGET = "target"
     STOP = "stop"
     SESSION = "session"
@@ -48,7 +47,6 @@ class AssetConfig:
     session_timezone: str
     session_start: str
     bars_per_year: dict[str, int]
-    # Unit of `pips` widths and distances; defaults to tick_size. Forex quotes it as 0.0001.
     pip_size: float | None = None
 
     def __post_init__(self) -> None:

@@ -484,13 +484,11 @@ def test_results_page_shows_split_columns_and_period_ranges_only_in_split_mode(m
     assert '<td class="c" data-sort-value="-4.5"><span class="pill bad">' in html
     assert "MGC 1h in-sample 2021-01-03 23:00 to 2021-06-30 20:00 UTC" in html
     assert "MGC 1h out-of-sample 2021-07-01 22:00 to 2021-12-30 21:00 UTC" in html
-    # Net WFE is blank: its in-sample annualized return was not positive.
     assert '<span class="pill plain">120.50% / </span>' in html
     assert '<span class="pill plain">yes</span>' in html
     assert "ranked by in-sample Return / DD" in html
     assert "top 5 selected per strategy and asset" in html
     assert '<span class="tag">1 variant</span>' in html
-    # Net OOS Return -4.50% with costs on, from one variant with out-of-sample trades.
     assert "ema50 MGC: Tried 1, OOS profitable 0/1 (0.0%), Equal-weight OOS -4.50%" in html
     assert "Tried" not in plain and "Equal-weight" not in plain
     assert "OOS" not in plain and "in-sample" not in plain and "selected per strategy" not in plain

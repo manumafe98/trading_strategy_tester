@@ -16,10 +16,11 @@ from .strategy_loader import load_strategy
 from .types import VariantBatchTask
 from .utils import variant_parts
 
+CHARTS_PER_PLOTLY_GC = 100
+
 
 def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, str, tuple[str, ...]]:
     if "contract" in data:
-        # The cache is float-only and a roll needs only contract changes, so contracts become codes.
         data = data.assign(contract=pd.factorize(data["contract"])[0])
     values_path = Path(cache_dir) / f"{cache_id}_values.npy"
     index_path = Path(cache_dir) / f"{cache_id}_index.npy"
@@ -32,7 +33,6 @@ def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, 
 
 
 def batch_label(task: VariantBatchTask) -> str:
-    """The variant batch a task runs: strategy, asset, timeframes, session window and changed parameters."""
     return " ".join(
         variant_parts(
             task["strategy"], task["asset"], task["timeframe"], task["low_timeframe"],
@@ -42,8 +42,6 @@ def batch_label(task: VariantBatchTask) -> str:
 
 
 def strategy_hook_params(task: VariantBatchTask) -> dict[str, object]:
-    """The `params` a task's `generate_signals` receives: its strategy parameters and the asset's tick, pip and
-    session window."""
     return {
         **task["strategy_params"],
         "tick_size": task["asset_cfg"].tick_size,
@@ -106,16 +104,14 @@ def _run_variant(
             if task["trade_html"] is None or chart_number <= task["trade_html"]:
                 charted += 1
                 trade["chart_path"] = write_trade_html(data, trade, strategy, task["strategy_params"])
-                if charted % 100 == 0:
-                    # Plotly retains cyclic objects long enough to exhaust parallel Windows workers.
+                if charted % CHARTS_PER_PLOTLY_GC == 0:
                     gc.collect()
             else:
                 trade["chart_path"] = None
     finally:
-        if charted % 100:
+        if charted % CHARTS_PER_PLOTLY_GC:
             gc.collect()
     analytics = analyze_trades(trades, exit_mode)
-    # In split mode the trade-count columns describe the in-sample period: trades entered before the cutoff.
     counted = trades if task["oos_cutoff"] is None else [trade for trade in trades if entered_in_sample(trade, task["oos_cutoff"])]
     row = add_trade_counts(metrics, counted, task["operation"], task["with_costs"])
     if task["with_costs"]:
@@ -176,9 +172,6 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
                 raise RuntimeError(f"{variant}: {detail}") from exc
         return rows
     finally:
-        # DataFrames built on the cached arrays may outlive this call (pytest
-        # renders them from traceback locals), so the memory maps stay open
-        # until their last reference is collected.
         values = index_values = data = signals = None
 
 

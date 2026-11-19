@@ -25,14 +25,6 @@ def track_fvgs_to_bar(
     fvg_start: int = FVG_START_MINUTE,
     fvg_end: int = FVG_END_MINUTE,
 ) -> list[FVG]:
-    """Track active FVGs from bar 0 up to and including end_idx (barstate.isconfirmed semantics).
-
-    Processes 1m bars sequentially, matching the Pine Script detection/mitigation logic:
-    - New FVG detected at bar i>=2 when in FVG session: bull if high[i-2] < low[i], bear if low[i-2] > high[i]
-    - Mitigation: bull FVG removed when close < bottom; bear when close > top
-    - Session-end cleanup: all FVGs cleared when minute exits FVG window
-    - Extension line: bull -> low[i-1], bear -> high[i-1], retained when outside the gap
-    """
     if end_idx < 2:
         return []
 
@@ -85,11 +77,6 @@ def track_fvgs_to_bar(
 
 
 def find_qualifying_fvg(fvgs: list[FVG], direction: int, require_ext: bool = False) -> FVG | None:
-    """Scan newest-to-oldest for a directional FVG match.
-
-    direction=1 (long) needs a bullish FVG; direction=-1 (short) needs a bearish FVG.
-    If require_ext, skips FVGs without an extension price.
-    """
     need_bull = direction == 1
     for fvg in reversed(fvgs):
         if fvg.is_bull != need_bull:

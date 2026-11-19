@@ -4,7 +4,6 @@ import pandas as pd
 
 
 def make_combined_day(bull=True, with_ext=True):
-    """Build a 1m trading day with an ORB, FVG with/without extension, and a breakout."""
     times = pd.date_range("2025-01-02 14:30", periods=20, freq="1min")
     df = pd.DataFrame(
         {

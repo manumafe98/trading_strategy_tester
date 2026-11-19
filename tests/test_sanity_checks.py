@@ -1,5 +1,3 @@
-"""Engine sanity checks on a seeded random walk: no strategy looks ahead, random entries lose about the costs, a cheat wins."""
-
 from __future__ import annotations
 
 import numpy as np
@@ -21,7 +19,6 @@ PEEK_BARS = 60
 STOP_TICKS = 10
 RR = 2.0
 RANDOM_ENTRY_SEEDS = (1, 2, 3, 4, 5)
-# The only high timeframes a strategy may refuse, with the error it must raise; any other error fails the test.
 UNSUPPORTED_SIGNAL_TIMEFRAMES = {
     (name, "1d"): "ORB strategies support intraday timeframes only" for name in ("orb_candle", "orb_combined", "orb_fvg")
 } | {("choch_sr", "1d"): "choch_sr supports intraday high timeframes only"}
@@ -42,7 +39,6 @@ SANITY_ASSET = AssetConfig(
 
 
 def random_walk(bars: int, bar_size: str, seed: int = 0) -> pd.DataFrame:
-    """Tick-aligned OHLC bars whose open is the previous close, so there are no gaps."""
     rng = np.random.default_rng(seed)
     close_ticks = 20_000 + np.cumsum(rng.integers(-4, 5, bars))
     open_ticks = np.concatenate(([20_000], close_ticks[:-1]))
@@ -61,7 +57,6 @@ def random_walk(bars: int, bar_size: str, seed: int = 0) -> pd.DataFrame:
 
 
 def strategy_params(strategy) -> dict:
-    """The params the runner passes: declared defaults, ticks, and the ny session window for strategies that require --sessions."""
     needs_session = "sessions" in getattr(strategy, "REQUIRED_FLAGS", {})
     return {
         **getattr(strategy, "PARAMS", {}),
@@ -72,10 +67,6 @@ def strategy_params(strategy) -> dict:
 
 
 def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, params: dict, seed: int = 0) -> None:
-    """Signals up to each cut bar must equal the signals of the uncut series up to that bar, column for column.
-
-    Cuts land on CUTS random bars and on CUTS random signal bars, where a one-bar peek shows.
-    """
     full = generate_signals(df, "TEST", timeframe, params).reset_index(drop=True)
     assert not full.empty, f"No signals on the synthetic series for high timeframe {timeframe}; the check would be vacuous"
     signal_bars = np.unique(df.index.searchsorted(pd.to_datetime(full["time"])))
@@ -91,7 +82,6 @@ def assert_no_lookahead(generate_signals, df: pd.DataFrame, timeframe: str, para
 
 
 def peek_signals(df, asset, timeframe, params):
-    """A cheat: picks the side from the close PEEK_BARS bars ahead."""
     future = df["close"].shift(-PEEK_BARS)
     rows = future.notna() & (future != df["close"])
     long = (future > df["close"])[rows]
@@ -123,7 +113,6 @@ def test_lookahead_check_catches_a_cheat():
 
 
 def backtest(signals: pd.DataFrame, data: pd.DataFrame):
-    # Touch fills keep target and stop symmetric on a random walk, so random entries break even gross.
     return run_backtest(
         data,
         signals,
@@ -169,7 +158,6 @@ def random_entry_net_returns(walk) -> dict[int, float]:
 def test_random_entries_break_even_gross_and_lose_net(walk, seed):
     _, trades = backtest(random_entry_signals(walk, seed), walk)
     assert len(trades) >= 200
-    # P&L in R, so fixed-fractional sizing does not weight trades by equity.
     gross = np.array([trade["realized_r"] for trade in trades])
     net = np.array([trade["net_realized_r"] for trade in trades])
     standard_error = gross.std(ddof=1) / np.sqrt(len(gross))

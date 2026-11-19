@@ -13,7 +13,6 @@ SESSION = parse_sessions("ny=09:30-12:00")[0]
 
 
 def make_fvg_day(bull=True, with_fvg=True):
-    """Build a 1m trading day with an ORB, optional FVG, and a breakout."""
     times = pd.date_range("2025-01-02 14:30", periods=20, freq="1min")
     df = pd.DataFrame(
         {

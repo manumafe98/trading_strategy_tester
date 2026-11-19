@@ -30,7 +30,6 @@ def _recording_strategy(params, param_types=None, **hooks):
 
 
 def _run(monkeypatch, tmp_path, asset_cfg, strategies, tables=None, **overrides):
-    """Runs cli.run inline; `strategies` maps strategy name to its module stand-in."""
     submitted = []
     tables = [] if tables is None else tables
     monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": asset_cfg})
@@ -160,7 +159,6 @@ def test_strategy_params_reach_signals_charts_and_metrics(monkeypatch, tmp_path,
     runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, trade_html=None, strategy_params={"swing_length": 10}))
 
     assert {hook: params["swing_length"] for hook, params in seen.items()} == {"signals": 10, "chart": 10, "metrics": 10}
-    # Every key the engine adds is reserved, so a strategy parameter can never be overwritten.
     engine_keys = {key for params in seen.values() for key in params} - {"swing_length"}
     assert engine_keys <= set(RESERVED_PARAMS)
     assert seen["chart"]["tick_size"] == test_asset_cfg.tick_size
@@ -229,7 +227,6 @@ def test_a_strategy_file_declaring_params_runs_with_an_override(monkeypatch, tmp
         strategy_params="stop_offset=2",
     )
 
-    # A long entered at 100 on flat bars ends at the data end; only the stop distance sets its R.
     assert [table["_strategy_params"].iloc[0] for table in tables] == [{"stop_offset": 1.0}, {"stop_offset": 2.0}]
     risks = [decode_analytics(table["_analytics"].iloc[0])["trades"][0]["stop"] for table in tables]
     assert risks == [99.0, 98.0]
@@ -261,7 +258,6 @@ def test_value_lists_run_the_cartesian_product_in_the_order_names_were_given(mon
         exit_mode="fixed,trailing",
     )
 
-    # One batch per combination; RR and exit mode stay inside it and share one signal frame.
     assert [(params["mode"], params["swing_length"]) for params in seen] == [
         ("break", 10), ("break", 20), ("break", 30), ("close", 10), ("close", 20), ("close", 30)
     ]
@@ -288,7 +284,6 @@ def _capped_run(monkeypatch, asset_cfg, **overrides):
 
 
 def test_a_run_over_max_variants_fails_before_data_loads_counting_rr_and_exit_mode(monkeypatch, test_asset_cfg):
-    # 3 swing lengths x 2 RR x 2 exit modes = 12 variants
     with pytest.raises(ValueError, match=re.escape("12 variants exceed --max_variants 11")):
         _capped_run(
             monkeypatch, test_asset_cfg,
@@ -304,7 +299,6 @@ def test_max_variants_is_enforced_before_any_combination_is_built_or_validated(m
     monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
     monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
 
-    # 300 x 300 combinations; a repeated value counts once.
     lengths = ",".join(str(value) for value in range(1, 301))
     modes = ",".join(f"m{value}" for value in range(300))
     with pytest.raises(ValueError, match=re.escape("90000 variants exceed --max_variants 2000")):

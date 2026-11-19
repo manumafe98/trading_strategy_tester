@@ -2,7 +2,8 @@
 
 Judgement rules applied when a change is reviewed.
 
-- Identifiers and comments use `GLOSSARY.md` terms and never a word a term lists under _Avoid_.
+- Identifiers use `GLOSSARY.md` terms and never a word a term lists under _Avoid_.
+- Write no comments or docstrings in code (see `AGENTS.md`).
 - Keep changes focused and Python 3.11-compatible; prefer the standard library and existing dependencies.
 - Do not leave dead code, speculative abstractions, input mutation, or unrelated formatting churn.
 - Validate external inputs at the CLI boundary and again in callable core functions that rely on them.

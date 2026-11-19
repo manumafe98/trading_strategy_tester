@@ -1,21 +1,3 @@
-"""Apply exact mutations to a production file and check the selected tests catch them.
-
-Usage:
-    python tests/mutate.py <file> --tests <pytest args...> \
-        --mutation <search> <replace> [--mutation <search> <replace> ...]
-
-Each mutation is applied alone to the original file bytes, the selected tests
-run through ``sys.executable -m pytest``, and the file is restored from the
-original bytes in a ``finally`` block. Search and replace text are matched as
-UTF-8 bytes, so a file is byte-identical after every run.
-
-A mutation is killed when pytest reports failed tests (exit code 1), survived
-when pytest reports success (exit code 0), and invalid when its search text
-does not occur exactly once. Any other exit code, including 2 for an
-interrupted run or a collection error, is reported as an error. The command
-exits non-zero unless every mutation was killed.
-"""
-
 from __future__ import annotations
 
 import subprocess
@@ -92,7 +74,6 @@ def _fail(message: str) -> None:
 
 
 def _display(text: str) -> str:
-    """Render search or replace text as one readable line."""
     escaped = (
         text.replace("\\", "\\\\")
         .replace("\r", "\\r")
@@ -146,7 +127,6 @@ def _parse_args(argv: list[str]) -> Selection:
 
 
 def _clear_bytecode_cache(path: Path) -> None:
-    """Drop cached bytecode for the mutated module so the tests see its new source."""
     cache_dir = path.parent / "__pycache__"
     if not cache_dir.is_dir():
         return
