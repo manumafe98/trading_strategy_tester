@@ -75,8 +75,18 @@ def test_parse_sessions_rejects_sydney_subrange_outside_preset():
         parse_sessions("sydney=06:30-10:00")
 
 
+def test_parse_sessions_full_preset_is_the_whole_day_in_new_york_time():
+    full = parse_sessions("full")[0]
+
+    assert (full["timezone"], full["start"], full["end"], full["label"]) == ("America/New_York", "18:15", "18:15", "full")
+
+
+def test_parse_sessions_runs_ny_and_full_as_separate_windows():
+    assert [session["label"] for session in parse_sessions("ny,full")] == ["ny", "full"]
+
+
 def test_parse_sessions_unknown_name_error_lists_sydney_and_regions():
-    with pytest.raises(ValueError, match="supports only sydney, asia, london, ny, ny_bank, regions, or none"):
+    with pytest.raises(ValueError, match="supports only sydney, asia, london, ny, ny_bank, full, regions, or none"):
         parse_sessions("bogus")
 
 

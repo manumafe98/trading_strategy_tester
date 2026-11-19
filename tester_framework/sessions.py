@@ -25,6 +25,7 @@ SESSION_PRESETS = {
     "london": ("Europe/London", 8 * 60, 16 * 60 + 30),
     "ny": ("America/New_York", 9 * 60 + 30, 16 * 60),
     "ny_bank": ("America/New_York", 8 * 60, 17 * 60),
+    "full": ("America/New_York", 18 * 60 + 15, 18 * 60 + 15),
 }
 REGION_SESSIONS = ("sydney", "asia", "london", "ny")
 MINUTES_PER_DAY = 24 * 60
@@ -50,13 +51,13 @@ def _format_clock(minutes: int) -> str:
 
 def _session_spec(name: str, start_minute: int | None = None, end_minute: int | None = None) -> SessionSpec:
     if name not in SESSION_PRESETS:
-        raise ValueError(f"--sessions supports only sydney, asia, london, ny, ny_bank, regions, or none; got: {name}")
+        raise ValueError(f"--sessions supports only sydney, asia, london, ny, ny_bank, full, regions, or none; got: {name}")
     timezone, preset_start, preset_end = SESSION_PRESETS[name]
-    start_minute = preset_start if start_minute is None else start_minute
-    end_minute = preset_end if end_minute is None else end_minute
-    if start_minute >= end_minute:
+    if start_minute is None:
+        start_minute, end_minute = preset_start, preset_end
+    elif start_minute >= end_minute:
         raise ValueError(f"--sessions {name} range must increase, got: {_format_clock(start_minute)}-{_format_clock(end_minute)}")
-    if start_minute < preset_start or end_minute > preset_end:
+    elif start_minute < preset_start or end_minute > preset_end:
         raise ValueError(
             f"--sessions {name} range must stay inside {_format_clock(preset_start)}-{_format_clock(preset_end)}"
         )
@@ -69,7 +70,7 @@ def _session_spec(name: str, start_minute: int | None = None, end_minute: int | 
         "end": _format_clock(end_minute),
         "start_minute": start_minute,
         "end_minute": end_minute,
-        "length_minute": end_minute - start_minute,
+        "length_minute": (end_minute - start_minute) % MINUTES_PER_DAY or MINUTES_PER_DAY,
         "label": label,
     }
 
