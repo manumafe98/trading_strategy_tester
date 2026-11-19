@@ -28,7 +28,7 @@ PY="$(git rev-parse --path-format=absolute --git-common-dir)/../.venv/Scripts/py
 "$PY" -m pytest -q -m smoke
 ```
 
-The smoke tests run reference backtests on local `data/` (about 80 seconds) and assert their known results; a failure signals a behaviour change, and an intended one is an edit to `tests/test_smoke.py`. They skip where the data is missing. From a linked worktree, set `TESTER_DATA_DIR` to the main checkout's `data/` instead of linking the folder.
+The smoke tests run reference backtests on local `data/` (about 80 seconds) and assert their known results; a failure signals a behaviour change, and an intended one is an edit to `tests/test_smoke.py`. They skip where the data is missing. Like any run, they clear `results/` and `trades/`. From a linked worktree, set `TESTER_DATA_DIR` to the main checkout's `data/` instead of linking the folder.
 
 ## Agent skills
 

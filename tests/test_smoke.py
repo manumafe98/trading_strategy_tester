@@ -53,6 +53,7 @@ def test_reference_run_prints_its_known_result(name):
     args, expected = REFERENCE_RUNS[name]
     completed = subprocess.run(
         [sys.executable, "-m", "tester_framework", *args, *COMMON_ARGS],
-        cwd=ROOT, capture_output=True, text=True, check=True,
+        cwd=ROOT, capture_output=True, text=True,
     )
+    assert completed.returncode == 0, completed.stderr
     assert result_row(completed.stdout, args[1]) == expected
