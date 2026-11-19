@@ -98,7 +98,7 @@ def test_loopback_limits_pivots_and_touches(second_pivot, expected):
     assert channels_at(result, second_pivot + 11) == expected
 
 
-def test_pivot_may_equal_a_bar_on_its_left_but_not_on_its_right():
+def test_pivot_may_equal_a_bar_on_its_left_but_not_on_its_right_unverified_against_ta_pivothigh():
     left_tie = pivot_bars(n=40, extremes={9: 100.0, 10: 100.0})
     right_tie = pivot_bars(n=40, extremes={10: 100.0, 11: 100.0})
 

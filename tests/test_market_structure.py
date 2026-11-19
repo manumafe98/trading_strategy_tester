@@ -17,7 +17,7 @@ def labels(series: pd.Series) -> dict[int, str]:
     return {i: value for i, value in enumerate(series) if isinstance(value, str)}
 
 
-def test_swing_highs_are_labelled_on_their_confirmation_bar():
+def test_swing_highs_are_labelled_on_their_confirmation_bar_and_the_first_is_lh_as_in_the_pine():
     df = make_bars(
         highs=[10, 12, 10, 13, 10, 11, 10, 11, 10],
         lows=[5] * 9,
@@ -31,7 +31,7 @@ def test_swing_highs_are_labelled_on_their_confirmation_bar():
     assert result["swing_high_time"].iloc[4] == df.index[3]
 
 
-def test_swing_lows_are_labelled_on_their_confirmation_bar():
+def test_swing_lows_are_labelled_on_their_confirmation_bar_and_the_first_is_ll_as_in_the_pine():
     df = make_bars(
         highs=[20] * 9,
         lows=[10, 8, 10, 7, 10, 9, 10, 9, 10],

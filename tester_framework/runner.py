@@ -16,6 +16,8 @@ from .strategy_loader import load_strategy
 from .types import VariantBatchTask
 from .utils import variant_parts
 
+CHARTS_PER_PLOTLY_GC = 100
+
 
 def cache_data(data: pd.DataFrame, cache_dir: str, cache_id: int) -> tuple[str, str, tuple[str, ...]]:
     if "contract" in data:
@@ -102,12 +104,12 @@ def _run_variant(
             if task["trade_html"] is None or chart_number <= task["trade_html"]:
                 charted += 1
                 trade["chart_path"] = write_trade_html(data, trade, strategy, task["strategy_params"])
-                if charted % 100 == 0:
+                if charted % CHARTS_PER_PLOTLY_GC == 0:
                     gc.collect()
             else:
                 trade["chart_path"] = None
     finally:
-        if charted % 100:
+        if charted % CHARTS_PER_PLOTLY_GC:
             gc.collect()
     analytics = analyze_trades(trades, exit_mode)
     counted = trades if task["oos_cutoff"] is None else [trade for trade in trades if entered_in_sample(trade, task["oos_cutoff"])]
