@@ -15,6 +15,7 @@ class SessionSpec(TypedDict):
     end: str
     start_minute: int
     end_minute: int
+    length_minute: int
     label: str
 
 
@@ -26,6 +27,7 @@ SESSION_PRESETS = {
     "ny_bank": ("America/New_York", 8 * 60, 17 * 60),
 }
 REGION_SESSIONS = ("sydney", "asia", "london", "ny")
+MINUTES_PER_DAY = 24 * 60
 
 
 def _parse_clock(value: str) -> int:
@@ -67,6 +69,7 @@ def _session_spec(name: str, start_minute: int | None = None, end_minute: int | 
         "end": _format_clock(end_minute),
         "start_minute": start_minute,
         "end_minute": end_minute,
+        "length_minute": end_minute - start_minute,
         "label": label,
     }
 
@@ -129,8 +132,9 @@ def local_index(index, timezone: str) -> pd.DatetimeIndex:
 def add_session_columns(df: pd.DataFrame, session: SessionSpec) -> pd.DataFrame:
     work = df.copy(deep=False)
     local = local_index(work.index, session["timezone"])
-    work["_session_date"] = local.tz_localize(None).normalize()
-    work["_session_minute"] = _local_minutes(local)
+    minutes = _window_minutes(local, session)
+    work["_session_date"] = _window_days(local, minutes)
+    work["_session_minute"] = minutes
     return work
 
 
@@ -155,7 +159,7 @@ def filter_signals(signals: pd.DataFrame, session: SessionSpec | None) -> pd.Dat
         return frame
     if "time" not in frame.columns:
         frame = frame.reset_index().rename(columns={frame.index.name or "index": "time"})
-    mask = in_session_window(_local_minutes(local_index(frame["time"], session["timezone"])), session)
+    mask = in_session_window(_window_minutes(local_index(frame["time"], session["timezone"]), session), session)
     return frame.loc[mask].copy()
 
 
@@ -163,14 +167,23 @@ def _local_minutes(local: pd.DatetimeIndex) -> pd.Index:
     return local.hour * 60 + local.minute
 
 
+def _window_minutes(local: pd.DatetimeIndex, session: SessionSpec) -> pd.Index:
+    return (_local_minutes(local) - session["start_minute"]) % MINUTES_PER_DAY
+
+
+def _window_days(local: pd.DatetimeIndex, minutes: pd.Index) -> pd.DatetimeIndex:
+    return (local.tz_localize(None) - pd.to_timedelta(minutes, unit="min")).normalize()
+
+
 def in_session_window(minutes, session: SessionSpec) -> np.ndarray:
-    return np.asarray((minutes >= session["start_minute"]) & (minutes < session["end_minute"]))
+    return np.asarray(minutes < session["length_minute"])
 
 
 def session_exit_bars(index, session: SessionSpec) -> tuple[np.ndarray, np.ndarray]:
     local = local_index(index, session["timezone"])
-    in_window = in_session_window(_local_minutes(local), session)
-    days = local.tz_localize(None).normalize().asi8
+    minutes = _window_minutes(local, session)
+    in_window = in_session_window(minutes, session)
+    days = _window_days(local, minutes).asi8
     last = in_window.copy()
     last[:-1] &= ~(in_window[1:] & (days[1:] == days[:-1]))
     if len(last):
