@@ -34,6 +34,8 @@ When `--operation all` is used, results include total, long, and short trade cou
 
 Asset aliases, tick/point values, trading-session boundaries, annualization factors, and cost assumptions live in `config/assets.json`. Every configured asset must provide every supported timeframe's `bars_per_year`; there are no cross-market fallbacks.
 
+`--data_source local` reads one CSV per asset from `data/<any folder>/<ASSET>/*.csv` in the checkout, or under the folder the `TESTER_DATA_DIR` environment variable names, such as the main checkout's `data/` from a linked worktree.
+
 ## Command Examples
 
 Multiple values are comma-separated, without spaces:
