@@ -51,7 +51,6 @@ def _strategy(signals, **hooks):
 
 
 def _target_bars(highs):
-    # Flat 100 bars; a 102 high reaches the 1R target of a long entered at 100 with stop 99.
     count = len(highs)
     return pd.DataFrame(
         {"open": [100.0] * count, "high": highs, "low": [100.0] * count, "close": [100.0] * count, "volume": [0] * count},
@@ -132,7 +131,6 @@ def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, ba
 
 def test_run_variants_drops_signals_at_or_after_session_window_end(monkeypatch, tmp_path, test_asset_cfg):
     london_open = parse_sessions("london=08:00-10:00")[0]
-    # Both signals would reach their target: the 10:00 one only trades if the window end is not exclusive.
     data = _target_bars([100.0, 102.0, 100.0, 102.0, 100.0])
     signals = pd.DataFrame(
         [
@@ -167,7 +165,6 @@ def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
 
     (trade,) = plotted
     assert trade["vwap"] == 100.25
-    # Engine-owned keys win over same-named signal columns; NA columns are not copied.
     assert trade["target"] == 101.0
     assert "note" not in trade
     stored = decode_analytics(row["_analytics"])["trades"][0]
@@ -176,9 +173,8 @@ def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
 
 
 def test_run_variants_passes_the_fill_rules_to_the_backtest(monkeypatch, tmp_path, test_asset_cfg):
-    # A long enters at 100 with stop 99; the 1R target is 101.
-    touch_bar = (100.0, 101.0, 100.0, 100.5)  # touches the target
-    both_bar = (100.8, 101.5, 98.5, 100.0)  # the path reaches the target first, then the stop
+    touch_bar = (100.0, 101.0, 100.0, 100.5)
+    both_bar = (100.8, 101.5, 98.5, 100.0)
     data = pd.DataFrame(
         [(100.0, 100.0, 100.0, 100.0, 0), (100.0, 100.0, 100.0, 100.0, 0), (*touch_bar, 0), (*both_bar, 0)],
         index=pd.date_range("2025-01-02 08:00", periods=4, freq="1h"),
@@ -198,7 +194,6 @@ def test_run_variants_passes_the_fill_rules_to_the_backtest(monkeypatch, tmp_pat
 
 def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_end(monkeypatch, tmp_path, test_asset_cfg):
     london_open = parse_sessions("london=08:00-10:00")[0]
-    # Entered at the 09:00 open; the 10:00 bar would trade through the 2R target but starts at the window end.
     data = _target_bars([100.0, 100.0, 102.1])
     monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
     task = _task(data, tmp_path, test_asset_cfg, variants=((2, "trailing"),), session=london_open)
@@ -214,7 +209,6 @@ def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_e
 
 
 def test_split_row_counts_in_sample_trades_by_entry_and_pairs_oos_metrics(monkeypatch, tmp_path, cost_asset_cfg):
-    # Long trades enter at bars 1, 3 and 5 and reach their 1R target on the same bar; the cutoff is bar 3.
     data = _target_bars([100.0, 102.0, 100.0, 102.0, 100.0, 102.0])
     signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 2, 4)])
     monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
@@ -226,7 +220,6 @@ def test_split_row_counts_in_sample_trades_by_entry_and_pairs_oos_metrics(monkey
     for column, source in (("OOS Return", "Return"), ("OOS Sharpe", "Sharpe Ratio")):
         assert row[column] == (row["OOS Gross"][source], row["OOS Net"][source])
     assert row["Return"] == (row["Gross"]["Return"], row["Net"]["Return"])
-    # Variant pages keep whole-period analytics.
     assert decode_analytics(row["_analytics"])["outcomes"][0]["Trades"] == 3
 
 
@@ -235,7 +228,6 @@ def test_split_row_counts_in_sample_trades_by_entry_and_pairs_oos_metrics(monkey
 def test_variant_page_trade_rows_show_period_by_entry_bar_only_in_split_mode(
     monkeypatch, tmp_path, test_asset_cfg, oos_cutoff, exit_mode
 ):
-    # Longs enter at bars 1 and 4; the first reaches its target on bar 3, the cutoff, so it spans the split.
     data = _target_bars([100.0, 100.0, 100.0, 102.0, 100.0, 102.0])
     signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 3)])
     monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
@@ -372,7 +364,6 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
 
 
 def test_run_variants_closes_trades_at_roll_on_cached_contract_data(monkeypatch, tmp_path, test_asset_cfg):
-    # FUTH5 trades 50 points above FUTZ4, so the 11:00 roll bar would otherwise gap through the target.
     data = _target_bars([100.0, 100.0, 100.0, 150.0])
     data.iloc[3, :4] = 150.0
     data["contract"] = ["FUTZ4", "FUTZ4", "FUTZ4", "FUTH5"]

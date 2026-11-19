@@ -20,7 +20,6 @@ DEFAULT_RISK = 1.0
 CORE_SIGNAL_COLUMNS = frozenset({"time", "side", "stop", "entry", "stop_entry", "setup_time"})
 ROLL_ENTRY_BLOCK = pd.Timedelta(minutes=60)
 TICK_UNIT_PRECISION = Decimal("1e-6")
-# Bar length per low timeframe; a close entry fills at its bar's start plus this.
 BAR_DURATIONS = {
     timeframe: pd.Timedelta(minutes=minutes)
     for timeframe, minutes in {"1m": 1, "2m": 2, "5m": 5, "10m": 10, "15m": 15, "30m": 30, "1h": 60, "1d": 1440}.items()
@@ -161,7 +160,6 @@ def _prepare_trade(
     entry_i: int,
     with_costs: bool,
 ) -> dict | None:
-    """Validate a signal and build the trade record, or return None if it should be discarded."""
     side = Side(signal["side"])
     raw_entry = float(fill_price)
     stop = float(signal["stop"])
@@ -212,7 +210,6 @@ def _prepare_trade(
         "qty": qty,
         "mfe_r": 0.0,
     }
-    # Strategy-owned signal columns pass through for plot_indicators; engine-owned keys win.
     for column, value in signal.items():
         if column not in CORE_SIGNAL_COLUMNS and column not in trade and pd.notna(value):
             trade[column] = value
@@ -221,8 +218,6 @@ def _prepare_trade(
 
 @dataclass
 class _OpenTrade:
-    """A filled trade while it is open: remaining quantity, next target, current stop, exits and peak R."""
-
     trade: dict
     cfg: AssetConfig
     with_costs: bool
@@ -252,13 +247,11 @@ class _OpenTrade:
         return opened * self.direction <= self.stop * self.direction
 
     def _target_reached_at(self) -> float | None:
-        """The price that reaches the next target: the target on a touch, one tick beyond it under tick-through."""
         target = self.target
         if target is None:
             return None
         if self.target_fill == TargetFill.TOUCH:
             return target["price"]
-        # Targets are tick-aligned, so adding the tick in Decimal lands exactly on the next tick.
         return float(Decimal(str(target["price"])) + self.direction * Decimal(str(self.cfg.tick_size)))
 
     def target_gapped(self, opened: float) -> bool:
@@ -266,7 +259,6 @@ class _OpenTrade:
         return reached_at is not None and opened * self.direction >= reached_at * self.direction
 
     def target_gap_price(self, opened: float) -> float:
-        """A gap beyond the target fills at the open on a touch, at the target price under tick-through."""
         return opened if self.target_fill == TargetFill.TOUCH else self.target["price"]
 
     def target_between(self, start: float, end: float) -> bool:
@@ -312,7 +304,6 @@ class _OpenTrade:
         self.next_target += 1
 
     def close(self, price: float, exit_i: int, exit_time, reason: ExitReason, gap_exit: bool = False) -> None:
-        """Exit the whole remaining quantity at one price."""
         self._fill(self.remaining_qty, price, exit_i, exit_time, reason, None, gap_exit)
 
     def _realized_r(self) -> float:
@@ -324,7 +315,6 @@ class _OpenTrade:
         self.peak_r = max(float(self.peak_r), self._realized_r() + self.remaining_qty / trade["qty"] * open_r)
 
     def trail(self, favor: float) -> None:
-        """Move the trailing stop to 50% of the favorable excursion once 1R is reached."""
         trade = self.trade
         risk_points = trade["initial_risk"]
         if (favor - trade["raw_entry"]) * self.direction >= risk_points:
@@ -332,7 +322,6 @@ class _OpenTrade:
             self.stop = max(self.stop, next_stop) if self.direction > 0 else min(self.stop, next_stop)
 
     def marked_equity(self, price: float, gross_cash: float, net_cash: float) -> tuple[float, float]:
-        """Gross and net equity with realized fills and the remaining quantity marked at price."""
         trade, cfg = self.trade, self.cfg
         realized_gross = sum(fill["gross_pnl"] for fill in self.exits)
         realized_net = sum(fill["net_pnl"] for fill in self.exits)
@@ -470,13 +459,10 @@ def run_backtest(
     trades = []
     discarded_signals = 0
     busy_until = -1
-    # Open of the first high-timeframe bar after the previous trade's exit bar; a later setup time before it is discarded.
     fresh_from = None
     high_bar = BAR_DURATIONS.get(timeframe)
-    # With a session exit, open trades close at the close of their session window's last bar.
     if session_exit is not None:
         in_window, window_last_bar = session_exit_bars(data.index, session_exit)
-    # A roll is a bar whose contract differs from the previous bar's; open trades close at the bar before it.
     roll_last_bar = np.zeros(bar_count, dtype=bool)
     if "contract" in data.columns:
         contracts = data["contract"].to_numpy()
@@ -496,13 +482,11 @@ def run_backtest(
     if operation == "short_only":
         signals = signals[signals["side"] == Side.SHORT]
 
-    # Independent asset/timeframe runs; add portfolio state only when cross-asset sizing matters.
     for _, signal in signals.iterrows():
         close_entry = pd.notna(signal.get("entry"))
         stop_entry = pd.notna(signal.get("stop_entry"))
         fills_on_signal_bar = close_entry or stop_entry
         entry_i = data.index.searchsorted(signal["time"], side="left" if fills_on_signal_bar else "right")
-        # A close entry needs a bar after its fill bar.
         if entry_i + int(close_entry) >= bar_count or entry_i <= busy_until:
             discarded_signals += 1
             continue
@@ -519,17 +503,14 @@ def run_backtest(
         ):
             discarded_signals += 1
             continue
-        # A trade must open inside the window, before the window's last close.
         if session_exit is not None and (not in_window[entry_i] or (close_entry and window_last_bar[entry_i])):
             discarded_signals += 1
             continue
-        # No fills in the 60 minutes before the last bar ahead of a roll; a close entry fills at its bar's close.
         next_roll = roll_last_times.searchsorted(entry_time)
         fill_time = entry_time + bar_duration if close_entry else entry_time
         if next_roll < len(roll_last_times) and roll_last_times[next_roll] - fill_time < ROLL_ENTRY_BLOCK:
             discarded_signals += 1
             continue
-        # A signal from before a roll carries an old-contract stop, so it never fills on or after the roll bar.
         roll_after_signal = roll_times.searchsorted(signal["time"], side="left" if stop_entry else "right")
         if roll_after_signal < len(roll_times) and roll_times[roll_after_signal] <= entry_time:
             discarded_signals += 1
@@ -544,7 +525,6 @@ def run_backtest(
                 discarded_signals += 1
                 continue
 
-        # Fill flat equity up to the first simulated bar; a close entry's fill bar has no P&L yet.
         start_i = entry_i + int(close_entry)
         if last_bar_idx < start_i:
             bar_gross_equity[last_bar_idx:start_i] = current_gross
@@ -566,7 +546,6 @@ def run_backtest(
             opened = path[0]
             bar_time = data.index[i]
 
-            # Orders crossed between the previous close and this open fill at the open.
             if open_trade.stop_gapped(opened):
                 open_trade.close(opened, i, bar_time, ExitReason.STOP, gap_exit=True)
                 break
@@ -578,7 +557,6 @@ def run_backtest(
             if trailing:
                 open_trade.trail(opened)
 
-            # Stop-first: a bar that can reach both the stop and the next target exits at the stop.
             if intrabar == IntrabarRule.STOP_FIRST and open_trade.stop_and_target_reachable(opened, max(path), min(path)):
                 open_trade.close(open_trade.stop, i, bar_time, ExitReason.STOP)
                 break
@@ -613,7 +591,6 @@ def run_backtest(
 
         trade = open_trade.finalize()
 
-        # Settle the completed trade into the bar-level equity curves.
         current_gross += trade["gross_pnl"]
         current_net += trade["net_pnl"]
         bar_gross_equity[trade["exit_i"]] = current_gross
@@ -621,24 +598,20 @@ def run_backtest(
         last_bar_idx = trade["exit_i"] + 1
         busy_until = trade["exit_i"]
         if timeframe == "1d":
-            # Daily bars open at the market session start, as resample_data aligns them.
             label = session_labels(data.index[busy_until : busy_until + 1], asset_cfg.session_timezone, asset_cfg.session_start)
             fresh_from = market_session_starts(label + pd.Timedelta(days=1), asset_cfg)[0]
         elif high_bar is not None:
-            # Intraday high-timeframe bars are clock-aligned, as resample_data aligns intraday rules.
             fresh_from = pd.Timestamp(data.index[busy_until]).floor(high_bar) + high_bar
         trades.append(trade)
         if max_trades is not None and len(trades) >= max_trades:
             break
 
-    # Fill any remaining flat equity after the last completed trade.
     if last_bar_idx < bar_count:
         bar_gross_equity[last_bar_idx:bar_count] = current_gross
         bar_net_equity[last_bar_idx:bar_count] = current_net
 
     bars_per_year = asset_cfg.bars_per_year[annualization_timeframe]
     market_sessions_per_year = asset_cfg.bars_per_year["1d"]
-    # Curve point i + 1 is the equity at the close of bar i; a market session closes at its last bar.
     labels = session_labels(data.index, asset_cfg.session_timezone, asset_cfg.session_start)
     market_session_closes = np.flatnonzero(np.append(labels[1:] != labels[:-1], True)) + 1
     if oos_cutoff is None:
@@ -646,8 +619,6 @@ def run_backtest(
             asset, timeframe, strategy, gross_curve, net_curve, with_costs, market_session_closes, market_sessions_per_year,
             discarded_signals,
         ), trades
-    # Curve point oos_cutoff is the equity at the close of the last in-sample bar; both slices include it.
-    # The cutoff is a market session's first bar, so that point is also the last in-sample market session close.
     metrics = make_metrics(
         asset, timeframe, strategy, gross_curve[: oos_cutoff + 1], net_curve[: oos_cutoff + 1], with_costs,
         market_session_closes[market_session_closes <= oos_cutoff], market_sessions_per_year, discarded_signals,
@@ -674,10 +645,6 @@ def validate_calendar_filters(days: tuple[int, ...], months: tuple[int, ...]) ->
 
 
 def _curve_metrics(equity_curve: np.ndarray, market_session_closes: np.ndarray, market_sessions_per_year: int) -> dict:
-    """Return, Max DD and Return / DD use every curve point; Daily Sharpe uses the start and each market session close.
-
-    `market_session_closes` are the curve positions of each market session's close equity, in order.
-    """
     curve = np.asarray(equity_curve, dtype="float64")
     scratch = np.empty_like(curve)
     np.maximum.accumulate(curve, out=scratch)

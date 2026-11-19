@@ -1,5 +1,3 @@
-"""Breakout timing shared by the three ORB strategies, checked through each generate_signals."""
-
 from __future__ import annotations
 
 import pandas as pd
@@ -14,8 +12,6 @@ from tester_framework.sessions import parse_sessions
 
 SESSION = parse_sessions("ny=09:30-12:00")[0]
 BREAKOUT_TIME = pd.Timestamp("2025-01-02 14:40")
-# Base day: ORB 98.5-102.0, long breakout at 14:40 (close 103.0, low 102.5). That bar also completes
-# a bull FVG (bottom 100.5, top 102.5, extension 99.5), the newest one when the breakout is confirmed.
 STRATEGIES = [
     pytest.param(orb_candle, 102.25, id="orb_candle"),
     pytest.param(orb_fvg, 100.25, id="orb_fvg"),
@@ -41,8 +37,8 @@ def assert_single_long(signals, stop):
 @pytest.mark.parametrize(("module", "stop"), STRATEGIES)
 def test_close_equal_to_opening_range_is_not_a_breakout(module, stop):
     df = make_combined_day()
-    set_bar(df, 8, 100.0, 100.5, 98.5, 98.5)  # close == ORB low
-    set_bar(df, 9, 100.0, 102.0, 99.5, 102.0)  # close == ORB high
+    set_bar(df, 8, 100.0, 100.5, 98.5, 98.5)
+    set_bar(df, 9, 100.0, 102.0, 99.5, 102.0)
 
     assert_single_long(signals_for(module, df), stop)
 
@@ -50,7 +46,7 @@ def test_close_equal_to_opening_range_is_not_a_breakout(module, stop):
 @pytest.mark.parametrize(("module", "stop"), STRATEGIES)
 def test_first_breakout_of_the_day_wins(module, stop):
     df = make_combined_day()
-    set_bar(df, 15, 97.0, 97.5, 96.5, 97.0)  # later short breakout, with its own bear FVG and extension
+    set_bar(df, 15, 97.0, 97.5, 96.5, 97.0)
 
     assert_single_long(signals_for(module, df), stop)
 
@@ -59,7 +55,7 @@ def test_first_breakout_of_the_day_wins(module, stop):
 def test_fvgs_after_the_breakout_bar_are_ignored(module, stop):
     df = make_combined_day()
     set_bar(df, 11, 103.5, 104.0, 103.0, 103.8)
-    set_bar(df, 12, 104.8, 105.0, 104.5, 104.8)  # newer bull FVG (bottom 103.5, extension 103.0)
+    set_bar(df, 12, 104.8, 105.0, 104.5, 104.8)
     df = df.iloc[:13]
 
     assert_single_long(signals_for(module, df), stop)
@@ -67,7 +63,7 @@ def test_fvgs_after_the_breakout_bar_are_ignored(module, stop):
 
 @pytest.mark.parametrize(("module", "stop"), STRATEGIES)
 def test_breakout_at_session_window_end_produces_no_signal(module, stop):
-    df = make_combined_day()  # breakout bar starts at 09:40 New York
+    df = make_combined_day()
 
     assert signals_for(module, df, parse_sessions("ny=09:30-09:40")[0]).empty
     assert_single_long(signals_for(module, df, parse_sessions("ny=09:30-09:41")[0]), stop)
@@ -76,7 +72,7 @@ def test_breakout_at_session_window_end_produces_no_signal(module, stop):
 @pytest.mark.parametrize(("module", "stop"), STRATEGIES)
 def test_each_day_gets_its_own_opening_range(module, stop):
     day1 = make_combined_day()
-    day2 = make_combined_day() + 10.0  # day-1 ORB would flag the first day-2 bar as a long breakout
+    day2 = make_combined_day() + 10.0
     day2.index += pd.Timedelta(days=1)
 
     signals = signals_for(module, pd.concat([day1, day2]))

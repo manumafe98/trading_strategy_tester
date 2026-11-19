@@ -10,7 +10,6 @@ from tester_framework.data import resample_data
 
 
 BASE = 90.0
-# Pivot highs at bars 10, 31, 52 and a pivot low at bar 73; each is confirmed 10 bars later.
 EXTREMES = {10: 100.0, 31: 100.3, 52: 110.0, 73: 80.0}
 
 
@@ -35,14 +34,12 @@ def channels_at(result: pd.DataFrame, row: int) -> list[tuple[float, float, floa
 def test_channels_cluster_pivots_and_rank_by_strength():
     result = build_channels(pivot_bars(), min_width=0, max_width=0.4, width_unit="%", pip_size=0.1)
 
-    # 100 and 100.3 cluster (0.3 <= 0.4% of 100): 2 pivots * 20 + 2 touching bars.
     assert channels_at(result, 84) == [(100.3, 100.0, 42), (80.0, 80.0, 21), (110.0, 110.0, 21)]
 
 
 def test_channels_in_force_on_a_bar_come_from_the_previous_close():
     result = build_channels(pivot_bars(), min_width=0, max_width=0.4, width_unit="%", pip_size=0.1)
 
-    # The pivot low is confirmed on bar 83, so it first shows on bar 84.
     assert channels_at(result, 83) == [(100.3, 100.0, 42), (110.0, 110.0, 21)]
     assert channels_at(result, 0) == []
     assert math.isnan(result["reference_close"].iloc[0])
@@ -70,8 +67,6 @@ def test_maximum_width_splits_pivots_and_equal_strengths_keep_the_newer_pivot_fi
 
 
 def test_a_candidate_inside_an_accepted_channel_is_dropped():
-    # All three candidates score 42: [100.15, 100.3] twice and [100, 100.15]. The newest is accepted;
-    # the other two have a top or bottom inside it, the edge included.
     bars = pivot_bars(n=74, extremes={10: 100.0, 31: 100.15, 52: 100.3})
 
     result = build_channels(bars, min_width=0, max_width=0.2, width_unit="%", pip_size=0.1)
@@ -80,8 +75,6 @@ def test_a_candidate_inside_an_accepted_channel_is_dropped():
 
 
 def test_maximum_width_is_inclusive_and_measured_from_the_lower_price():
-    # 0.5 apart fits exactly 2 pips of 0.25. 0.401 is over 0.4% of 100 (the lower price) though under
-    # 0.4% of 100.401.
     pips = build_channels(pivot_bars(n=53, extremes={10: 100.0, 31: 100.5}), 0, 2, "pips", 0.25)
     percent = build_channels(pivot_bars(n=53, extremes={10: 100.0, 31: 100.401}), 0, 0.4, "%", 0.1)
 
@@ -92,12 +85,8 @@ def test_maximum_width_is_inclusive_and_measured_from_the_lower_price():
 @pytest.mark.parametrize(
     ("second_pivot", "expected"),
     [
-        # Rebuilt on bar 300: the 291-bar touch window still reaches the first pivot's own bar 10.
         (290, [(110.0, 110.0, 21), (100.0, 100.0, 21)]),
-        # Rebuilt on bar 310: the first pivot (confirmed on bar 20) is 290 bars old and kept, but bar 10
-        # is outside the touch window.
         (300, [(110.0, 110.0, 21), (100.0, 100.0, 20)]),
-        # Rebuilt on bar 311: the first pivot is 291 bars old and dropped.
         (301, [(110.0, 110.0, 21)]),
     ],
 )
@@ -113,7 +102,6 @@ def test_pivot_may_equal_a_bar_on_its_left_but_not_on_its_right():
     left_tie = pivot_bars(n=40, extremes={9: 100.0, 10: 100.0})
     right_tie = pivot_bars(n=40, extremes={10: 100.0, 11: 100.0})
 
-    # The left tie makes bar 10 the pivot (shown from bar 21); the right tie moves it to bar 11.
     left = build_channels(left_tie, 0, 0.4, "%", 0.1)
     right = build_channels(right_tie, 0, 0.4, "%", 0.1)
 
@@ -123,8 +111,6 @@ def test_pivot_may_equal_a_bar_on_its_left_but_not_on_its_right():
 
 
 def test_a_bar_of_the_current_high_timeframe_period_never_affects_its_channels():
-    # 15 one-minute bars per 15m bar. A pivot high at 15m bar 10 and a pivot low at 15m bar 12, confirmed
-    # by 15m bar 22, whose last minute touches the pivot high: that raises its strength from bar 23 only.
     extremes = {10: 100.0, 12: 80.0}
     prices = [extremes.get(i, BASE) for i in range(30) for _ in range(15)]
     minute_bars = make_bars(prices, freq="1min")

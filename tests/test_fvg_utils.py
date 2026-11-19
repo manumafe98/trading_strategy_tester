@@ -6,7 +6,6 @@ from strategy.utils.fvg import FVG, find_qualifying_fvg, track_fvgs_to_bar
 
 
 def make_day_df(bars: list[dict], start_minute: int = 570) -> pd.DataFrame:
-    """Build a 1m day DataFrame with _ny_minute column from OHLC tuples."""
     times = pd.date_range("2025-01-02 14:30", periods=len(bars), freq="1min")
     df = pd.DataFrame(bars, index=times)
     df["_ny_minute"] = [start_minute + i for i in range(len(bars))]

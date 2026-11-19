@@ -39,8 +39,6 @@ def session_params(params: dict | None, timeframe: str, strategy_name: str) -> t
 
 @dataclass(frozen=True)
 class Breakout:
-    """First close outside one day's opening range; `bar_index` indexes the bar inside `day_data`."""
-
     day_data: pd.DataFrame
     bar_index: int
     is_long: bool
@@ -74,7 +72,6 @@ class Breakout:
 
 
 def find_breakouts(df: pd.DataFrame, session: SessionSpec, orb_minutes: int, start_minute: int, end_minute: int) -> list[Breakout]:
-    """Per session day: in-window bars, opening range high/low, and the first close beyond it."""
     if df.empty:
         return []
     work = add_session_columns(df, session)
@@ -114,12 +111,10 @@ def signals_frame(rows: list[dict], columns: list[str]) -> pd.DataFrame:
 
 
 def bars_after(time, bars: int, trade: dict) -> pd.Timestamp:
-    """The time `bars` bars of the trade's low timeframe after `time`."""
     return pd.Timestamp(time) + bars * BAR_DURATIONS[trade["low_timeframe"]]
 
 
 def plot_opening_range(fig, trade: dict) -> None:
-    """Draw the ORB high/low lines from the session start to the signal bar."""
     start = pd.Timestamp(trade["plot_start_time"])
     end = pd.Timestamp(trade["signal_time"])
     for key, name, color in (("orb_high", "ORB high", "#26a69a"), ("orb_low", "ORB low", "#ef5350")):

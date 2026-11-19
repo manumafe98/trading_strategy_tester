@@ -10,8 +10,6 @@ import pytest
 from tester_framework.split import oos_cutoff, rank_variants, selection_summary, walk_forward_efficiency
 
 
-# 48 hourly UTC bars from Monday 2025-01-06 00:00. In New York with an 18:00 session start,
-# market sessions start at 23:00 UTC (bars 23 and 47); in UTC with 00:00 they start at bars 0 and 24.
 INDEX = pd.date_range("2025-01-06 00:00", periods=48, freq="h")
 
 
@@ -22,16 +20,13 @@ def new_york_cfg(test_asset_cfg):
 
 def test_oos_start_cuts_at_first_bar_of_first_market_session_starting_on_or_after_the_date(test_asset_cfg, new_york_cfg):
     assert oos_cutoff(INDEX, test_asset_cfg, oos_start="2025-01-07") == 24
-    # The 2025-01-06 New York market session opens at 18:00 local, 23:00 UTC.
     assert oos_cutoff(INDEX, new_york_cfg, oos_start="2025-01-06") == 23
     assert INDEX[oos_cutoff(INDEX, new_york_cfg, oos_start="2025-01-07")] == pd.Timestamp("2025-01-07 23:00")
 
 
 def test_oos_fraction_moves_forward_to_next_market_session_start_unless_already_on_one(test_asset_cfg, new_york_cfg):
-    # ceil(0.5 * 48) = bar 24: a market session start in UTC, mid-session in New York.
     assert oos_cutoff(INDEX, test_asset_cfg, oos_fraction=0.5) == 24
     assert oos_cutoff(INDEX, new_york_cfg, oos_fraction=0.5) == 47
-    # ceil(0.75 * 48) = bar 36, moved to the 23:00 UTC market session start.
     assert oos_cutoff(INDEX, new_york_cfg, oos_fraction=0.25) == 47
 
 
@@ -48,7 +43,6 @@ def test_cutoff_that_empties_a_period_is_rejected(test_asset_cfg, kwargs, messag
 
 
 def test_fraction_cutoff_past_the_last_market_session_start_is_rejected(new_york_cfg):
-    # ceil(0.87 * 46) = bar 41 of 46, inside the last market session, which started at bar 23.
     with pytest.raises(ValueError, match="out-of-sample period with no bars"):
         oos_cutoff(INDEX[:46], new_york_cfg, oos_fraction=0.13)
 
@@ -69,8 +63,6 @@ def test_invalid_split_arguments_are_rejected(test_asset_cfg, kwargs, message):
 
 
 def test_walk_forward_efficiency_matches_a_hand_calculation():
-    # In-sample: 100 -> 110 over 2 bars; out-of-sample: 110 -> 121 over 1 bar; 2 bars per year.
-    # IS annualized = 1.1 ** (2 / 2) - 1 = 10%; OOS annualized = 1.1 ** (2 / 1) - 1 = 21%; WFE = 210%.
     assert walk_forward_efficiency(np.array([100.0, 105.0, 110.0, 121.0]), 2, 2) == pytest.approx(210.0)
 
 
@@ -122,7 +114,6 @@ def test_rank_variants_uses_net_of_gross_net_pairs_and_keeps_table_order_on_ties
     ranked = rank_variants(table, "return", 5)
     assert list(ranked["RR"]) == ["2", "3", "1"]
     assert list(ranked["IS Rank"]) == [1, 2, 3]
-    # The OOS tie between RR 1 and RR 2 keeps the incoming table order: RR 1 came first.
     assert list(ranked.sort_values("OOS Rank")["RR"]) == ["1", "2", "3"]
     assert ranked["Selected"].all()
 
@@ -155,7 +146,6 @@ def test_rank_variants_rejects_unknown_metric_and_non_positive_top(kwargs, messa
 
 @pytest.mark.parametrize("cutoff", [0, 3, 4, -1])
 def test_walk_forward_efficiency_rejects_a_cutoff_outside_the_curve(cutoff):
-    # Four curve points are three bars, so the cutoff bar must be 1 or 2.
     with pytest.raises(ValueError, match="cutoff must be between 1 and 2"):
         walk_forward_efficiency(np.array([100.0, 105.0, 110.0, 121.0]), cutoff, 2)
 
@@ -163,11 +153,8 @@ def test_walk_forward_efficiency_rejects_a_cutoff_outside_the_curve(cutoff):
 @pytest.mark.parametrize(
     ("curve", "bars_per_year"),
     [
-        # Equity of zero at the curve start would divide by zero.
         ([0.0, 10.0, 20.0, 30.0], 2),
-        # Both ends negative: the ratio looks like +100% in sample.
         ([-100.0, -150.0, -200.0, 10.0], 2),
-        # Negative equity at the cutoff raised to an even power looks positive.
         ([100.0, 50.0, -200.0, 10.0], 4),
     ],
 )
@@ -176,8 +163,6 @@ def test_walk_forward_efficiency_is_blank_when_equity_at_the_start_or_cutoff_is_
 
 
 def _summary_variants(with_costs):
-    # Hand-built out-of-sample curves (gross, net) of three variants of one strategy and asset.
-    # RR 3 entered no out-of-sample trades; its OOS Return comes only from a spanning trade.
     curves = {
         "1": ([100, 110, 105], [100, 108, 99], 4),
         "2": ([200, 190, 196], [200, 188, 192], 2),
@@ -197,9 +182,7 @@ def _summary_variants(with_costs):
 @pytest.mark.parametrize(
     ("with_costs", "profitable", "equal_weight"),
     [
-        # Gross: rescaled ends 1.05, 0.98 and flat 1.00 average to 1.01; only RR 1 is above 0.
         (False, 1, 1.0),
-        # Net: rescaled ends 0.99, 0.96 and flat 1.00 average to 0.98333; none is above 0.
         (True, 0, -5 / 3),
     ],
 )

@@ -80,7 +80,6 @@ def test_target_hit_exits_at_target_price(test_asset_cfg, side, stop, move_bar, 
     data = _bars([100.0, 100.0, 100.0, 100.0], move_bar)
     metrics, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg, risk_reward_ratio=2)
     trade = trades[0]
-    # 1% of 10000 over R = 1 point sizes 100 contracts; 2R banks 200.
     assert (trade["exit_reason"], trade["target"], trade["exit"], trade["qty"]) == (ExitReason.TARGET, target, target, 100.0)
     assert trade["gross_pnl"] == 200.0
     assert metrics["Return"] == 2.0
@@ -110,7 +109,6 @@ def test_stop_trade(base_data, hourly_index, test_asset_cfg):
 
 @pytest.mark.parametrize(("side", "stop"), [("long", 99.0), ("short", 101.0)])
 def test_equal_distance_tie_reaches_stop_before_target(test_asset_cfg, side, stop):
-    # High and low are both 1 point from the open: the engine assumes the adverse extreme comes first.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.0, 100.0])
     _, trades = _run(data, [{"time": data.index[0], "side": side, "stop": stop}], test_asset_cfg)
     assert (trades[0]["exit_reason"], trades[0]["exit"]) == (ExitReason.STOP, stop)
@@ -151,8 +149,6 @@ def test_trailing_stop(base_data, hourly_index, test_asset_cfg):
 
 
 def test_trailing_stop_updates_at_bar_open(test_asset_cfg):
-    # Entry 100, stop 99, 3R target 103 never reached. Bar 2 opens at 101.5 (1.5R), so the trail moves to
-    # 101.0 before the low-first path dips to 100.8. Without the open update the stop stays at 99 until 102.5.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], [101.5, 102.5, 100.8, 102.0])
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
     _, trailing = _run(data, signals, test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
@@ -162,8 +158,6 @@ def test_trailing_stop_updates_at_bar_open(test_asset_cfg):
 
 
 def test_short_trailing_stop_follows_low_and_never_loosens(test_asset_cfg):
-    # Short entry 100, stop 101. Bar 1 reaches 98.8 (1.2R), so the trail ceils to 99.3. Bar 2's low of 98.9
-    # would put it at 99.45; it must stay at 99.3, where the rally to 99.5 exits.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.2, 98.8, 99.0], [99.0, 99.5, 98.9, 99.4])
     _, trades = _run(data, [{"time": data.index[0], "side": "short", "stop": 101.0}], test_asset_cfg, risk_reward_ratio=3, exit_mode="trailing")
     trade = trades[0]
@@ -247,7 +241,6 @@ def test_partial_stop_aggregation(test_asset_cfg):
 
 
 def test_costs_keep_raw_execution_and_size_from_net_equity(cost_asset_cfg):
-    # Costs per side: half spread 0.1 + slippage 0.1 on price, commission 0.1 per contract.
     data = _bars(
         [100.0, 100.0, 100.0, 100.0], [100.0, 101.1, 99.5, 100.0], [100.0, 100.0, 100.0, 100.0],
         [100.0, 100.0, 100.0, 100.0], [100.0, 101.1, 99.5, 100.0], [100.0, 100.0, 100.0, 100.0],
@@ -260,7 +253,6 @@ def test_costs_keep_raw_execution_and_size_from_net_equity(cost_asset_cfg):
     net_metrics, net_trades = _run(data, signals, cost_asset_cfg, with_costs=True)
 
     assert [(t["raw_exit"], t["realized_r"], t["qty"]) for t in gross_trades] == [(101.0, 1.0, 100.0), (101.0, 1.0, 101.0)]
-    # The second trade sizes from net equity 10040, not gross 10100.
     assert [(t["raw_exit"], t["realized_r"], t["qty"]) for t in net_trades] == [(101.0, 1.0, 100.0), (101.0, 1.0, 100.0)]
     assert [t["gross_pnl"] for t in net_trades] == [100.0, 100.0]
     assert [t["net_pnl"] for t in net_trades] == pytest.approx([40.0, 40.0])
@@ -282,11 +274,9 @@ def test_cost_amounts_are_half_spread_plus_slippage_per_side_and_commission_both
     metrics, trades = _run(data, [{"time": data.index[0], "side": side, "entry": 100.0, "stop": stop}], cost_asset_cfg, with_costs=True)
     trade = trades[0]
     assert (trade["net_entry"], trade["net_exit"]) == pytest.approx((net_entry, net_exit))
-    # 100 contracts: gross 1 point each = 100; net 0.6 point each = 60, minus 0.1 x 100 x 2 commission = 40.
     assert trade["gross_pnl"] == 100.0
     assert trade["net_pnl"] == pytest.approx(40.0)
     assert trade["net_realized_r"] == pytest.approx(0.4)
-    # Bar 1 closes flat with the trade open: net mark-to-market is -0.4 x 100 - 20 commission = 9940.
     assert (metrics["Gross"]["Return"], metrics["Gross"]["Max DD"]) == (1.0, 0.0)
     assert (metrics["Net"]["Return"], metrics["Net"]["Max DD"]) == (0.4, 0.6)
 
@@ -333,7 +323,6 @@ def test_partial_cost_accounting(test_asset_cfg, cost_asset_cfg):
         asset_cfg=cost_asset_cfg,
     )
     assert net_partial_trades[0]["realized_r"] == gross_partial_trades[0]["realized_r"]
-    # Each fill nets (target - 0.2) - 100.2 per contract, minus 0.2 commission: 33 x 0.4 + 33 x 1.4 + 34 x 2.4.
     assert [fill["net_pnl"] for fill in net_partial_trades[0]["exits"]] == pytest.approx([13.2, 46.2, 81.6])
     assert net_partial_trades[0]["gross_pnl"] == 201.0
     assert net_partial_trades[0]["net_pnl"] == pytest.approx(141.0)
@@ -362,12 +351,10 @@ def test_empty_signals(base_data, test_asset_cfg):
 
 
 def test_trade_open_at_data_end_exits_at_last_close_with_costs(cost_asset_cfg):
-    # Entry 100, stop 99, 1R target 101 never reached; the data ends on a 100.5 close.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 100.0, 100.5])
     metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], cost_asset_cfg, with_costs=True)
 
     trade = trades[0]
-    # 100 contracts; 0.2 points per side (half spread 0.1 + slippage 0.1); commission 0.1 x 100 x 2.
     assert (trade["exit_reason"], trade["exit_time"], trade["exit"]) == (ExitReason.END, data.index[-1], 100.5)
     assert trade["net_exit"] == pytest.approx(100.3)
     assert trade["gross_pnl"] == pytest.approx(50.0)
@@ -376,7 +363,6 @@ def test_trade_open_at_data_end_exits_at_last_close_with_costs(cost_asset_cfg):
 
 
 def test_close_entry_on_last_bar_is_discarded(test_asset_cfg):
-    # A close entry on the last bar has no bar left to trade on.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0])
     metrics, trades = _run(data, [{"time": data.index[-1], "side": "long", "stop": 99.0, "entry": 100.0}], test_asset_cfg)
 
@@ -478,7 +464,6 @@ def test_gap_through_partial_targets_fills_each_crossed_target(test_asset_cfg, t
 
 
 def test_partial_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
-    # 2R partial: 50 at the 101 1R target, 50 at the 102 final target.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.5, 100.5], [100.5, 102.1, 100.5, 102.0])
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
 
@@ -544,7 +529,6 @@ def test_partial_peak_and_giveback_are_position_weighted(test_asset_cfg):
 
 
 def test_partial_remainder_open_at_data_end_exits_at_last_close(test_asset_cfg):
-    # Partial 2R from 100: half fills at the 101 1R target; the other half is still open when the data ends.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.0, 99.5, 100.5], [100.5, 101.0, 100.0, 100.5])
     _, trades = _run(
         data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg,
@@ -628,7 +612,6 @@ def test_cost_outcomes_are_paired(cost_asset_cfg):
         strategy="test", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed", operation="all",
         risk_pct=1, capital=10000, with_costs=True, asset_cfg=cost_asset_cfg,
     )
-    # 1000 contracts on a 0.1 R: net (99.9 - 100.2) x 1000 - 0.1 x 1000 x 2 commission = -500, or -5R.
     assert trades[0]["net_pnl"] == pytest.approx(-500.0)
     assert trades[0]["net_realized_r"] == pytest.approx(-5.0)
     row = add_trade_counts(metrics, trades, "all", with_costs=True)
@@ -656,9 +639,6 @@ def test_nonpositive_equity_has_no_sharpe():
 
 
 def test_curve_metrics_worked_example():
-    # Market session closes 110, 99, 121 from 100 (105 is inside the first market session):
-    # returns +10%, -10%, +22.2%: mean 0.0741, sample std 0.1627, sqrt(4) x 0.455 = 0.91.
-    # Peak 110 -> trough 99 is a 10% drawdown; 100 -> 121 is a 21% return.
     assert _curve_metrics(np.array([100.0, 105.0, 110.0, 99.0, 121.0]), np.array([2, 3, 4]), 4) == {
         "Return": 21.0,
         "Max DD": 10.0,
@@ -698,7 +678,6 @@ def test_result_columns_append_split_columns_only_in_split_mode():
 
 
 def _long_then_short():
-    # Long from bar 1 open 100 hits 101 on bar 1; short from bar 3 open 101 hits 100 on bar 3.
     data = _bars(
         [100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 99.8, 101.0], [101.0, 101.0, 101.0, 101.0], [101.0, 101.2, 99.5, 100.0],
     )
@@ -736,7 +715,6 @@ def test_stop_on_wrong_side_of_entry_is_discarded(test_asset_cfg, side, stop):
 
 
 def test_quantity_below_minimum_is_discarded(test_asset_cfg):
-    # 1% of 10000 over R = 1 point sizes 100 contracts, below a 101-contract minimum.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 99.5, 101.0])
     signals = [{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.0}]
     at_min, traded = _run(data, signals, replace(test_asset_cfg, min_qty=100.0))
@@ -746,7 +724,6 @@ def test_quantity_below_minimum_is_discarded(test_asset_cfg):
 
 
 def test_signal_while_trade_is_open_is_discarded(test_asset_cfg):
-    # The first trade enters bar 1 and exits on bar 2; the second signal would enter on bar 2.
     data = _bars(
         [100.0, 100.0, 100.0, 100.0], [100.0, 100.5, 99.5, 100.0], [100.0, 101.5, 99.5, 101.0], [101.0, 102.5, 100.5, 102.0],
     )
@@ -770,9 +747,7 @@ def test_close_entry_time_not_on_a_bar_is_discarded(test_asset_cfg):
 @pytest.mark.parametrize(
     ("side", "stop", "move_bar", "rounded_stop", "rounded_target"),
     [
-        # Long: stop 99.1 floors to 99.0 (R = 1.0); target 100 + 1.1 = 101.1 ceils to 101.25.
         ("long", 99.1, [100.0, 101.5, 99.5, 101.0], 99.0, 101.25),
-        # Short: stop 100.9 ceils to 101.0 (R = 1.0); target 100 - 1.1 = 98.9 floors to 98.75.
         ("short", 100.9, [100.0, 100.5, 98.5, 99.0], 101.0, 98.75),
     ],
 )
@@ -786,7 +761,6 @@ def test_off_tick_stop_and_target_round_away_from_entry(test_asset_cfg, side, st
 
 
 def test_risk_sizing_uses_point_value_and_floors_to_qty_step(test_asset_cfg):
-    # 1% of 10000 over R = 3 points x 5 per point is 6.67 contracts, floored to the 0.1 step: 6.6.
     cfg = replace(test_asset_cfg, point_value=5.0, qty_step=0.1, min_qty=0.1)
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 103.5, 99.5, 103.0])
     metrics, trades = _run(data, [{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 97.0}], cfg)
@@ -944,7 +918,6 @@ def test_open_trade_drawdown_is_marked_to_market(test_asset_cfg):
         operation="all", risk_pct=1, capital=10000, with_costs=False, asset_cfg=test_asset_cfg,
     )
 
-    # 100 contracts close bar 1 at 99.5 (equity 9950) before the 101 target fills on bar 2.
     assert (trades[0]["exit_i"], trades[0]["exit_reason"]) == (2, ExitReason.TARGET)
     assert metrics["Max DD"] == 0.5
     assert metrics["Return"] == 1
@@ -970,7 +943,6 @@ def min_risk_data():
 
 
 def test_one_tick_stop_on_flat_breakout_bar_through_halt_gap_is_discarded(test_asset_cfg):
-    # 2020-03-16 MNQ: flat breakout bar, 1-tick stop, halted bars missing, reopen gapping through the 2R target.
     idx = pd.DatetimeIndex(["2020-03-16 13:30", "2020-03-16 13:45", "2020-03-16 13:46"])
     data = pd.DataFrame(
         {
@@ -997,7 +969,6 @@ def test_signal_exactly_at_min_risk_is_traded(test_asset_cfg):
 
 
 def test_min_risk_uses_tick_rounded_stop(test_asset_cfg):
-    # A long stop floors to the tick: 99.1 -> 99.0 is 4 ticks (traded), 99.3 -> 99.25 is 3 ticks (discarded).
     data = min_risk_data()
     cfg = mnq_like_cfg(test_asset_cfg)
     at_min, _ = min_risk_run(data, pd.DataFrame([{"time": data.index[0], "side": "long", "entry": 100.0, "stop": 99.1}]), cfg)
@@ -1008,12 +979,10 @@ def test_min_risk_uses_tick_rounded_stop(test_asset_cfg):
 
 
 def _timed_bars(bars):
-    """Bars keyed by UTC start time: {"2025-01-02 13:00": (open, high, low, close)}."""
     idx = pd.DatetimeIndex([pd.Timestamp(time) for time in bars])
     return pd.DataFrame(list(bars.values()), index=idx, columns=["open", "high", "low", "close"], dtype=float)
 
 
-# ny_bank=08:00-11:00 is 13:00-16:00 UTC in January (EST) and 12:00-15:00 UTC in July (EDT).
 NY_MORNING = parse_sessions("ny_bank=08:00-11:00")[0]
 FLAT = (100.0, 100.0, 100.0, 100.0)
 
@@ -1042,9 +1011,7 @@ def test_session_exit_closes_open_trade_at_last_in_window_bar_close(test_asset_c
 @pytest.mark.parametrize(
     ("exit_mode", "exits"),
     [
-        # Partial: half filled at the 1R target, the remaining half closes at the window's last close.
         ("partial", [(ExitReason.TARGET, 50.0, 101.0), (ExitReason.SESSION, 50.0, 100.8)]),
-        # Trailing: the 1.2R high trails the stop to 100.7; the close above it exits the whole trade.
         ("trailing", [(ExitReason.SESSION, 100.0, 100.8)]),
     ],
 )
@@ -1066,7 +1033,6 @@ def test_session_exit_closes_remaining_position_for_managed_exit_modes(test_asse
 
 
 def test_session_exit_uses_last_bar_present_when_window_end_bars_are_missing(test_asset_cfg):
-    # The 15:00 UTC bar is missing; the next bar is the next day's window, so 14:00 is the last in-window bar.
     data = _timed_bars(
         {
             "2025-01-02 13:00": FLAT,
@@ -1082,7 +1048,6 @@ def test_session_exit_uses_last_bar_present_when_window_end_bars_are_missing(tes
 
 
 def test_session_exit_window_end_follows_dst(test_asset_cfg):
-    # In July the window is 12:00-15:00 UTC, so 14:00 is its last bar and 15:00 (11:00 EDT) is outside.
     data = _timed_bars(
         {
             "2025-07-02 12:00": FLAT,
@@ -1107,7 +1072,6 @@ def test_session_exit_applies_costs_like_any_exit(cost_asset_cfg):
     )
 
     trade = trades[0]
-    # 100 contracts; 0.2 points per side (half spread 0.1 + slippage 0.1); commission 0.1 x 100 x 2.
     assert trade["exit_reason"] == ExitReason.SESSION
     assert trade["net_exit"] == pytest.approx(100.3)
     assert trade["gross_pnl"] == pytest.approx(50.0)
@@ -1117,9 +1081,7 @@ def test_session_exit_applies_costs_like_any_exit(cost_asset_cfg):
 @pytest.mark.parametrize(
     ("signal", "reason"),
     [
-        # A next-open entry would fill on 16:00 UTC, the first bar after the window end.
         ({"time": pd.Timestamp("2025-01-02 15:00"), "side": "long", "stop": 99.0}, "entry outside window"),
-        # A close entry on the window's last bar would exit at its own fill price.
         ({"time": pd.Timestamp("2025-01-02 15:00"), "side": "long", "stop": 99.0, "entry": 100.0}, "entry at window close"),
     ],
 )
@@ -1143,8 +1105,6 @@ def test_session_exit_closes_trade_at_data_end_inside_window(test_asset_cfg):
 
 
 def _split_run(cfg, **overrides):
-    # Trade 1 enters and exits in sample, trade 2 enters in sample and exits on the cutoff bar 4,
-    # trade 3 enters and exits out of sample.
     data = _bars(
         [100.0, 100.0, 100.0, 100.0],
         [100.0, 102.0, 100.0, 101.0],
@@ -1162,11 +1122,9 @@ def _split_run(cfg, **overrides):
 def test_split_metrics_are_the_curve_metrics_of_each_slice_gross_and_net(cost_asset_cfg):
     metrics, trades = _split_run(cost_asset_cfg, with_costs=True, oos_cutoff=4)
 
-    # Sizing follows net equity: 100 contracts each; gross +100, +100, -100; net +40, +40, -160.
     gross = [10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100]
     net = [10000, 10000, 10040, 10040, 9930, 10080, 10080, 9920, 9920]
     assert len(trades) == 3
-    # All bars are one market session, so only the Daily Sharpe is blank; split Sharpe has its own test.
     def curve_metrics(curve):
         return {**_curve_metrics(np.array(curve, dtype=float), np.array([], dtype=int), 252), "Sharpe Ratio": None}
 
@@ -1186,18 +1144,14 @@ def test_split_metrics_carry_walk_forward_efficiency_gross_and_net(cost_asset_cf
     gross = np.array([10000, 10000, 10100, 10100, 10050, 10200, 10200, 10100, 10100], dtype=float)
     gross_wfe, net_wfe = metrics["WFE"]
     assert gross_wfe == walk_forward_efficiency(gross, 4, 1716) > 0
-    # Net loses 0.7% in sample, so its WFE is blank.
     assert math.isnan(net_wfe)
     without_costs, _ = _split_run(cost_asset_cfg, oos_cutoff=4)
-    # Without costs WFE is one Gross value, not a pair.
     assert isinstance(without_costs["WFE"], float) and without_costs["WFE"] > 0
 
 
 def test_out_of_sample_curve_starts_from_equity_at_last_in_sample_close(test_asset_cfg):
     metrics, _ = _split_run(test_asset_cfg, oos_cutoff=4)
 
-    # Bar 3 closes at 10049.5 (10100 cash, trade 2's 101 contracts marked at -50.5);
-    # bar 7 ends at 10099 after +101 and -102.
     assert metrics["OOS Return"] == round((10099 / 10049.5 - 1) * 100, 2) == 0.49
     assert metrics["OOS Max DD"] == round((1 - 10099 / 10201) * 100, 2)
 
@@ -1232,13 +1186,11 @@ def test_backtest_rejects_invalid_cutoffs(test_asset_cfg, overrides, message):
 
 
 def _contract_bars(bars):
-    """Bars keyed by UTC start time: {"2025-01-02 13:00": (open, high, low, close, contract)}."""
     idx = pd.DatetimeIndex([pd.Timestamp(time) for time in bars])
     data = pd.DataFrame(list(bars.values()), index=idx, columns=["open", "high", "low", "close", "contract"])
     return data.astype({column: float for column in ("open", "high", "low", "close")})
 
 
-# FUTH5 trades 50 points above FUTZ4; the roll is the 22:00 bar, after the 21:00-22:00 break.
 ROLL_BARS = {
     "2025-01-02 17:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
     "2025-01-02 18:00": (100.0, 100.5, 100.0, 100.5, "FUTZ4"),
@@ -1254,7 +1206,6 @@ def test_roll_exit_closes_open_trade_at_last_bar_before_roll(cost_asset_cfg):
     (trade,) = trades
     assert trade["exit_reason"] == ExitReason.ROLL
     assert trade["exit_time"] == pd.Timestamp("2025-01-02 19:00")
-    # 100 contracts entered at 100 and closed at 100.5; 0.2 points per side and commission 0.1 x 100 x 2.
     assert trade["exit"] == 100.5
     assert trade["gross_pnl"] == pytest.approx(50.0)
     assert trade["net_pnl"] == pytest.approx(-10.0)
@@ -1264,14 +1215,12 @@ def test_data_without_contract_column_has_no_roll_exit(test_asset_cfg):
     data = _contract_bars(ROLL_BARS).drop(columns="contract")
     _, trades = _run(data, [{"time": data.index[0], "side": "long", "stop": 99.0}], test_asset_cfg)
 
-    # The contract gap reaches the trade as a gap through the 101 target, which fills at the target.
     (trade,) = trades
     assert (trade["exit_reason"], trade["exit"]) == (ExitReason.TARGET, 101.0)
 
 
 @pytest.mark.parametrize(("fill", "discarded"), [("20:00", 1), ("19:59", 0)])
 def test_signal_filling_in_last_60_minutes_before_roll_is_discarded(test_asset_cfg, fill, discarded):
-    # 1m bars of FUTZ4 end with the 20:59 bar (closing 21:00); the market reopens on FUTH5 at 22:00.
     bars = {str(time): (100.0, 100.0, 100.0, 100.0, "FUTZ4") for time in pd.date_range("2025-01-02 19:57", "2025-01-02 20:59", freq="1min")}
     bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
     data = _contract_bars(bars)
@@ -1283,10 +1232,8 @@ def test_signal_filling_in_last_60_minutes_before_roll_is_discarded(test_asset_c
     assert [trade["exit_reason"] for trade in trades] == [ExitReason.ROLL] * (1 - discarded)
 
 
-
 @pytest.mark.parametrize(("signal_bar", "discarded"), [("18:00", 0), ("19:00", 1)])
 def test_close_entry_roll_block_measures_from_the_fill_at_the_bar_close(test_asset_cfg, signal_bar, discarded):
-    # 1h FUTZ4 bars end with the 20:00 bar; a close entry on the 19:00 bar fills at 20:00, like a next-open entry.
     bars = {f"2025-01-02 {hour}:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4") for hour in (17, 18, 19, 20)}
     bars["2025-01-02 22:00"] = (150.0, 150.0, 150.0, 150.0, "FUTH5")
     data = _contract_bars(bars)
@@ -1300,7 +1247,6 @@ def test_close_entry_roll_block_measures_from_the_fill_at_the_bar_close(test_ass
 
 @pytest.mark.parametrize(("signal_time", "stop", "discarded"), [("12:00", 99.0, 1), ("22:00", 149.0, 0)])
 def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, signal_time, stop, discarded):
-    # The last FUTZ4 bar starts 6 hours after the previous one, so the 60-minute block alone does not reach its signal.
     data = _contract_bars(
         {
             "2025-01-02 06:00": (100.0, 100.0, 100.0, 100.0, "FUTZ4"),
@@ -1313,7 +1259,6 @@ def test_signal_before_roll_never_fills_on_or_after_roll_bar(test_asset_cfg, sig
 
     metrics, trades = _run(data, [signal], test_asset_cfg)
 
-    # A signal on the last FUTZ4 bar carries a FUTZ4 stop; one on the roll bar fills on FUTH5 and trades.
     assert metrics["Discarded"] == discarded
     assert [trade["exit_reason"] for trade in trades] == [ExitReason.TARGET] * (1 - discarded)
 
@@ -1371,10 +1316,10 @@ def test_tick_through_target_fills_at_the_target_price(test_asset_cfg, side, sto
 @pytest.mark.parametrize(
     ("side", "stop", "both_bar"),
     [
-        ("long", 99.0, [100.8, 101.5, 98.5, 100.0]),  # open nearer the high: the path reaches the target first
-        ("long", 99.0, [99.2, 101.5, 98.5, 100.0]),  # open nearer the low
-        ("short", 101.0, [99.2, 101.5, 98.5, 100.0]),  # open nearer the low: the path reaches the target first
-        ("short", 101.0, [100.8, 101.5, 98.5, 100.0]),  # open nearer the high
+        ("long", 99.0, [100.8, 101.5, 98.5, 100.0]),
+        ("long", 99.0, [99.2, 101.5, 98.5, 100.0]),
+        ("short", 101.0, [99.2, 101.5, 98.5, 100.0]),
+        ("short", 101.0, [100.8, 101.5, 98.5, 100.0]),
     ],
 )
 def test_stop_first_exits_at_the_stop_when_stop_and_target_share_a_bar(test_asset_cfg, side, stop, both_bar):
@@ -1389,9 +1334,7 @@ def test_stop_first_exits_at_the_stop_when_stop_and_target_share_a_bar(test_asse
 @pytest.mark.parametrize(
     ("exit_mode", "bar", "path_exits", "stop_first_exits"),
     [
-        # Partial 2R: 50 at the 101 1R target, 50 at 102; the bar reaches 101.5 then 98.5.
         ("partial", [100.8, 101.5, 98.5, 100.0], [(ExitReason.TARGET, 101.0), (ExitReason.STOP, 99.0)], [(ExitReason.STOP, 99.0)]),
-        # Trailing 2R: the open trails the stop to 101.4; the bar reaches the 102 target then 100.8.
         ("trailing", [101.9, 102.5, 100.8, 101.0], [(ExitReason.TARGET, 102.0)], [(ExitReason.STOP, 101.4)]),
     ],
 )
@@ -1407,7 +1350,6 @@ def test_managed_exit_modes_follow_the_intrabar_rule(test_asset_cfg, exit_mode, 
 
 
 def test_trailing_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
-    # Trailing 2R: the 102 target is touched; the trailing stop at 101.5 stays below the bar.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 102.0, 100.0, 101.8])
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
 
@@ -1419,7 +1361,6 @@ def test_trailing_target_touched_exactly_fills_only_on_touch(test_asset_cfg):
 
 
 def test_stop_first_leaves_a_bar_that_cannot_reach_the_target_to_the_path(test_asset_cfg):
-    # Trailing 3R (target 103): the path reaches 101.6, trails the stop to 101.1, then falls through it.
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0], [100.2, 101.6, 98.5, 99.0])
     signals = [{"time": data.index[0], "side": "long", "stop": 99.0}]
 
@@ -1431,9 +1372,7 @@ def test_stop_first_leaves_a_bar_that_cannot_reach_the_target_to_the_path(test_a
 @pytest.mark.parametrize(
     ("side", "stop", "flat", "through_bar", "target"),
     [
-        # Entry 1.0, R 0.1: 1.1 + 0.1 is 1.2000000000000002 in floats, and the trigger must still be 1.2.
         ("long", 0.9, 1.0, [1.0, 1.2, 1.0, 1.1], 1.1),
-        # Entry 0.4, R 0.1: 0.3 - 0.1 is 0.19999999999999998 in floats, and the trigger must still be 0.2.
         ("short", 0.5, 0.4, [0.4, 0.4, 0.2, 0.3], 0.3),
     ],
 )
@@ -1459,8 +1398,6 @@ def test_backtest_rejects_unknown_fill_rules(base_data, test_asset_cfg):
         _run(base_data, signals, test_asset_cfg, intrabar="low_first")
 
 
-# Three UTC market sessions: day 1 has no trade, a trade enters and exits at its 1R target on day 2's first bar,
-# a wider-stop trade enters and exits at its 1R target on day 3's first bar.
 DAILY_SHARPE_BARS = {
     "2025-01-01 22:00": FLAT,
     "2025-01-01 23:00": FLAT,
@@ -1484,8 +1421,6 @@ def test_sharpe_is_daily_over_market_sessions_counting_sessions_without_trades(t
     metrics, trades = _daily_sharpe_run(test_asset_cfg)
 
     assert [trade["gross_pnl"] for trade in trades] == [100.0, 100.0]
-    # Market session closes 10000, 10100, 10200 from 10000: returns 0, 1%, 0.99%.
-    # mean 0.00663, sample std 0.00575, so Sharpe = sqrt(252) x 1.1547 = 18.33.
     assert metrics["Sharpe Ratio"] == 18.33
 
 
@@ -1493,15 +1428,12 @@ def test_daily_sharpe_uses_the_net_curve_for_the_net_column(cost_asset_cfg):
     metrics, trades = _daily_sharpe_run(cost_asset_cfg, with_costs=True)
 
     first, second = (trade["net_pnl"] for trade in trades)
-    # Market session closes 10000, 10000 + first, 10000 + first + second from 10000: returns 0, 0.4%, 0.697%.
-    # mean 0.00366, sample std 0.00350, so Sharpe = sqrt(252) x 1.0454 = 16.59.
     assert (first, second) == pytest.approx((40.0, 70.0))
     assert metrics["Net"]["Sharpe Ratio"] == 16.59
     assert metrics["Gross"]["Sharpe Ratio"] != metrics["Net"]["Sharpe Ratio"]
 
 
 def test_same_trades_on_1h_and_5m_data_give_the_same_sharpe(cost_asset_cfg):
-    # Each hourly bar becomes twelve 5m bars: the first carries its range, the rest stay at its close.
     hourly = _timed_bars(DAILY_SHARPE_BARS)
     five_minute = pd.DataFrame(
         [row if step == 0 else [row[3]] * 4 for row in hourly.to_numpy() for step in range(12)],
@@ -1524,10 +1456,7 @@ def test_split_daily_sharpe_uses_each_period_s_own_market_sessions(test_asset_cf
 
     metrics, _ = _daily_sharpe_run(test_asset_cfg, data, oos_cutoff=4)
 
-    # In sample, market session closes 10000, 10100 from 10000: returns 0, 1%, so Sharpe = sqrt(252) x 0.7071 = 11.22.
     assert metrics["Sharpe Ratio"] == 11.22
-    # Out of sample, market session closes 10200, 10200, 10200 from 10100: returns 0.99%, 0, 0,
-    # so Sharpe = sqrt(252) x 0.5774 = 9.17.
     assert metrics["OOS Sharpe"] == 9.17
 
 
@@ -1545,7 +1474,6 @@ def _quarter_hour_cfg(cfg):
     [("2025-01-01 00:45", False), ("2025-01-01 01:00", True), (None, True)],
 )
 def test_setup_before_first_high_timeframe_bar_after_exit_is_discarded(test_asset_cfg, setup_time, accepted):
-    # The first trade enters at 00:15 and hits its target in that bar; the next 1h bar opens at 01:00.
     flat = [100.0, 100.0, 100.0, 100.0]
     data = _quarter_hour_bars(flat, [100.0, 101.5, 100.0, 101.0], flat, flat, flat, flat, flat)
     signals = [
@@ -1558,7 +1486,6 @@ def test_setup_before_first_high_timeframe_bar_after_exit_is_discarded(test_asse
 
 
 def test_setup_time_rule_uses_each_risk_reward_ratio_s_own_exit(test_asset_cfg):
-    # RR 1 exits at 00:15 (fresh from 01:00); RR 3 exits at 01:00 (fresh from 02:00).
     data = _quarter_hour_bars(
         [100.0, 100.0, 100.0, 100.0], [100.0, 101.5, 100.0, 101.0], [101.0, 101.0, 100.0, 101.0],
         [101.0, 101.0, 100.0, 101.0], [101.0, 103.5, 101.0, 103.0], [103.0, 103.0, 103.0, 103.0],
@@ -1578,10 +1505,8 @@ def test_setup_time_rule_uses_each_risk_reward_ratio_s_own_exit(test_asset_cfg):
 @pytest.mark.parametrize(
     ("target_bar", "setup_time", "accepted"),
     [
-        # Exit at 01:00 UTC, inside the market session that opened at 18:00 New York (23:00 UTC) on Dec 31.
         (1, "2025-01-01 22:00", False),
-        (1, "2025-01-01 23:00", True),  # the next market session opens before midnight UTC
-        # Exit at 23:00 UTC, the first bar of the Jan 1 market session: midnight UTC is not a daily bar open.
+        (1, "2025-01-01 23:00", True),
         (23, "2025-01-02 01:00", False),
         (23, "2025-01-02 23:00", True),
     ],

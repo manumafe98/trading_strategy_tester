@@ -1,17 +1,3 @@
-"""CHoCH + support/resistance channels, ported from `pine_scripts_examples/choch_sr_mtf_strategy.pine`.
-
-A setup is a touch on a support/resistance channel on the high timeframe followed by the first CHoCH the
-opposite way on the low timeframe: a support touch then a bullish CHoCH is a long, a resistance touch then
-a bearish CHoCH a short.
-
-The strategy ignores positions: it never clears touches or waits after its own signals. Each signal carries
-`setup_time`, and the engine's setup-time rule discards retests that
-are not in a new high-timeframe bar after the previous trade's exit.
-
-A futures roll (a change in the `contract` column) clears pivots, channels, pending touches and swings;
-each contract's bars are processed on their own. Data without a `contract` column never resets.
-"""
-
 from __future__ import annotations
 
 import math
@@ -127,13 +113,6 @@ def parse_touch_buckets(text: str) -> list[tuple[float, float, str]]:
 
 
 class Touch:
-    """A pending touch: the channel it follows, the role it was touched with and the bar it was first seen on.
-
-    Contact is interrupted on a bar whose developing high-timeframe range does not overlap the channel, which
-    happens when a high-timeframe bar opens clear of it; the next contact starts a new run.
-    """
-
-    # A plain class: the strategy loader runs this module outside sys.modules, which dataclasses need.
     def __init__(self, top: float, bottom: float, role: int, bar: int):
         self.top, self.bottom, self.role = top, bottom, role
         self.first_bar = self.contact_start = self.latest_retest_bar = bar
@@ -155,7 +134,6 @@ class Touch:
 
 
 def is_channel(top: float, bottom: float) -> bool:
-    """Whether a channel slot holds a channel: unused slots are NaN, and the Pine leaves 0 for none."""
     return not (math.isnan(top) or math.isnan(bottom) or top == 0 or bottom == 0)
 
 
@@ -166,15 +144,12 @@ def channel_role(top: float, bottom: float, reference_close: float) -> int:
 
 
 def match_distance(touch: Touch, top: float, bottom: float, tick_size: float) -> float:
-    """The distance between the touch's and the channel's midpoints, or inf when it exceeds half their summed
-    widths plus a tick."""
     allowed = ((touch.top - touch.bottom) + (top - bottom)) / 2 + tick_size
     distance = abs((top + bottom) / 2 - touch.midpoint)
     return distance if distance <= allowed else math.inf
 
 
 def nearest_channel(touch: Touch, channels: list[tuple[float, float]], tick_size: float) -> tuple[float, float] | None:
-    """The matching channel whose midpoint is closest to the touch's."""
     best, best_distance = None, math.inf
     for top, bottom in channels:
         distance = match_distance(touch, top, bottom, tick_size)
@@ -197,20 +172,17 @@ def generate_signals(df, asset, timeframe, params):
         raise ValueError("choch_sr requires a positive tick_size strategy parameter")
     if timeframe not in LOCAL_RESAMPLE_RULES or timeframe == "1d":
         raise ValueError(f"choch_sr supports intraday high timeframes only, got {timeframe}")
-    # A clock-aligned resample; a 1m high timeframe resamples the 1m bars to themselves.
     rule = LOCAL_RESAMPLE_RULES[timeframe] or "1min"
     if df.empty:
         return pd.DataFrame(columns=OUTPUT_COLUMNS)
 
     rows = []
-    # A roll clears pivots, channels, touches and swings: each contract's bars are processed on their own.
     for segment in contract_segments(df):
         rows.extend(segment_signals(segment, rule, tick_size, params))
     return pd.DataFrame(rows, columns=OUTPUT_COLUMNS) if rows else pd.DataFrame(columns=OUTPUT_COLUMNS)
 
 
 def contract_segments(df: pd.DataFrame) -> list[pd.DataFrame]:
-    """`df` split at every `contract` change; data without a `contract` column is one segment."""
     if "contract" not in df:
         return [df]
     contracts = df["contract"]
@@ -219,7 +191,6 @@ def contract_segments(df: pd.DataFrame) -> list[pd.DataFrame]:
 
 
 def segment_signals(df, rule, tick_size, params):
-    """Signal rows for one contract's bars."""
     high_bars = resample_data(df, rule)
     channels = cached_channels(high_bars, params)
     tops = channels[[f"top_{slot + 1}" for slot in range(EXPOSED_CHANNELS)]].to_numpy()
@@ -243,7 +214,6 @@ def segment_signals(df, rule, tick_size, params):
     range_high = range_low = math.nan
     rows = []
     for bar in range(len(df)):
-        # The developing high-timeframe range, from the closed low-timeframe bars since its bar opened.
         if new_period[bar]:
             range_high, range_low = highs[bar], lows[bar]
         else:
@@ -253,7 +223,6 @@ def segment_signals(df, rule, tick_size, params):
         reference_close = reference_closes[high_row]
         in_force = [(top, bottom) for top, bottom in zip(tops[high_row], bottoms[high_row]) if is_channel(top, bottom)]
 
-        # Pending touches follow their channel by midpoint and drop when none matches or its role flips.
         kept = []
         for touch in touches:
             channel = nearest_channel(touch, in_force, tick_size)
@@ -277,8 +246,6 @@ def segment_signals(df, rule, tick_size, params):
         for is_choch, role, side in ((bullish_choch, SUPPORT, "long"), (bearish_choch, RESISTANCE, "short")):
             if not is_choch[bar]:
                 continue
-            # Any channel with the matching role counts. Touches are never cleared, so the Pine's first pending
-            # touch could be a stale one.
             usable = [
                 t for t in touches if t.role == role and t.first_bar < bar and within_touch_limit(t, bar, times, params)
             ]
@@ -310,7 +277,6 @@ def cached_channels(high_bars: pd.DataFrame, params: dict) -> pd.DataFrame:
 
 
 def signal_row(structure, bar, side, touch, entry, bar_open, reference_close, times, tick_size, params):
-    """The signal for a CHoCH that uses `touch`, or None when the stop fails the side or distance checks."""
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
     swing = structure.iloc[bar]
@@ -345,7 +311,6 @@ def signal_row(structure, bar, side, touch, entry, bar_open, reference_close, ti
         "stop_swing_price": stop_swing_price,
         "stop_source": params["stop_source"],
         "entry_mode": params["entry_mode"],
-        # The trade chart opens on the earliest bar it draws.
         "plot_start_time": min(touch_time, swing_time, stop_swing_time),
     }
 
@@ -362,7 +327,6 @@ def stop_swing(swing, is_long, times, params):
 
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
-    """The touched channel from the touch bar to the exit, the touch bar, the broken swing and the stop swing."""
     trade = (params or {}).get("trade") or {}
     if not all(key in trade for key in PLOT_KEYS):
         return
@@ -380,7 +344,6 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
         line={"color": color, "width": 1},
         name=f"{role} channel",
     )
-    # The touch comes from above a support channel and from below a resistance channel.
     touch_price = trade["channel_top"] if is_long else trade["channel_bottom"]
     fig.add_scatter(
         x=[touch_time],

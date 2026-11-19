@@ -26,7 +26,6 @@ def test_swing_highs_are_labelled_on_their_confirmation_bar():
 
     result = market_structure(df, swing_length=1)
 
-    # The first swing high has no previous one to beat, so it is LH, as in the Pine; an equal high is HH.
     assert labels(result["swing_high_label"]) == {2: "LH", 4: "HH", 6: "LH", 8: "HH"}
     assert result["swing_high_price"].iloc[4] == 13
     assert result["swing_high_time"].iloc[4] == df.index[3]
@@ -41,7 +40,6 @@ def test_swing_lows_are_labelled_on_their_confirmation_bar():
 
     result = market_structure(df, swing_length=1)
 
-    # The first swing low has no previous one to stay above, so it is LL, as in the Pine; an equal low is HL.
     assert labels(result["swing_low_label"]) == {2: "LL", 4: "LL", 6: "HL", 8: "HL"}
     assert result["swing_low_price"].iloc[4] == 7
     assert result["swing_low_time"].iloc[4] == df.index[3]
@@ -56,8 +54,6 @@ def test_flat_top_swing_high_is_the_later_bar():
     assert result["swing_high_time"].iloc[3] == df.index[2]
 
 
-# Bar 1 is a swing high at 12 and bar 2 a swing low at 7. Bar 4 closes above 12 (the first break, a BOS);
-# bar 5 closes below 7, against the previous break, so it is a CHoCH. Bar 5 also confirms bar 4 as an HH at 13.
 BREAK_BARS = dict(
     highs=[10, 12, 11, 11.5, 13, 12, 12],
     lows=[8, 9, 7, 9, 10, 6.5, 6],
@@ -87,7 +83,6 @@ def test_a_close_equal_to_the_swing_is_not_a_break():
     result = market_structure(df, swing_length=1)
 
     assert result["bullish_break_price"].isna().all()
-    # Bar 5's break is now the first one, so it is a BOS.
     assert result["bearish_break_price"].dropna().to_dict() == {df.index[5]: 7}
     assert not result["bearish_choch"].any()
 
@@ -106,7 +101,6 @@ def test_a_new_swing_high_rearms_the_bullish_break():
 
     result = market_structure(df, swing_length=1)
 
-    # Bar 5 confirmed the HH at 13; bar 7 closes above it after the bearish CHoCH.
     assert result["bullish_break_price"].dropna().to_dict() == {df.index[4]: 12, df.index[7]: 13}
     assert result["bullish_break_swing_time"].iloc[7] == df.index[4]
     assert result["bullish_choch"].iloc[7]
@@ -120,7 +114,6 @@ def test_last_marked_ll_and_hh_carry_their_confirmation_bar():
     assert math.isnan(result["last_ll_price"].iloc[2])
     assert result["last_ll_price"].iloc[3:].tolist() == [7] * 4
     assert result["last_ll_time"].iloc[6] == df.index[3]
-    # The first swing high is LH, so there is no HH until bar 5 confirms bar 4.
     assert result["last_hh_price"].iloc[:5].isna().all()
     assert result["last_hh_price"].iloc[5] == 13
     assert result["last_hh_time"].iloc[5] == df.index[5]
@@ -139,7 +132,6 @@ def test_last_swing_of_any_label_is_kept_after_its_break():
     assert result["last_swing_low_time"].iloc[6] == df.index[2]
 
 
-# Bar 1 is a swing high at 12 and bar 2 a swing low at 7; bar 4's wick goes beyond both, its close beyond neither.
 BOTH_SIDES_BARS = dict(
     highs=[10, 12, 11, 11, 13],
     lows=[8, 9, 7, 9, 6],
@@ -154,7 +146,6 @@ def test_wick_confirmation_breaks_both_sides_high_first():
 
     assert result["bullish_break_price"].iloc[4] == 12
     assert not result["bullish_choch"].iloc[4]
-    # The high side is processed first, so the low break on the same bar is against it: a CHoCH.
     assert result["bearish_break_price"].iloc[4] == 7
     assert result["bearish_choch"].iloc[4]
 

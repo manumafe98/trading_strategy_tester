@@ -1,9 +1,3 @@
-"""Low-timeframe market structure, ported from the Pine's one-minute market structure section.
-
-`choch_sr_mtf_strategy.pine` lines 281-363 (Leviathan's `market_structure.pine`): swings, their
-HH/LH/HL/LL labels, breaks of the active swings, CHoCH, and the last marked LL/HH.
-"""
-
 from __future__ import annotations
 
 import math
@@ -30,21 +24,6 @@ def one_tick_beyond(price: float, upward: bool, tick_size: float) -> float:
 def market_structure(
     df: pd.DataFrame, swing_length: int, confirmation: str = "close", tick_size: float | None = None
 ) -> pd.DataFrame:
-    """Market structure per bar of `df`, without lookahead.
-
-    A swing is a `swing_length`-bar pivot and appears on its confirmation bar, `swing_length` bars after
-    its own bar. Breaking a swing high is bullish, breaking a swing low bearish; `confirmation="close"`
-    needs a close beyond the swing, `"wick"` the high or low. Each swing breaks at most once.
-
-    Returned columns, indexed like `df` (`*_time` columns are bar times, NaT when absent):
-    - `swing_high_price/label/time`, `swing_low_price/label/time`: a swing confirmed on this bar, its
-      label (HH/LH, HL/LL) and its own bar.
-    - `bullish_break_price/swing_time`, `bearish_break_price/swing_time`: the swing broken on this bar
-      and its own bar; `bullish_choch`, `bearish_choch`: whether that break is a CHoCH.
-    - `last_hh_price/time`, `last_ll_price/time`: the last marked HH/LL and the bar that confirmed it.
-    - `last_swing_high_price/time`, `last_swing_low_price/time`: the most recent confirmed swing of
-      any label and its own bar, kept after it breaks.
-    """
     if isinstance(swing_length, bool) or not isinstance(swing_length, int) or swing_length < 1:
         raise ValueError(f"swing_length must be an int >= 1, got {swing_length!r}")
     if confirmation not in CONFIRMATIONS:
@@ -64,7 +43,7 @@ def market_structure(
     def prices() -> np.ndarray:
         return np.full(n, np.nan)
 
-    def bar_positions() -> np.ndarray:  # -1 when absent; mapped to bar times at the end
+    def bar_positions() -> np.ndarray:
         return np.full(n, -1, dtype=np.int64)
 
     out = {
@@ -104,7 +83,6 @@ def market_structure(
         if center >= 0:
             if swing_high_bars[center]:
                 price = highs[center]
-                # NaN compares False, so the first swing high is LH, as in the Pine.
                 label = "HH" if price >= previous_high else "LH"
                 out["swing_high_price"][i] = price
                 out["swing_high_label"][i] = label

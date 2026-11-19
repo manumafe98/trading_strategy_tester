@@ -1,10 +1,3 @@
-"""Support/resistance channels from pivot clustering.
-
-Ports `f_sr_state` and `f_get_sr_values` from `pine_scripts_examples/choch_sr_mtf_strategy.pine`, which
-follow `pine_scripts_examples/support_and_resistance.pine` with the indicator's pick-and-mark selection
-written as one pass over the candidates sorted by strength.
-"""
-
 from __future__ import annotations
 
 import math
@@ -24,20 +17,14 @@ WIDTH_UNITS = ("%", "pips")
 
 
 def pivot_highs(values: np.ndarray, period: int = PIVOT_PERIOD) -> np.ndarray:
-    """Boolean per confirmation bar: the bar `period` bars back is a pivot high.
-
-    The window and tie rule are `strategy.utils.pivots.pivot_high_bars`.
-    """
     return _confirmed(np.asarray(values, dtype=float), period)
 
 
 def pivot_lows(values: np.ndarray, period: int = PIVOT_PERIOD) -> np.ndarray:
-    """Mirror of `pivot_highs` for pivot lows."""
     return _confirmed(-np.asarray(values, dtype=float), period)
 
 
 def _confirmed(values: np.ndarray, period: int) -> np.ndarray:
-    # A pivot is confirmed `period` bars after its own bar.
     confirmed = np.zeros(len(values), dtype=bool)
     confirmed[period:] = pivot_high_bars(values, period)[: len(values) - period]
     return confirmed
@@ -46,13 +33,6 @@ def _confirmed(values: np.ndarray, period: int) -> np.ndarray:
 def build_channels(
     bars: pd.DataFrame, min_width: float, max_width: float, width_unit: str, pip_size: float
 ) -> pd.DataFrame:
-    """Channels in force on each high-timeframe bar, built only from bars that have already closed.
-
-    Row k holds the channels computed at the close of bar k-1 (`top_n`, `bottom_n`, `strength_n` for the
-    first six, strongest first) and that bar's close as `reference_close`. Unused slots and row 0 are NaN.
-    Widths are in percent of price (`%`) or in `pip_size` units (`pips`); `min_width` 0 disables the
-    minimum filter.
-    """
     validate_widths(min_width, max_width, width_unit)
     if not math.isfinite(pip_size) or pip_size <= 0:
         raise ValueError("pip_size must be finite and positive")
@@ -68,12 +48,11 @@ def build_channels(
     strengths = np.full((n, EXPOSED_CHANNELS), np.nan)
     reference = np.full(n, np.nan)
 
-    pivot_values: list[float] = []  # newest first
-    pivot_bars: list[int] = []  # the bar each pivot was confirmed on
+    pivot_values: list[float] = []
+    pivot_bars: list[int] = []
     channels: list[tuple[float, float, float]] = []
     for bar in range(n - 1):
         if is_high[bar] or is_low[bar]:
-            # A bar confirming both keeps only the pivot high, as the Pine does.
             pivot_values.insert(0, highs[bar - PIVOT_PERIOD] if is_high[bar] else lows[bar - PIVOT_PERIOD])
             pivot_bars.insert(0, bar)
             while pivot_bars and bar - pivot_bars[-1] > LOOPBACK:
@@ -100,7 +79,6 @@ def build_channels(
 def validate_widths(
     min_width: float, max_width: float, width_unit: str, names: tuple[str, str, str] = ("min_width", "max_width", "width_unit")
 ) -> None:
-    """Rejects a minimum and maximum width that are not finite, ordered and non-negative, or an unknown unit."""
     min_name, max_name, unit_name = names
     if width_unit not in WIDTH_UNITS:
         raise ValueError(f"{unit_name} must be one of {', '.join(WIDTH_UNITS)}")
@@ -115,7 +93,6 @@ def validate_widths(
 
 
 def width_in_price(width: float, width_unit: str, base_price: float, pip_size: float) -> float:
-    """A width as a price distance: percent of `base_price` (`%`) or a count of `pip_size` (`pips`)."""
     return base_price * width / 100 if width_unit == "%" else width * pip_size
 
 
@@ -151,7 +128,6 @@ def _select_channels(
         rejected = min_width > 0 and top - bottom < min_allowed
         candidates.append((top, bottom, -1.0 if rejected else float(strength + touches)))
 
-    # Strongest first; equal strengths keep the newer pivot first (a stable sort over newest-first pivots).
     order = sorted(range(len(candidates)), key=lambda index: -candidates[index][2])
     accepted: list[tuple[float, float, float]] = []
     for index in order:

@@ -161,7 +161,6 @@ def test_main_maps_low_timeframe_to_config(monkeypatch):
             {"high_timeframe": "5m", "low_timeframe": "2m"},
             "--low_timeframe: low timeframe 2m must divide high timeframe 5m evenly",
         ),
-        # The rule applies to the declared default as well, and the message names it.
         (
             SimpleNamespace(LOW_TIMEFRAME="5m"),
             {"high_timeframe": "2m"},
@@ -900,7 +899,6 @@ def test_run_rejects_selection_flags_without_a_split_or_with_non_positive_top(mo
 
 
 def _ranked_rows(monkeypatch, returns):
-    # Stand-in batch results: one row per RR with the given in-sample Return, Return / DD and out-of-sample values.
     def fake_run_variants(task):
         rows = []
         for (rr, mode), (ret, ret_dd, oos) in zip(task["variants"], returns):
@@ -923,7 +921,6 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
     monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
     monkeypatch.setattr(cli, "write_results_html", lambda *args: written.append(args) or tmp_path / "results.html")
-    # Return / DD ranks RR 2 first; plain Return (the _sort_return order) would put RR 1 first.
     _ranked_rows(monkeypatch, [(3.0, 1.0, 2.0), (1.0, 3.0, 1.0), (2.0, 2.0, 3.0)])
 
     cli.run(_config(risk_reward_ratio="1,2,3", oos_start="2025-01-02", select_top=2))
@@ -936,14 +933,12 @@ def test_split_run_ranks_selects_and_sorts_variants_by_in_sample_rank(monkeypatc
     assert list(table["Selected"]) == [True, True, False]
     out = capsys.readouterr().out
     assert "IS Rank" in out and "WFE" in out and "50.00%" in out
-    # OOS Returns 2, 1 and 3 are all above 0 and average to 2.
     assert "test TEST: Tried 3, OOS profitable 3/3 (100.0%), Equal-weight OOS +2.00%" in out
 
 
 def test_split_run_ranks_within_each_strategy_and_asset_with_nan_last_and_marks_the_top_n(
     monkeypatch, tmp_path, capsys, test_asset_cfg
 ):
-    # In-sample Return / DD and out-of-sample Return / DD per RR 1, 2, 3, for each strategy and asset.
     values = {
         ("a", "TEST"): [(1.0, 2.0), (math.nan, 9.0), (3.0, math.nan)],
         ("a", "OTHER"): [(5.0, 1.0), (4.0, 3.0), (6.0, 2.0)],
