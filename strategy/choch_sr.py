@@ -236,6 +236,7 @@ def segment_signals(df, rule, tick_size, params):
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
+    opens = df["open"].to_numpy(dtype=float)
     times = df.index
 
     touches: list[Touch] = []
@@ -283,7 +284,9 @@ def segment_signals(df, rule, tick_size, params):
             ]
             if usable:
                 touch = max(usable, key=lambda t: t.prior_latest_bar)
-                row = signal_row(structure, bar, side, touch, closes[bar], reference_close, times, tick_size, params)
+                row = signal_row(
+                    structure, bar, side, touch, closes[bar], opens[bar], reference_close, times, tick_size, params
+                )
                 if row is not None:
                     row["touch_to_choch_minutes"] = (times[bar] - row["touch_time"]) / pd.Timedelta(minutes=1)
                     rows.append(row)
@@ -306,7 +309,7 @@ def cached_channels(high_bars: pd.DataFrame, params: dict) -> pd.DataFrame:
     return CHANNEL_CACHE[key]
 
 
-def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_size, params):
+def signal_row(structure, bar, side, touch, entry, bar_open, reference_close, times, tick_size, params):
     """The signal for a CHoCH that uses `touch`, or None when the stop fails the side or distance checks."""
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
@@ -317,9 +320,11 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
     if pd.isna(stop_swing_price):
         return None
     stop = one_tick_beyond(stop_swing_price, not is_long, tick_size)
+    fill = entry
     if is_stop_entry:
         entry = one_tick_beyond(swing[f"{prefix}_break_price"], is_long, tick_size)
-    if (stop >= entry if is_long else stop <= entry) or not stop_distance_ok(entry, stop, params):
+        fill = max(bar_open, entry) if is_long else min(bar_open, entry)
+    if (stop >= entry if is_long else stop <= entry) or not stop_distance_ok(fill, stop, params):
         return None
     touch_time = times[touch.prior_contact_start]
     swing_time = swing[f"{prefix}_break_swing_time"]

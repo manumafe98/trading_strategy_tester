@@ -110,7 +110,7 @@ def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept
     touch = choch_sr.Touch(100.2, 100.0, choch_sr.SUPPORT, bar - 3)
     params = {**choch_sr.PARAMS, "swing_length": 2, "pip_size": 0.01, "stop_min": 0.0, "stop_max": 100.0}
 
-    row = choch_sr.signal_row(structure, bar, side, touch, entry, 103.0, df.index, 0.01, params)
+    row = choch_sr.signal_row(structure, bar, side, touch, entry, entry, 103.0, df.index, 0.01, params)
 
     assert (row is not None) == kept
 
@@ -376,6 +376,11 @@ def test_entry_mode_break_fills_at_the_level_or_at_an_open_beyond_it(test_asset_
     assert trade["entry_time"] == at("04:35")
     assert trade["entry"] == fill
     assert trade["entry_mode"] == "break"
+
+
+@pytest.mark.parametrize(("setup", "stop_max", "trades"), [(long_setup, 0.42, 0), (long_setup, 0.43, 1), (wick_only_break, 0.42, 1)])
+def test_entry_mode_break_measures_the_stop_distance_from_the_fill(setup, stop_max, trades):
+    assert len(run(setup(), entry_mode="break", stop_max=stop_max)) == trades
 
 
 def test_entry_mode_break_ignores_a_stop_swing_confirmed_on_the_choch_bar():
