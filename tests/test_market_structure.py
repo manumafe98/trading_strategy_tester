@@ -150,7 +150,7 @@ BOTH_SIDES_BARS = dict(
 def test_wick_confirmation_breaks_both_sides_high_first():
     df = make_bars(**BOTH_SIDES_BARS)
 
-    result = market_structure(df, swing_length=1, confirmation="wick")
+    result = market_structure(df, swing_length=1, confirmation="wick", tick_size=1)
 
     assert result["bullish_break_price"].iloc[4] == 12
     assert not result["bullish_choch"].iloc[4]
@@ -188,8 +188,48 @@ def test_input_is_not_mutated():
 
 @pytest.mark.parametrize(
     "kwargs",
-    [{"swing_length": 0}, {"swing_length": 1.0}, {"swing_length": True}, {"swing_length": 1, "confirmation": "body"}],
+    [
+        {"swing_length": 0},
+        {"swing_length": 1.0},
+        {"swing_length": True},
+        {"swing_length": 1, "confirmation": "body"},
+        {"swing_length": 1, "confirmation": "wick"},
+        {"swing_length": 1, "confirmation": "wick", "tick_size": 0},
+    ],
 )
 def test_invalid_settings_raise(kwargs):
     with pytest.raises(ValueError):
         market_structure(make_bars(**BREAK_BARS), **kwargs)
+
+
+@pytest.mark.parametrize(
+    ("swing_high", "bar_high", "broken"),
+    [(100.0, 100.05, False), (100.0, 100.1, True), (100.03, 100.15, False), (100.03, 100.2, True)],
+)
+def test_wick_confirmation_breaks_a_swing_high_at_its_stop_entry_level(swing_high, bar_high, broken):
+    df = make_bars(highs=[99.8, swing_high, 99.9, bar_high], lows=[99.5, 99.6, 99.5, 99.6], closes=[99.7, 99.8, 99.7, 99.8])
+
+    result = market_structure(df, swing_length=1, confirmation="wick", tick_size=0.1)
+
+    assert result["bullish_break_price"].notna().iloc[3] == broken
+
+
+@pytest.mark.parametrize(
+    ("swing_low", "bar_low", "broken"),
+    [(100.0, 99.95, False), (100.0, 99.9, True), (99.97, 99.85, False), (99.97, 99.8, True)],
+)
+def test_wick_confirmation_breaks_a_swing_low_at_its_stop_entry_level(swing_low, bar_low, broken):
+    df = make_bars(highs=[100.5, 100.4, 100.5, 100.4], lows=[100.2, swing_low, 100.1, bar_low], closes=[100.3, 100.2, 100.3, 100.2])
+
+    result = market_structure(df, swing_length=1, confirmation="wick", tick_size=0.1)
+
+    assert result["bearish_break_price"].notna().iloc[3] == broken
+
+
+def test_wick_confirmation_open_short_of_the_stop_entry_level_follows_the_nearer_extreme():
+    df = make_bars(highs=[10, 12, 11, 11, 20], lows=[8, 9, 7, 9, 6], closes=[9.0, 11, 10, 10, 10])
+    df.iloc[4, df.columns.get_loc("open")] = 12.5
+
+    result = market_structure(df, swing_length=1, confirmation="wick", tick_size=1)
+
+    assert (result["bearish_choch"].iloc[4], result["bullish_choch"].iloc[4]) == (False, True)

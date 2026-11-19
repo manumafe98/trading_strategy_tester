@@ -2,7 +2,7 @@
 
 A setup is a touch on a support/resistance channel on the high timeframe followed by the first CHoCH the
 opposite way on the low timeframe: a support touch then a bullish CHoCH is a long, a resistance touch then
-a bearish CHoCH a short. Entries are close entries on the CHoCH bar.
+a bearish CHoCH a short.
 
 The strategy ignores positions: it never clears touches or waits after its own signals. Each signal carries
 `setup_time`, the latest contact bar of its touch, and the engine's setup-time rule discards retests that
@@ -19,10 +19,9 @@ import math
 import numpy as np
 import pandas as pd
 
-from strategy.utils.market_structure import market_structure
+from strategy.utils.market_structure import market_structure, one_tick_beyond
 from strategy.utils.sr_channels import EXPOSED_CHANNELS, build_channels, validate_widths, width_in_price
 from tester_framework.data import LOCAL_RESAMPLE_RULES, resample_data
-from tester_framework.utils import decimal_places
 
 
 LOW_TIMEFRAME = "1m"
@@ -40,8 +39,14 @@ PARAMS = {
     "touch_buckets": "0-5|5-15|15-30|30-60|60+",
 }
 PARAM_TYPES = {"max_touch_minutes": int}
-STOP_SOURCES = ("last_ll_hh", "last_swing")
-ENTRY_MODES = ("close", "break")
+STOP_SOURCES = {
+    "last_ll_hh": {"columns": ("ll", "hh"), "labels": ("LL", "HH"), "dated_by_confirmation_bar": True},
+    "last_swing": {"columns": ("swing_low", "swing_high"), "labels": ("swing", "swing"), "dated_by_confirmation_bar": False},
+}
+ENTRY_MODES = {
+    "close": {"confirmation": "close", "choch_column": "choch", "stop_entry": False},
+    "break": {"confirmation": "wick", "choch_column": "choch_at_open", "stop_entry": True},
+}
 EPSILON = 1e-8
 CHANNEL_CACHE: dict[tuple, pd.DataFrame] = {}
 CHANNEL_CACHE_SIZE = 32
@@ -86,16 +91,19 @@ def validate_params(params):
         raise ValueError("swing_length must be at least 1")
     for names in (("channel_min_width", "channel_max_width", "channel_unit"), ("stop_min", "stop_max", "stop_unit")):
         validate_widths(*(params[name] for name in names), names=names)
-    if params["stop_source"] not in STOP_SOURCES:
-        raise ValueError(f"stop_source must be one of {', '.join(STOP_SOURCES)}, got {params['stop_source']}")
-    if params["entry_mode"] not in ENTRY_MODES:
-        raise ValueError(f"entry_mode must be one of {', '.join(ENTRY_MODES)}, got {params['entry_mode']}")
+    for name, choices in (("stop_source", STOP_SOURCES), ("entry_mode", ENTRY_MODES)):
+        validate_choice(name, params[name], choices)
     if params["max_touch_minutes"] is not None and params["max_touch_minutes"] < 1:
         raise ValueError("max_touch_minutes must be at least 1 or none")
-    touch_bands(params["touch_buckets"])
+    parse_touch_buckets(params["touch_buckets"])
 
 
-def touch_bands(text: str) -> list[tuple[float, float, str]]:
+def validate_choice(name: str, value, choices) -> None:
+    if value not in choices:
+        raise ValueError(f"{name} must be one of {', '.join(choices)}, got {value}")
+
+
+def parse_touch_buckets(text: str) -> list[tuple[float, float, str]]:
     bands = []
     previous_high = 0.0
     for band in text.split("|"):
@@ -221,11 +229,10 @@ def segment_signals(df, rule, tick_size, params):
     high_rows = high_bars.index.get_indexer(period_starts)
     new_period = np.r_[True, period_starts[1:] != period_starts[:-1]]
 
-    confirmation = "wick" if params["entry_mode"] == "break" else "close"
-    structure = market_structure(df, params["swing_length"], confirmation)
-    choch_suffix = "_choch_at_open" if confirmation == "wick" else "_choch"
-    bullish_choch = structure[f"bullish{choch_suffix}"].to_numpy()
-    bearish_choch = structure[f"bearish{choch_suffix}"].to_numpy()
+    entry_mode = ENTRY_MODES[params["entry_mode"]]
+    structure = market_structure(df, params["swing_length"], entry_mode["confirmation"], tick_size)
+    bullish_choch = structure[f"bullish_{entry_mode['choch_column']}"].to_numpy()
+    bearish_choch = structure[f"bearish_{entry_mode['choch_column']}"].to_numpy()
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
@@ -304,13 +311,13 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
     swing = structure.iloc[bar]
-    enters_on_break = params["entry_mode"] == "break"
-    swings_before_bar = structure.iloc[bar - 1] if enters_on_break else swing
-    marked_price, stop_swing_time = stop_swing(swings_before_bar, is_long, times, params)
-    if pd.isna(marked_price):
+    is_stop_entry = ENTRY_MODES[params["entry_mode"]]["stop_entry"]
+    swings_before_bar = structure.iloc[bar - 1] if is_stop_entry else swing
+    stop_swing_price, stop_swing_time = stop_swing(swings_before_bar, is_long, times, params)
+    if pd.isna(stop_swing_price):
         return None
-    stop = one_tick_beyond(marked_price, not is_long, tick_size)
-    if enters_on_break:
+    stop = one_tick_beyond(stop_swing_price, not is_long, tick_size)
+    if is_stop_entry:
         entry = one_tick_beyond(swing[f"{prefix}_break_price"], is_long, tick_size)
     if (stop >= entry if is_long else stop <= entry) or not stop_distance_ok(entry, stop, params):
         return None
@@ -320,8 +327,8 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         "time": times[bar],
         "side": side,
         "stop": stop,
-        "entry": math.nan if enters_on_break else entry,
-        "stop_entry": entry if enters_on_break else math.nan,
+        "entry": math.nan if is_stop_entry else entry,
+        "stop_entry": entry if is_stop_entry else math.nan,
         "setup_time": times[touch.prior_latest_bar],
         "channel_top": touch.top,
         "channel_bottom": touch.bottom,
@@ -330,7 +337,7 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
         "choch_level": swing[f"{prefix}_break_price"],
         "swing_time": swing_time,
         "stop_swing_time": stop_swing_time,
-        "stop_swing_price": marked_price,
+        "stop_swing_price": stop_swing_price,
         "stop_source": params["stop_source"],
         "entry_mode": params["entry_mode"],
         # The trade chart opens on the earliest bar it draws.
@@ -338,24 +345,15 @@ def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_
     }
 
 
-def one_tick_beyond(price: float, upward: bool, tick_size: float) -> float:
-    if upward:
-        ticks = math.ceil((price + tick_size) / tick_size - EPSILON)
-    else:
-        ticks = math.floor((price - tick_size) / tick_size + EPSILON)
-    return round(ticks * tick_size, decimal_places(tick_size))
-
-
 def stop_swing(swing, is_long, times, params):
-    if params["stop_source"] == "last_swing":
-        side = "low" if is_long else "high"
-        return swing[f"last_swing_{side}_price"], swing[f"last_swing_{side}_time"]
-    marked = "ll" if is_long else "hh"
-    marked_price, confirmed_time = swing[f"last_{marked}_price"], swing[f"last_{marked}_time"]
-    if pd.isna(marked_price):
-        return marked_price, None
-    # The marked swing is confirmed `swing_length` bars after its own bar.
-    return marked_price, times[times.get_loc(confirmed_time) - params["swing_length"]]
+    source = STOP_SOURCES[params["stop_source"]]
+    column = source["columns"][0 if is_long else 1]
+    price, time = swing[f"last_{column}_price"], swing[f"last_{column}_time"]
+    if pd.isna(price):
+        return price, None
+    if source["dated_by_confirmation_bar"]:
+        time = times[times.get_loc(time) - params["swing_length"]]
+    return price, time
 
 
 def plot_indicators(fig, data, view, asset, timeframe, params):
@@ -396,7 +394,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
         label={"text": "CHoCH", "textposition": "end"},
         name="CHoCH",
     )
-    label = "swing" if trade["stop_source"] == "last_swing" else "LL" if is_long else "HH"
+    label = STOP_SOURCES[trade["stop_source"]]["labels"][0 if is_long else 1]
     fig.add_scatter(
         x=[pd.Timestamp(trade["stop_swing_time"])],
         y=[trade["stop_swing_price"]],
@@ -411,7 +409,7 @@ def plot_indicators(fig, data, view, asset, timeframe, params):
 def calculate_metrics(data, signals, trades, asset, timeframe, params):
     r_key = "net_realized_r" if params["with_costs"] else "realized_r"
     metrics = {}
-    for low, high, label in touch_bands(params["touch_buckets"]):
+    for low, high, label in parse_touch_buckets(params["touch_buckets"]):
         band_r = [float(trade[r_key]) for trade in trades if low <= trade["touch_to_choch_minutes"] < high]
         metrics[f"Trades {label}"] = len(band_r)
         metrics[f"Win rate {label}"] = round(sum(r > 0 for r in band_r) / len(band_r) * 100, 2) if band_r else math.nan

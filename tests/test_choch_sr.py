@@ -136,7 +136,6 @@ def test_last_swing_stop_short_is_one_tick_above_the_last_swing_high():
 
 @pytest.mark.parametrize(("stop_max", "trades"), [(0.36, 1), (0.35, 0)])
 def test_last_swing_stop_is_checked_against_the_stop_distance_limits(stop_max, trades):
-    # The 100.19 stop is 0.36 below the 100.55 entry: 0.358%.
     assert len(run(higher_low_setup(), stop_source="last_swing", stop_max=stop_max)) == trades
 
 
@@ -350,6 +349,13 @@ def test_wick_only_break_gives_a_stop_entry_in_break_mode_only():
     assert row["entry_mode"] == "break"
 
 
+def test_entry_mode_break_needs_a_wick_one_tick_beyond_the_swing():
+    df = wick_only_break()
+    df.iloc[-1, df.columns.get_loc("high")] = 100.525
+
+    assert run(df, entry_mode="break").empty
+
+
 def backtest(df, signals, asset_cfg):
     return run_backtest(
         df, signals, strategy="choch_sr", asset="TEST", timeframe="1h", risk_reward_ratio=1, exit_mode="fixed",
@@ -362,7 +368,7 @@ def backtest(df, signals, asset_cfg):
     ("setup", "fill"),
     [(wick_only_break, 100.53), (long_setup, 100.55)],
 )
-def test_break_entry_fills_at_the_level_or_at_an_open_beyond_it(test_asset_cfg, setup, fill):
+def test_entry_mode_break_fills_at_the_level_or_at_an_open_beyond_it(test_asset_cfg, setup, fill):
     df = append(setup(), RECOVERY_CLOSES)
 
     _, (trade,) = backtest(df, run(df, entry_mode="break"), test_asset_cfg)
@@ -372,10 +378,10 @@ def test_break_entry_fills_at_the_level_or_at_an_open_beyond_it(test_asset_cfg, 
     assert trade["entry_mode"] == "break"
 
 
-def test_break_entry_ignores_a_stop_swing_confirmed_on_the_choch_bar():
+def test_entry_mode_break_ignores_a_stop_swing_confirmed_on_the_choch_bar():
     df = long_setup().iloc[:-1].copy()
     df.iloc[-1] = [100.30, 100.56, 100.28, 100.30, 1.0]
-    assert market_structure(df, 2, "wick")["last_ll_time"].iloc[-1] == at("04:34")
+    assert market_structure(df, 2, "wick", tick_size=0.01)["last_ll_time"].iloc[-1] == at("04:34")
 
     assert run(df, entry_mode="break").empty
 def test_touch_to_choch_minutes_runs_from_the_contact_start_close_to_the_choch_close():

@@ -147,7 +147,7 @@ def partial_targets(qty: float, risk_reward_ratio: float, step: float, min_qty: 
 
 def _prepare_trade(
     signal: pd.Series,
-    raw_entry: float,
+    fill_price: float,
     entry_time,
     asset_cfg: AssetConfig,
     current_net: float,
@@ -162,7 +162,7 @@ def _prepare_trade(
 ) -> dict | None:
     """Validate a signal and build the trade record, or return None if it should be discarded."""
     side = Side(signal["side"])
-    raw_entry = float(raw_entry)
+    raw_entry = float(fill_price)
     stop = float(signal["stop"])
     if not math.isfinite(raw_entry) or not math.isfinite(stop):
         return None
@@ -275,10 +275,9 @@ class _OpenTrade:
     def stop_between(self, start: float, end: float) -> bool:
         return end * self.direction <= self.stop * self.direction <= start * self.direction
 
-    def stop_and_target_reachable(self, opened: float, high: float, low: float) -> bool:
-        """Whether a bar opening at opened can reach both the stop and the next target."""
-        favor, adverse = (high, low) if self.direction > 0 else (low, high)
-        return self.stop_between(opened, adverse) and self.target_between(opened, favor)
+    def stop_and_target_reachable(self, start: float, highest: float, lowest: float) -> bool:
+        favor, adverse = (highest, lowest) if self.direction > 0 else (lowest, highest)
+        return self.stop_between(start, adverse) and self.target_between(start, favor)
 
     def _fill(self, qty: float, raw_exit_price: float, exit_i: int, exit_time, reason: ExitReason, target_r, gap_exit: bool) -> None:
         trade, cfg = self.trade, self.cfg
