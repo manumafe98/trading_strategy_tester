@@ -26,6 +26,7 @@ SESSION_PRESETS = {
     "ny": ("America/New_York", 9 * 60 + 30, 16 * 60),
     "ny_bank": ("America/New_York", 8 * 60, 17 * 60),
     "full": ("America/New_York", 18 * 60 + 15, 18 * 60 + 15),
+    "no_break": ("America/New_York", 18 * 60 + 15, 16 * 60 + 45),
 }
 REGION_SESSIONS = ("sydney", "asia", "london", "ny")
 MINUTES_PER_DAY = 24 * 60
@@ -49,15 +50,24 @@ def _format_clock(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _window_length(start_minute: int, end_minute: int) -> int:
+    return (end_minute - start_minute) % MINUTES_PER_DAY or MINUTES_PER_DAY
+
+
+def _within_preset(start_minute: int, end_minute: int, preset_start: int, preset_end: int) -> bool:
+    offset = (start_minute - preset_start) % MINUTES_PER_DAY
+    return offset + _window_length(start_minute, end_minute) <= _window_length(preset_start, preset_end)
+
+
 def _session_spec(name: str, start_minute: int | None = None, end_minute: int | None = None) -> SessionSpec:
     if name not in SESSION_PRESETS:
-        raise ValueError(f"--sessions supports only sydney, asia, london, ny, ny_bank, full, regions, or none; got: {name}")
+        raise ValueError(f"--sessions supports only sydney, asia, london, ny, ny_bank, full, no_break, regions, or none; got: {name}")
     timezone, preset_start, preset_end = SESSION_PRESETS[name]
     if start_minute is None:
         start_minute, end_minute = preset_start, preset_end
-    elif start_minute >= end_minute:
+    elif start_minute == end_minute:
         raise ValueError(f"--sessions {name} range must increase, got: {_format_clock(start_minute)}-{_format_clock(end_minute)}")
-    elif start_minute < preset_start or end_minute > preset_end:
+    elif not _within_preset(start_minute, end_minute, preset_start, preset_end):
         raise ValueError(
             f"--sessions {name} range must stay inside {_format_clock(preset_start)}-{_format_clock(preset_end)}"
         )
@@ -70,7 +80,7 @@ def _session_spec(name: str, start_minute: int | None = None, end_minute: int | 
         "end": _format_clock(end_minute),
         "start_minute": start_minute,
         "end_minute": end_minute,
-        "length_minute": (end_minute - start_minute) % MINUTES_PER_DAY or MINUTES_PER_DAY,
+        "length_minute": _window_length(start_minute, end_minute),
         "label": label,
     }
 

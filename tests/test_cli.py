@@ -711,6 +711,12 @@ def test_session_exit_flag_defaults_off_and_maps_to_config(monkeypatch):
     assert configs[0].session_exit is True
 
 
+def test_sessions_help_lists_no_break():
+    help_text = " ".join(cli.parser().format_help().split())
+
+    assert "full, no_break, regions" in help_text
+
+
 def test_fill_rule_flags_default_to_tick_through_and_path_and_map_to_config(monkeypatch):
     args = cli.parser().parse_args([])
     assert (args.target_fill, args.intrabar) == ("tick_through", "path")

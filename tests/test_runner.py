@@ -195,6 +195,37 @@ def test_run_variants_full_session_keeps_signals_at_every_time_of_day(monkeypatc
     assert (row["Session"], row["Trades"]) == ("full", len(signal_times))
 
 
+def test_run_variants_no_break_drops_signals_in_the_daily_break_across_dst_and_keeps_both_sides_of_midnight(
+    monkeypatch, tmp_path, test_asset_cfg
+):
+    kept = ("2025-03-08 16:30", "2025-03-08 18:15", "2025-03-08 23:45", "2025-03-09 00:00", "2025-03-09 03:00", "2025-03-09 16:30")
+    dropped = ("2025-03-08 16:45", "2025-03-08 18:00", "2025-03-09 16:45", "2025-03-09 17:30")
+    data = _quarter_hour_bars(_new_york("2025-03-08 12:00"), _new_york("2025-03-09 20:00"), high=102.0)
+    signals = pd.DataFrame([{"time": _new_york(value), "side": "long", "stop": 99.0} for value in (*kept, *dropped)])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    row = runner.run_variants(_quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions("no_break")[0]))[0]
+
+    assert (row["Session"], row["Trades"]) == ("no_break", len(kept))
+
+
+@pytest.mark.parametrize(
+    ("spec", "kept", "dropped"),
+    [
+        ("no_break=22:00-03:00", ("2025-03-08 22:00", "2025-03-08 23:45", "2025-03-09 01:00"), ("2025-03-08 21:45", "2025-03-09 03:00")),
+        ("full=09:00-10:00", ("2025-03-08 09:00", "2025-03-08 09:45"), ("2025-03-08 08:45", "2025-03-08 10:00")),
+    ],
+)
+def test_run_variants_subrange_keeps_signals_inside_its_own_hours(monkeypatch, tmp_path, test_asset_cfg, spec, kept, dropped):
+    data = _quarter_hour_bars(_new_york("2025-03-08 00:00"), _new_york("2025-03-09 06:00"), high=102.0)
+    signals = pd.DataFrame([{"time": _new_york(value), "side": "long", "stop": 99.0} for value in (*kept, *dropped)])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+
+    row = runner.run_variants(_quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions(spec)[0]))[0]
+
+    assert (row["Session"], row["Trades"]) == (spec, len(kept))
+
+
 def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
     monkeypatch, tmp_path, base_data, hourly_index, test_asset_cfg
 ):
@@ -298,6 +329,63 @@ def test_run_variants_full_session_exit_ends_a_trade_still_open_when_the_data_en
     data = _quarter_hour_bars(_new_york("2025-03-08 20:00"), last_bar)
     monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
     task = _quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions("full")[0], session_exit=True)
+
+    (trade,) = decode_analytics(runner.run_variants(task)[0]["_analytics"])["trades"]
+
+    assert (trade["exit_reason"], trade["exit_time"]) == ("end", last_bar)
+
+
+@pytest.mark.parametrize(
+    ("entry", "exit_bar"),
+    [
+        ("2025-03-08 20:00", "2025-03-09 16:30"),
+        ("2025-11-01 20:00", "2025-11-02 16:30"),
+        ("2025-01-06 01:00", "2025-01-06 16:30"),
+    ],
+)
+def test_run_variants_no_break_session_exit_closes_at_1645_new_york_across_midnight_and_dst(
+    monkeypatch, tmp_path, test_asset_cfg, entry, exit_bar
+):
+    exit_time = _new_york(exit_bar)
+    data = _quarter_hour_bars(_new_york(entry), exit_time + pd.Timedelta(minutes=15))
+    data.loc[exit_time, ["high", "close"]] = 100.5
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": _new_york(entry), "side": "long", "stop": 99.0}])))
+    task = _quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions("no_break")[0], session_exit=True)
+
+    (trade,) = decode_analytics(runner.run_variants(task)[0]["_analytics"])["trades"]
+
+    assert (trade["exit_reason"], trade["exit_time"], trade["exit"]) == ("session", exit_time, 100.5)
+
+
+def test_run_variants_no_break_session_exit_discards_a_fill_on_a_bar_after_the_window(monkeypatch, tmp_path, test_asset_cfg):
+    data = _quarter_hour_bars(_new_york("2025-03-08 16:00"), _new_york("2025-03-08 18:00"), high=102.0)
+    signal = {"time": _new_york("2025-03-08 16:30"), "side": "long", "stop": 99.0}
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([signal])))
+    task = _quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions("no_break")[0])
+
+    held, exited = (runner.run_variants({**task, "session_exit": flag})[0] for flag in (False, True))
+
+    assert (held["Trades"], exited["Trades"]) == (1, 0)
+
+
+def test_run_variants_no_break_session_exit_discards_a_close_entry_on_the_last_bar(monkeypatch, tmp_path, test_asset_cfg):
+    data = _quarter_hour_bars(_new_york("2025-03-08 16:00"), _new_york("2025-03-08 18:00"), high=102.0)
+    signal = {"time": _new_york("2025-03-08 16:30"), "side": "long", "stop": 99.0, "entry": 100.0}
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([signal])))
+    task = _quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions("no_break")[0])
+
+    held, exited = (runner.run_variants({**task, "session_exit": flag})[0] for flag in (False, True))
+
+    assert (held["Trades"], exited["Trades"]) == (1, 0)
+
+
+def test_run_variants_no_break_session_exit_ends_a_trade_still_open_when_the_data_ends_inside_the_window(
+    monkeypatch, tmp_path, test_asset_cfg
+):
+    last_bar = _new_york("2025-03-08 21:00")
+    data = _quarter_hour_bars(_new_york("2025-03-08 20:00"), last_bar)
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
+    task = _quarter_hour_task(data, tmp_path, test_asset_cfg, session=parse_sessions("no_break")[0], session_exit=True)
 
     (trade,) = decode_analytics(runner.run_variants(task)[0]["_analytics"])["trades"]
 
