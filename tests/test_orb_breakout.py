@@ -89,3 +89,9 @@ def test_orb_strategies_do_not_mutate_input(module, stop):
     before = df.copy()
     signals_for(module, df)
     pd.testing.assert_frame_equal(df, before)
+
+
+@pytest.mark.parametrize("module", [orb_candle, orb_fvg, orb_combined], ids=["orb_candle", "orb_fvg", "orb_combined"])
+def test_orb_strategies_reject_a_session_too_short_for_the_opening_range(module):
+    with pytest.raises(ValueError, match="leave time after the 5m opening range"):
+        signals_for(module, make_combined_day(), parse_sessions("ny=09:30-09:35")[0])
