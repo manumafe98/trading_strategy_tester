@@ -207,7 +207,9 @@ def test_invalid_settings_raise(kwargs):
     [(100.0, 100.05, False), (100.0, 100.1, True), (100.03, 100.15, False), (100.03, 100.2, True)],
 )
 def test_wick_confirmation_breaks_a_swing_high_at_its_stop_entry_level(swing_high, bar_high, broken):
-    df = make_bars(highs=[99.8, swing_high, 99.9, bar_high], lows=[99.5, 99.6, 99.5, 99.6], closes=[99.7, 99.8, 99.7, 99.8])
+    df = make_bars(
+        highs=[99.8, swing_high, 99.9, bar_high], lows=[99.5, 99.6, 99.5, 99.6], closes=[99.7, 99.8, 99.7, 99.8]
+    )
 
     result = market_structure(df, swing_length=1, confirmation="wick", tick_size=0.1)
 
@@ -219,7 +221,9 @@ def test_wick_confirmation_breaks_a_swing_high_at_its_stop_entry_level(swing_hig
     [(100.0, 99.95, False), (100.0, 99.9, True), (99.97, 99.85, False), (99.97, 99.8, True)],
 )
 def test_wick_confirmation_breaks_a_swing_low_at_its_stop_entry_level(swing_low, bar_low, broken):
-    df = make_bars(highs=[100.5, 100.4, 100.5, 100.4], lows=[100.2, swing_low, 100.1, bar_low], closes=[100.3, 100.2, 100.3, 100.2])
+    df = make_bars(
+        highs=[100.5, 100.4, 100.5, 100.4], lows=[100.2, swing_low, 100.1, bar_low], closes=[100.3, 100.2, 100.3, 100.2]
+    )
 
     result = market_structure(df, swing_length=1, confirmation="wick", tick_size=0.1)
 

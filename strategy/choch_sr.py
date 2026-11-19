@@ -104,26 +104,26 @@ def validate_choice(name: str, value, choices) -> None:
 
 
 def parse_touch_buckets(text: str) -> list[tuple[float, float, str]]:
-    bands = []
+    buckets = []
     previous_high = 0.0
-    for band in text.split("|"):
-        band = band.strip()
+    for bucket in text.split("|"):
+        bucket = bucket.strip()
         try:
-            if band.endswith("+"):
-                low, high = float(band[:-1]), math.inf
+            if bucket.endswith("+"):
+                low, high = float(bucket[:-1]), math.inf
             else:
-                low_text, _, high_text = band.partition("-")
+                low_text, _, high_text = bucket.partition("-")
                 low, high = float(low_text), float(high_text)
         except ValueError:
-            raise ValueError(f"touch_buckets band {band!r} must look like 5-15 or 60+") from None
+            raise ValueError(f"touch_buckets band {bucket!r} must look like 5-15 or 60+") from None
         if low != previous_high or not high > low:
             raise ValueError(
                 "touch_buckets must be increasing bands from 0 with no gaps or overlaps, open-ended only at the end"
             )
         label = f"{low:g}+m" if high == math.inf else f"{low:g}-{high:g}m"
-        bands.append((low, high, label))
+        buckets.append((low, high, label))
         previous_high = high
-    return bands
+    return buckets
 
 
 class Touch:
@@ -410,8 +410,8 @@ def calculate_metrics(data, signals, trades, asset, timeframe, params):
     r_key = "net_realized_r" if params["with_costs"] else "realized_r"
     metrics = {}
     for low, high, label in parse_touch_buckets(params["touch_buckets"]):
-        band_r = [float(trade[r_key]) for trade in trades if low <= trade["touch_to_choch_minutes"] < high]
-        metrics[f"Trades {label}"] = len(band_r)
-        metrics[f"Win rate {label}"] = round(sum(r > 0 for r in band_r) / len(band_r) * 100, 2) if band_r else math.nan
-        metrics[f"Avg R {label}"] = round(sum(band_r) / len(band_r), 4) if band_r else math.nan
+        bucket_r = [float(trade[r_key]) for trade in trades if low <= trade["touch_to_choch_minutes"] < high]
+        metrics[f"Trades {label}"] = len(bucket_r)
+        metrics[f"Win rate {label}"] = round(sum(r > 0 for r in bucket_r) / len(bucket_r) * 100, 2) if bucket_r else math.nan
+        metrics[f"Avg R {label}"] = round(sum(bucket_r) / len(bucket_r), 4) if bucket_r else math.nan
     return metrics
