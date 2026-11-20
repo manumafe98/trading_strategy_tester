@@ -77,7 +77,7 @@ def find_breakouts(df: pd.DataFrame, session: SessionSpec, orb_minutes: int) -> 
     work = work[in_session_window(work["_session_minute"], session)]
     breakouts = []
 
-    for day, day_data in work.groupby("_session_date", sort=True):
+    for day, day_data in work.groupby("_window_day", sort=True):
         minute = day_data["_session_minute"].to_numpy()
         in_orb = minute < orb_minutes
         if not in_orb.any():

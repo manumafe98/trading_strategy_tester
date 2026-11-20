@@ -37,8 +37,12 @@ The configured trading day of an asset, starting at its local session start time
 _Avoid_: session, trading day
 
 **Session window**:
-A named local time range that limits entries for a variant and, for ORB strategies, anchors the opening range; it may cross midnight, and its day starts at its own start time.
+A named local time range that limits entries for a variant and, for ORB strategies, anchors the opening range; it may cross midnight, and its window day starts at its own start time.
 _Avoid_: session, trading hours
+
+**Window day**:
+The day a session window instance starts on; a bar after midnight in a window that crosses midnight belongs to the window day before.
+_Avoid_: session date, trading day
 
 **Daily break**:
 The span around the 17:00 New York close when FX spreads widen until liquidity returns, taken as 16:45-18:15 New York time.

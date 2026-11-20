@@ -122,7 +122,7 @@ def test_parse_sessions_rejects_subrange_running_past_its_preset_end(value):
 
 @pytest.mark.parametrize("value", ["ny=12:00-12:00", "no_break=22:00-22:00", "full=18:00-18:00"])
 def test_parse_sessions_rejects_subrange_whose_start_equals_its_end(value):
-    with pytest.raises(ValueError, match="range must increase"):
+    with pytest.raises(ValueError, match="range must not be empty"):
         parse_sessions(value)
 
 

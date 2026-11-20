@@ -28,7 +28,7 @@ SESSION_PRESETS = {
     "full": ("America/New_York", 18 * 60 + 15, 18 * 60 + 15),
     "no_break": ("America/New_York", 18 * 60 + 15, 16 * 60 + 45),
 }
-REGION_SESSIONS = ("sydney", "asia", "london", "ny")
+REGION_WINDOWS = ("sydney", "asia", "london", "ny")
 MINUTES_PER_DAY = 24 * 60
 
 
@@ -66,13 +66,13 @@ def _session_spec(name: str, start_minute: int | None = None, end_minute: int | 
     if start_minute is None:
         start_minute, end_minute = preset_start, preset_end
     elif start_minute == end_minute:
-        raise ValueError(f"--sessions {name} range must increase, got: {_format_clock(start_minute)}-{_format_clock(end_minute)}")
+        raise ValueError(f"--sessions {name} range must not be empty, got: {_format_clock(start_minute)}-{_format_clock(end_minute)}")
     elif not _within_preset(start_minute, end_minute, preset_start, preset_end):
         raise ValueError(
             f"--sessions {name} range must stay inside {_format_clock(preset_start)}-{_format_clock(preset_end)}"
         )
-    full = start_minute == preset_start and end_minute == preset_end
-    label = name if full else f"{name}={_format_clock(start_minute)}-{_format_clock(end_minute)}"
+    whole_preset = start_minute == preset_start and end_minute == preset_end
+    label = name if whole_preset else f"{name}={_format_clock(start_minute)}-{_format_clock(end_minute)}"
     return {
         "name": name,
         "timezone": timezone,
@@ -105,7 +105,7 @@ def parse_sessions(value: str | None) -> list[SessionSpec]:
         if key == "regions":
             if has_window:
                 raise ValueError("--sessions regions does not accept a custom time range")
-            expanded = [_session_spec(session_name) for session_name in REGION_SESSIONS]
+            expanded = [_session_spec(session_name) for session_name in REGION_WINDOWS]
         else:
             if has_window:
                 start_text, dash, end_text = window.partition("-")
@@ -144,7 +144,7 @@ def add_session_columns(df: pd.DataFrame, session: SessionSpec) -> pd.DataFrame:
     work = df.copy(deep=False)
     local = local_index(work.index, session["timezone"])
     minutes = _window_minutes(local, session)
-    work["_session_date"] = _window_days(local, minutes)
+    work["_window_day"] = _window_days(local, minutes)
     work["_session_minute"] = minutes
     return work
 
