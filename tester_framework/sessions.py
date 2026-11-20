@@ -15,16 +15,21 @@ class SessionSpec(TypedDict):
     end: str
     start_minute: int
     end_minute: int
+    length_minute: int
     label: str
 
 
 SESSION_PRESETS = {
+    "sydney": ("Australia/Sydney", 7 * 60, 16 * 60),
     "asia": ("Asia/Tokyo", 9 * 60, 15 * 60),
     "london": ("Europe/London", 8 * 60, 16 * 60 + 30),
     "ny": ("America/New_York", 9 * 60 + 30, 16 * 60),
     "ny_bank": ("America/New_York", 8 * 60, 17 * 60),
+    "full": ("America/New_York", 18 * 60 + 15, 18 * 60 + 15),
+    "no_break": ("America/New_York", 18 * 60 + 15, 16 * 60 + 45),
 }
-ALL_SESSIONS = ("asia", "london", "ny")
+REGION_WINDOWS = ("sydney", "asia", "london", "ny")
+MINUTES_PER_DAY = 24 * 60
 
 
 def _parse_clock(value: str) -> int:
@@ -45,20 +50,29 @@ def _format_clock(minutes: int) -> str:
     return f"{minutes // 60:02d}:{minutes % 60:02d}"
 
 
+def _window_length(start_minute: int, end_minute: int) -> int:
+    return (end_minute - start_minute) % MINUTES_PER_DAY or MINUTES_PER_DAY
+
+
+def _within_preset(start_minute: int, end_minute: int, preset_start: int, preset_end: int) -> bool:
+    offset = (start_minute - preset_start) % MINUTES_PER_DAY
+    return offset + _window_length(start_minute, end_minute) <= _window_length(preset_start, preset_end)
+
+
 def _session_spec(name: str, start_minute: int | None = None, end_minute: int | None = None) -> SessionSpec:
     if name not in SESSION_PRESETS:
-        raise ValueError(f"--sessions supports only asia, london, ny, ny_bank, all, or none; got: {name}")
+        raise ValueError(f"--sessions supports only sydney, asia, london, ny, ny_bank, full, no_break, regions, or none; got: {name}")
     timezone, preset_start, preset_end = SESSION_PRESETS[name]
-    start_minute = preset_start if start_minute is None else start_minute
-    end_minute = preset_end if end_minute is None else end_minute
-    if start_minute >= end_minute:
-        raise ValueError(f"--sessions {name} range must increase, got: {_format_clock(start_minute)}-{_format_clock(end_minute)}")
-    if start_minute < preset_start or end_minute > preset_end:
+    if start_minute is None:
+        start_minute, end_minute = preset_start, preset_end
+    elif start_minute == end_minute:
+        raise ValueError(f"--sessions {name} range must not be empty, got: {_format_clock(start_minute)}-{_format_clock(end_minute)}")
+    elif not _within_preset(start_minute, end_minute, preset_start, preset_end):
         raise ValueError(
             f"--sessions {name} range must stay inside {_format_clock(preset_start)}-{_format_clock(preset_end)}"
         )
-    full = start_minute == preset_start and end_minute == preset_end
-    label = name if full else f"{name}={_format_clock(start_minute)}-{_format_clock(end_minute)}"
+    whole_preset = start_minute == preset_start and end_minute == preset_end
+    label = name if whole_preset else f"{name}={_format_clock(start_minute)}-{_format_clock(end_minute)}"
     return {
         "name": name,
         "timezone": timezone,
@@ -66,6 +80,7 @@ def _session_spec(name: str, start_minute: int | None = None, end_minute: int | 
         "end": _format_clock(end_minute),
         "start_minute": start_minute,
         "end_minute": end_minute,
+        "length_minute": _window_length(start_minute, end_minute),
         "label": label,
     }
 
@@ -86,9 +101,11 @@ def parse_sessions(value: str | None) -> list[SessionSpec]:
         name, has_window, window = item.partition("=")
         key = name.strip().lower()
         if key == "all":
+            raise ValueError("--sessions all was renamed to regions")
+        if key == "regions":
             if has_window:
-                raise ValueError("--sessions all does not accept a custom time range")
-            expanded = [_session_spec(session_name) for session_name in ALL_SESSIONS]
+                raise ValueError("--sessions regions does not accept a custom time range")
+            expanded = [_session_spec(session_name) for session_name in REGION_WINDOWS]
         else:
             if has_window:
                 start_text, dash, end_text = window.partition("-")
@@ -126,8 +143,9 @@ def local_index(index, timezone: str) -> pd.DatetimeIndex:
 def add_session_columns(df: pd.DataFrame, session: SessionSpec) -> pd.DataFrame:
     work = df.copy(deep=False)
     local = local_index(work.index, session["timezone"])
-    work["_session_date"] = local.tz_localize(None).normalize()
-    work["_session_minute"] = _local_minutes(local)
+    minutes = _window_minutes(local, session)
+    work["_window_day"] = _window_days(local, minutes)
+    work["_session_minute"] = minutes
     return work
 
 
@@ -152,7 +170,7 @@ def filter_signals(signals: pd.DataFrame, session: SessionSpec | None) -> pd.Dat
         return frame
     if "time" not in frame.columns:
         frame = frame.reset_index().rename(columns={frame.index.name or "index": "time"})
-    mask = in_session_window(_local_minutes(local_index(frame["time"], session["timezone"])), session)
+    mask = in_session_window(_window_minutes(local_index(frame["time"], session["timezone"]), session), session)
     return frame.loc[mask].copy()
 
 
@@ -160,14 +178,23 @@ def _local_minutes(local: pd.DatetimeIndex) -> pd.Index:
     return local.hour * 60 + local.minute
 
 
+def _window_minutes(local: pd.DatetimeIndex, session: SessionSpec) -> pd.Index:
+    return (_local_minutes(local) - session["start_minute"]) % MINUTES_PER_DAY
+
+
+def _window_days(local: pd.DatetimeIndex, minutes: pd.Index) -> pd.DatetimeIndex:
+    return (local.tz_localize(None) - pd.to_timedelta(minutes, unit="min")).normalize()
+
+
 def in_session_window(minutes, session: SessionSpec) -> np.ndarray:
-    return np.asarray((minutes >= session["start_minute"]) & (minutes < session["end_minute"]))
+    return np.asarray(minutes < session["length_minute"])
 
 
 def session_exit_bars(index, session: SessionSpec) -> tuple[np.ndarray, np.ndarray]:
     local = local_index(index, session["timezone"])
-    in_window = in_session_window(_local_minutes(local), session)
-    days = local.tz_localize(None).normalize().asi8
+    minutes = _window_minutes(local, session)
+    in_window = in_session_window(minutes, session)
+    days = _window_days(local, minutes).asi8
     last = in_window.copy()
     last[:-1] &= ~(in_window[1:] & (days[1:] == days[:-1]))
     if len(last):

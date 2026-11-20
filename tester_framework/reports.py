@@ -19,6 +19,7 @@ from .settings import (
 )
 from .split import SELECT_BY, Split, entered_in_sample, selection_tags, split_tags
 from .strategy_params import format_param_value
+from .sessions import SESSION_PRESETS
 from .utils import clean_exit_name, net_value, variant_count, variant_parts
 
 
@@ -41,7 +42,7 @@ FILTER_SPECS = (
 FILTER_ORDERS = {
     "high-timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
     "low-timeframe": {value: index for index, value in enumerate(TIMEFRAMES)},
-    "session": {value: index for index, value in enumerate(("asia", "london", "ny"))},
+    "session": {value: index for index, value in enumerate(SESSION_PRESETS)},
     "exit-mode": {value: index for index, value in enumerate(("fixed", "trailing", "partial"))},
 }
 RESULTS_TEMPLATE = Path(__file__).resolve().parent / "templates" / "results.html"

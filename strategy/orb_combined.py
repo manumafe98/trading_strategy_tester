@@ -37,20 +37,20 @@ OUTPUT_COLUMNS = [
 
 
 def generate_signals(df, asset, timeframe, params):
-    session, orb_minutes, start_minute, end_minute = session_params(params, timeframe, "orb_combined")
+    session, orb_minutes = session_params(params, timeframe, "orb_combined")
     tick_size = float((params or {}).get("tick_size", 0))
     if tick_size <= 0:
         raise ValueError("orb_combined requires a positive tick_size strategy parameter")
     places = decimal_places(tick_size)
 
     rows = []
-    for breakout in find_breakouts(df, session, orb_minutes, start_minute, end_minute):
+    for breakout in find_breakouts(df, session, orb_minutes):
         fvgs = track_fvgs_to_bar(
             breakout.day_data,
             breakout.bar_index,
             minute_col="_session_minute",
-            fvg_start=start_minute,
-            fvg_end=end_minute,
+            fvg_start=0,
+            fvg_end=session["length_minute"],
         )
         fvg = find_qualifying_fvg(fvgs, breakout.direction, require_ext=True)
         if fvg is None or fvg.ext_price is None:

@@ -471,7 +471,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--high_timeframe", help="comma list, default configured list")
     p.add_argument("--low_timeframe", help="comma list; only for strategies that declare LOW_TIMEFRAME, which is the default")
     p.add_argument("--timeframe", nargs="?", action=RemovedTimeframeFlag, help=argparse.SUPPRESS)
-    p.add_argument("--sessions", help="comma list of asia, london, ny, ny_bank, all, none, or custom ranges like ny=09:30-12:00")
+    p.add_argument("--sessions", help="comma list of sydney, asia, london, ny, ny_bank, full, no_break, regions, none, or custom ranges like ny=09:30-12:00")
     p.add_argument(
         "--time_period",
         type=time_period_value,

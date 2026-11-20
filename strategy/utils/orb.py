@@ -22,19 +22,18 @@ def timeframe_minutes(timeframe: str) -> int:
     return TIMEFRAME_MINUTES[timeframe]
 
 
-def session_params(params: dict | None, timeframe: str, strategy_name: str) -> tuple[SessionSpec, int, int, int]:
+def session_params(params: dict | None, timeframe: str, strategy_name: str) -> tuple[SessionSpec, int]:
     orb_minutes = timeframe_minutes(timeframe)
     session = (params or {}).get("session")
     if not session:
         raise ValueError(REQUIRED_SESSION_MESSAGE)
     try:
-        start_minute = int(session["start_minute"])
-        end_minute = int(session["end_minute"])
+        length_minute = int(session["length_minute"])
     except (KeyError, TypeError, ValueError) as exc:
         raise ValueError(f"{strategy_name} requires a valid session strategy parameter") from exc
-    if end_minute - start_minute <= orb_minutes:
+    if length_minute <= orb_minutes:
         raise ValueError(f"{strategy_name} session must leave time after the {timeframe} opening range")
-    return session, orb_minutes, start_minute, end_minute
+    return session, orb_minutes
 
 
 @dataclass(frozen=True)
@@ -71,22 +70,22 @@ class Breakout:
         }
 
 
-def find_breakouts(df: pd.DataFrame, session: SessionSpec, orb_minutes: int, start_minute: int, end_minute: int) -> list[Breakout]:
+def find_breakouts(df: pd.DataFrame, session: SessionSpec, orb_minutes: int) -> list[Breakout]:
     if df.empty:
         return []
     work = add_session_columns(df, session)
     work = work[in_session_window(work["_session_minute"], session)]
     breakouts = []
 
-    for day, day_data in work.groupby("_session_date", sort=True):
+    for day, day_data in work.groupby("_window_day", sort=True):
         minute = day_data["_session_minute"].to_numpy()
-        in_orb = (minute >= start_minute) & (minute < start_minute + orb_minutes)
+        in_orb = minute < orb_minutes
         if not in_orb.any():
             continue
         range_high = float(day_data["high"][in_orb].max())
         range_low = float(day_data["low"][in_orb].min())
         closes = day_data["close"].to_numpy(dtype=float)
-        after_orb = (minute >= start_minute + orb_minutes) & (minute < end_minute)
+        after_orb = (minute >= orb_minutes) & (minute < session["length_minute"])
         hits = np.flatnonzero(after_orb & ((closes > range_high) | (closes < range_low)))
         if not len(hits):
             continue

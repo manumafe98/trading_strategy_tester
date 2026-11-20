@@ -82,9 +82,24 @@ Sizing is fixed-fractional: the risk percentage is applied to current net equity
 
 Every asset in `config/assets.json` must define `min_risk_ticks` (4 for MNQ, MES and MGC; 1 for EURUSD, GBPUSD and BTCUSD); a missing value fails at config load. For every strategy, a signal whose entry-to-stop distance, after the stop is rounded to the tick, is below `min_risk_ticks` × tick size is discarded and counted in `Discarded`. A distance exactly at the minimum is traded. This stops one-tick stops from producing huge positions and absurd R.
 
-`--sessions` filters entries by market-local session windows for any strategy. Use presets like `asia`, `london`, `ny`, expand `all`, or pass subranges such as `ny=09:30-12:00` and `london=08:00-10:00`. Omit it, or use `--sessions none`, to keep the unfiltered framework behavior. ORB strategies override this and require a real session value.
+`--sessions` filters entries by session windows, which are named local time ranges, for any strategy. The values and their hours are:
 
-The `ny_bank` preset is America/New_York 08:00-17:00, for a true New York bank close. Subranges such as `ny_bank=09:30-17:00` must stay inside it, like every preset. `all` expands to `asia`, `london` and `ny` only; `ny_bank` overlaps `ny` and must be named.
+- `sydney`: 07:00-16:00 Australia/Sydney, following Australian daylight saving.
+- `asia`: 09:00-15:00 Asia/Tokyo.
+- `london`: 08:00-16:30 Europe/London.
+- `ny`: 09:30-16:00 America/New_York.
+- `ny_bank`: 08:00-17:00 America/New_York, for a true New York bank close.
+- `full`: the whole day, 18:15 to 18:15 the next day in America/New_York. It works for every strategy, so `--sessions ny,full` compares a regional window with the whole day. It does not skip the daily break.
+- `no_break`: 18:15 to 16:45 the next day in America/New_York, 22.5 hours that skip the daily break (16:45-18:15 New York time).
+- `regions`: runs `sydney`, `asia`, `london` and `ny` as separate variants. It replaces `all`, which now fails with a message naming `regions`. It takes no custom range, and it leaves out `ny_bank`, `full` and `no_break`, which overlap the regional windows and must be named.
+
+Omit `--sessions`, or use `--sessions none` on its own, to keep the unfiltered framework behavior. ORB strategies require a real `--sessions` value.
+
+`full` and `no_break` are anchored to New York time, so their edges stay at 16:45 and 18:15 New York through daylight saving changes, matching the daily break. Signals are filtered by their bar's start, so without `--session_exit` an entry from the last bar of a `no_break` window can fill at 16:45, inside the break; `--session_exit` discards such fills. With `--session_exit`, `no_break` trades close at the close of the last bar starting before 16:45 New York, and `full` trades at the close of the last bar starting before 18:15 New York.
+
+A window may cross midnight. Its window day is the day its start falls on, so a bar after midnight belongs to the window that began the evening before. ORB opening ranges and `--session_exit` group bars by window day.
+
+A subrange, `name=HH:MM-HH:MM`, is measured from the preset's start and must lie inside the preset. `no_break=22:00-03:00` is accepted because it lies inside `no_break`. `no_break=17:30-20:00` is rejected because it starts in the daily break, and the message names the preset's range, 18:15-16:45. A subrange can cross midnight only when its preset does, so `ny=22:00-03:00` is rejected, and a subrange whose start equals its end is rejected too.
 
 `--session_exit` (off by default) closes a trade still open at the end of its variant's session window at the close of the last execution bar that starts inside the window, with exit reason `session`. It applies to every exit mode and closes whatever position remains after partial targets. The window end is exclusive, matching the session filter, and DST follows the window's timezone. If bars are missing at the window end, the exit happens on the last in-window bar present. Costs apply as for any exit. With the flag on, a signal whose fill would land outside the window, or a close entry on the window's last bar, is discarded; a trade still open when the data ends inside a window takes an end exit, as below. The flag requires `--sessions` with a session window and is rejected without it or with `--sessions none`. For example: `--sessions ny_bank=09:30-17:00 --session_exit`.
 
@@ -148,7 +163,7 @@ def generate_signals(df, asset, timeframe, params):
 
 `side` must be `long` or `short`. The strategy owns entries and stops; the framework owns fixed, trailing, and partial exits.
 
-`params["tick_size"]` contains the configured price tick for the current asset. `params["pip_size"]` contains its pip, the unit of `pips` settings: the optional `pip_size` asset field (0.0001 for EURUSD and GBPUSD), defaulting to `tick_size`. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`.
+`params["tick_size"]` contains the configured price tick for the current asset. `params["pip_size"]` contains its pip, the unit of `pips` settings: the optional `pip_size` asset field (0.0001 for EURUSD and GBPUSD), defaulting to `tick_size`. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`. Positions in the window are minutes from its start, not midnight, and a bar is inside while its position is below `length_minute`. The window day is the day the window starts on, so a bar after midnight in a window that crosses midnight belongs to the window that began the evening before. `add_session_columns` in `tester_framework/sessions.py` computes both.
 
 The input `df` is shared across timeframes; strategies **must not mutate** it. Copy inside the strategy if needed. The loader runs a strategy module outside `sys.modules`, so a strategy can't define `@dataclass` classes.
 
@@ -220,7 +235,7 @@ Three Opening Range Breakout strategies share common logic in `strategy/utils/`:
 - **`orb_fvg`** — SL from a Fair Value Gap boundary (FVG bottom - tick for long, FVG top + tick for short). Only trades when a directional FVG exists at breakout time.
 - **`orb_combined`** — SL from the FVG extension line (ext price - tick for long, ext price + tick for short). Only trades when a directional FVG with an extension line exists.
 
-All three use a 1-minute low timeframe (`LOW_TIMEFRAME = "1m"`). For these strategies, `--high_timeframe` is the opening-range duration rather than the bar size they trade on; every configured intraday duration from 1 minute through 1 hour is supported. `--low_timeframe 1m,5m` compares 1-minute and 5-minute triggers and fills. They require `--sessions` and build the ORB from that session's local start time, then look for breakouts until the session window ends. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
+All three use a 1-minute low timeframe (`LOW_TIMEFRAME = "1m"`). For these strategies, `--high_timeframe` is the opening-range duration rather than the bar size they trade on; every configured intraday duration from 1 minute through 1 hour is supported. `--low_timeframe 1m,5m` compares 1-minute and 5-minute triggers and fills. They require `--sessions` and measure every bar's position from the window's start, not midnight: the ORB covers the first `--high_timeframe` minutes of the window, and breakouts count until the window ends, grouped by window day. On `no_break` the ORB starts at 18:15 New York, and a breakout at 02:00 belongs to the window that began the evening before. A window no longer than the opening range is rejected. FVG detection and mitigation tracking use the same session window. The SL offset uses the asset's configured tick size.
 
 ```bash
 "$PY" -m tester_framework --strategies orb_candle,orb_fvg,orb_combined --asset MNQ --high_timeframe 5m --sessions ny=09:30-12:00 --risk_reward_ratio 2 --with_costs

@@ -371,7 +371,7 @@ def test_filter_options_use_domain_order():
             "Asset": ["MNQ", "MES", "MGC", "MES", "MES"],
             "High TF": ["15m", "10m", "30m", "5m", "1h"],
             "Low TF": ["1m", "5m", "1m", "1m", "2m"],
-            "Session": ["ny", "london", "asia", "ny", "ny"],
+            "Session": ["ny", "london", "asia", "ny", "sydney"],
             "RR": ["5", "4", "3", "1", "2"],
             "Exit Mode": ["partial", "trailing", "fixed", "fixed", "fixed"],
             "_risk_pct": [2, 1, 0.5, 1, 1],
@@ -389,7 +389,7 @@ def test_filter_options_use_domain_order():
     assert options("asset") == ["MES", "MGC", "MNQ"]
     assert options("high-timeframe") == ["5m", "10m", "15m", "30m", "1h"]
     assert options("low-timeframe") == ["1m", "2m", "5m"]
-    assert options("session") == ["asia", "london", "ny"]
+    assert options("session") == ["sydney", "asia", "london", "ny"]
     assert options("rr") == ["1", "2", "3", "4", "5"]
     assert options("exit-mode") == ["fixed", "trailing", "partial"]
     assert options("risk") == ["0.5%", "1%", "2%"]
