@@ -1,6 +1,6 @@
 //@version=6
 indicator("Key Levels", overlay=true, max_lines_count=500, max_labels_count=500)
- 
+
 // ── Previous Day ──
 grpDay     = "Previous Day"
 showPDH    = input.bool(true,        title="Show PDH",   group=grpDay)
@@ -35,7 +35,7 @@ colorMonthOpen = input.color(color.purple,   title="Monthly Open Color",group=gr
 grpGeneral = "General"
 cutOnTouch = input.bool(true, title="Cut line when price touches it", group=grpGeneral)
 showStatusTable = input.bool(false, title="Show Status Table", group=grpGeneral)
- 
+
 // =============================================================================
 // FIX 1 - DIRECTIONAL TOUCH DETECTION + GAP CONSUMPTION
 // =============================================================================
@@ -53,15 +53,15 @@ showStatusTable = input.bool(false, title="Show Status Table", group=grpGeneral)
 //
 // Open levels (DO / WO / MO) can be approached from either side, so we keep
 // the straddle check AND add explicit gap detection via previous close.
- 
+
 // Resistance consumed: any candle that reaches or exceeds the level (covers gaps up)
 touchesResistance(float level) =>
     high >= level
- 
+
 // Support consumed: any candle that reaches or falls through the level (covers gaps down)
 touchesSupport(float level) =>
     low <= level
- 
+
 // Open-price level consumed: straddle OR price gaps past it in either direction.
 // Split into named bools to avoid multi-line expression parser errors.
 touchesOpen(float level) =>
@@ -70,10 +70,10 @@ touchesOpen(float level) =>
     bool gapUp     = prevKnown and open >= level and close[1] < level
     bool gapDown   = prevKnown and open <= level and close[1] > level
     straddle or gapUp or gapDown
- 
+
 endTime(int hitT) =>
     na(hitT) ? time : hitT
- 
+
 // =============================================================================
 // State - previous day / week storage
 // =============================================================================
@@ -85,17 +85,17 @@ var int   pwhTime  = na
 var float pwhPrice = na
 var int   pwlTime  = na
 var float pwlPrice = na
- 
+
 var int   doStartTime = na
 var int   woStartTime = na
 var int   moStartTime = na
- 
+
 // Current period high/low trackers
 var int   currentDayHighTime = na
 var float currentDayHigh     = na
 var int   currentDayLowTime  = na
 var float currentDayLow      = na
- 
+
 var int   currentWeekHighTime = na
 var float currentWeekHigh     = na
 var int   currentWeekLowTime  = na
@@ -123,25 +123,25 @@ var int pmlHitTime = na
 var int doHitTime  = na
 var int woHitTime  = na
 var int moHitTime  = na
- 
+
 // =============================================================================
 // New Day
 // =============================================================================
 bool isNewDay = ta.change(time("D")) != 0
- 
+
 if isNewDay
     pdhTime  := currentDayHighTime
     pdhPrice := currentDayHigh
     pdlTime  := currentDayLowTime
     pdlPrice := currentDayLow
- 
+
     currentDayHighTime := time
     currentDayHigh     := high
     currentDayLowTime  := time
     currentDayLow      := low
- 
+
     doStartTime := time
- 
+
     pdhHitTime := na
     pdlHitTime := na
     doHitTime  := na
@@ -149,29 +149,29 @@ else
     if na(currentDayHigh) or high > currentDayHigh
         currentDayHigh     := high
         currentDayHighTime := time
- 
+
     if na(currentDayLow) or low < currentDayLow
         currentDayLow     := low
         currentDayLowTime := time
- 
+
 // =============================================================================
 // New Week
 // =============================================================================
 bool isNewWeek = ta.change(time("W")) != 0
- 
+
 if isNewWeek
     pwhTime  := currentWeekHighTime
     pwhPrice := currentWeekHigh
     pwlTime  := currentWeekLowTime
     pwlPrice := currentWeekLow
- 
+
     currentWeekHighTime := time
     currentWeekHigh     := high
     currentWeekLowTime  := time
     currentWeekLow      := low
- 
+
     woStartTime := time
- 
+
     pwhHitTime := na
     pwlHitTime := na
     woHitTime  := na
@@ -179,11 +179,11 @@ else
     if na(currentWeekHigh) or high > currentWeekHigh
         currentWeekHigh     := high
         currentWeekHighTime := time
- 
+
     if na(currentWeekLow) or low < currentWeekLow
         currentWeekLow     := low
         currentWeekLowTime := time
- 
+
 // =============================================================================
 // New Month
 // =============================================================================
@@ -213,33 +213,33 @@ else
     if na(currentMonthLow) or low < currentMonthLow
         currentMonthLow     := low
         currentMonthLowTime := time
- 
+
 // =============================================================================
 // Opens (HTF security calls)
 // =============================================================================
 dayOpen   = request.security(syminfo.tickerid, "D", open[0], lookahead=barmerge.lookahead_on)
 weekOpen  = request.security(syminfo.tickerid, "W", open[0], lookahead=barmerge.lookahead_on)
 monthOpen = request.security(syminfo.tickerid, "M", open[0], lookahead=barmerge.lookahead_on)
- 
+
 // =============================================================================
 // Touch detection - directional checks + gap detection
 // =============================================================================
- 
+
 // PDH = resistance: consumed when high reaches or exceeds the level
 if cutOnTouch and showPDH and na(pdhHitTime) and not na(pdhPrice) and not na(doStartTime) and time >= doStartTime
     if touchesResistance(pdhPrice)
         pdhHitTime := time
- 
+
 // PDL = support: consumed when low reaches or falls through the level
 if cutOnTouch and showPDL and na(pdlHitTime) and not na(pdlPrice) and not na(doStartTime) and time >= doStartTime
     if touchesSupport(pdlPrice)
         pdlHitTime := time
- 
+
 // PWH = resistance
 if cutOnTouch and showPWH and na(pwhHitTime) and not na(pwhPrice) and not na(woStartTime) and time >= woStartTime
     if touchesResistance(pwhPrice)
         pwhHitTime := time
- 
+
 // PWL = support
 if cutOnTouch and showPWL and na(pwlHitTime) and not na(pwlPrice) and not na(woStartTime) and time >= woStartTime
     if touchesSupport(pwlPrice)
@@ -259,15 +259,15 @@ if cutOnTouch and showPML and na(pmlHitTime) and not na(pmlPrice) and not na(moS
 if cutOnTouch and showDO and na(doHitTime) and not na(dayOpen) and not na(doStartTime) and time > doStartTime
     if touchesOpen(dayOpen)
         doHitTime := time
- 
+
 if cutOnTouch and showWO and na(woHitTime) and not na(weekOpen) and not na(woStartTime) and time > woStartTime
     if touchesOpen(weekOpen)
         woHitTime := time
- 
+
 if cutOnTouch and showMO and na(moHitTime) and not na(monthOpen) and not na(moStartTime) and time > moStartTime
     if touchesOpen(monthOpen)
         moHitTime := time
- 
+
 // =============================================================================
 // FIX 2 - LABEL PRIORITY: suppress PDH/PDL when coincident with PWH/PWL
 // =============================================================================
@@ -276,7 +276,7 @@ if cutOnTouch and showMO and na(moHitTime) and not na(monthOpen) and not na(moSt
 // and the PWH label is upgraded to "PWH (=PDH)" to show the confluence.
 // Same logic applies for PDL vs PWL.
 // Tolerance of one tick handles floating-point precision edge cases.
- 
+
 // Monthly suppresses Weekly, Weekly suppresses Daily
 // PMH vs PWH
 bool pwhSuppressedByPmh = showPMH and not na(pmhPrice) and not na(pwhPrice) and math.abs(pwhPrice - pmhPrice) <= syminfo.mintick
@@ -295,7 +295,7 @@ bool pdlSuppressedByPwl = showPWL and not na(pwlPrice) and not na(pdlPrice) and 
 
 bool pdlSuppressed = pdlSuppressedByPml or pdlSuppressedByPwl
 bool pwlSuppressed = pwlSuppressedByPml
- 
+
 // =============================================================================
 // Lines & labels - delete-and-redraw every bar
 // =============================================================================
@@ -321,7 +321,7 @@ var label monthOpenLabel = na
 
 // Status table for MCP consumption
 var table statusTbl = table.new(position.bottom_left, 4, 10)
- 
+
 // Delete previous drawings
 if not na(highLine)
     line.delete(highLine)
@@ -360,7 +360,7 @@ if not na(weekOpenLabel)
     label.delete(weekOpenLabel)
 if not na(monthOpenLabel)
     label.delete(monthOpenLabel)
- 
+
 // Draw PDH - skipped when same price as PWH (PWH takes priority)
 if showPDH and not na(pdhTime) and not na(pdhPrice) and not pdhSuppressed
     int x2 = cutOnTouch ? endTime(pdhHitTime) : time
@@ -420,19 +420,19 @@ if showPML and not na(pmlTime) and not na(pmlPrice)
         pmlText := "PML (=PWL)"
     monthLowLine  := line.new(x1=pmlTime, y1=pmlPrice, x2=x2, y2=pmlPrice, xloc=xloc.bar_time, color=colorPML, width=1)
     monthLowLabel := label.new(x=x2, y=pmlPrice, xloc=xloc.bar_time, yloc=yloc.price, text=pmlText, textcolor=colorPML, style=label.style_none, size=size.small, textalign=text.align_left)
- 
+
 // Draw Daily Open
 if showDO and not na(dayOpen) and not na(doStartTime)
     int x2 = cutOnTouch ? endTime(doHitTime) : time
     openLine  := line.new(x1=doStartTime, y1=dayOpen, x2=x2, y2=dayOpen, xloc=xloc.bar_time, color=colorDayOpen, width=1)
     openLabel := label.new(x=x2, y=dayOpen, xloc=xloc.bar_time, yloc=yloc.price, text="D", textcolor=colorDayOpen, style=label.style_none, size=size.small, textalign=text.align_left)
- 
+
 // Draw Weekly Open
 if showWO and not na(weekOpen) and not na(woStartTime)
     int x2 = cutOnTouch ? endTime(woHitTime) : time
     weekOpenLine  := line.new(x1=woStartTime, y1=weekOpen, x2=x2, y2=weekOpen, xloc=xloc.bar_time, color=colorWeekOpen, width=1)
     weekOpenLabel := label.new(x=x2, y=weekOpen, xloc=xloc.bar_time, yloc=yloc.price, text="W", textcolor=colorWeekOpen, style=label.style_none, size=size.small, textalign=text.align_left)
- 
+
 // Draw Monthly Open
 if showMO and not na(monthOpen) and not na(moStartTime)
     int x2 = cutOnTouch ? endTime(moHitTime) : time
