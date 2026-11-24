@@ -331,7 +331,12 @@ def _write_variant_pages(
     overall = analytics["outcomes"][0]
     session = row.get("Session")
     session_text = f' {session}' if pd.notna(session) else ""
-    title = f'{row["Strategy"]} {row["Asset"]} {row["High TF"]} {row["Low TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
+    stop_distance = row.get("Stop Distance")
+    stop_distance_text = f" | stop distance {stop_distance}" if isinstance(stop_distance, str) and stop_distance else ""
+    title = (
+        f'{row["Strategy"]} {row["Asset"]} {row["High TF"]} {row["Low TF"]}{session_text} | {row["RR"]}R | {row["Exit Mode"]}'
+        f"{stop_distance_text}"
+    )
     result = f'{overall["Wins"]}W / {overall["BE"]}BE / {overall["Losses"]}L | {_r(overall["Expectancy R"])}'
     trades = analytics["trades"]
     oos_cutoff = row.get("_oos_cutoff")
@@ -428,7 +433,7 @@ def _render_cell(col: str, value, color: str) -> str:
         return f'<td class="c"><span class="strategy-badge">{html_escape(str(value))}</span></td>'
     if col == "Asset":
         return f'<td><div class="asset-cell"><span class="asset-mark" style="background:{color}"></span><span class="asset" style="color:{color}">{html_escape(str(value))}</span></div></td>'
-    if col == "Params" and not value:
+    if col in {"Params", "Stop Distance"} and not value:
         return '<td class="c"></td>'
     if col in {"High TF", "Low TF"}:
         return f'<td class="c"><span class="tf-badge">{html_escape(str(value))}</span></td>'
@@ -453,7 +458,10 @@ def write_results_html(
 ) -> Path:
     RESULTS_DIR.mkdir(exist_ok=True)
     columns = columns or [column for column in table.columns if not column.startswith("_") and column not in {"Gross", "Net"}]
-    shown = ("Strategy", "Asset", "High TF", "Low TF", "Session", "Params", "RR", "Exit Mode", *FINANCIAL_COLUMNS, *SPLIT_COLUMNS)
+    shown = (
+        "Strategy", "Asset", "High TF", "Low TF", "Session", "Params", "RR", "Exit Mode", "Stop Distance", *FINANCIAL_COLUMNS,
+        *SPLIT_COLUMNS,
+    )
     columns = [column for column in shown if column in columns]
     generated = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -490,6 +498,7 @@ def write_results_html(
             f"{config.operation.replace('_', ' ')} operations",
             f"RR {config.risk_reward_ratio}",
             f"exit modes {config.exit_mode}",
+            *([f"stop distance {config.stop_distance}"] if config.stop_distance else []),
             f"{config.risk}% risk",
             f"${config.capital:,.0f} capital",
             f"costs {'on' if config.with_costs else 'off'}",

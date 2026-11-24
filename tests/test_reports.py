@@ -511,6 +511,28 @@ def test_results_page_header_names_the_chosen_ranking_metric_and_top_n(monkeypat
     assert "2 variants" in text
 
 
+def test_results_page_shows_the_stop_distance_column_and_each_variant_page_names_its_limits(monkeypatch, tmp_path):
+    monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path)
+    table = pd.concat([_split_table(), _split_table()], ignore_index=True)
+    table["Stop Distance"] = ["0.1-0.5%", ""]
+    config = RunConfig(
+        ("ema50",), "MGC", "1h", None, "2021", "local", "all", "1", "fixed", "1", 10_000, True, None, stop_distance="0.1-0.5%"
+    )
+
+    path = reports.write_results_html(table, config, result_columns("all", include_stop_distance=True))
+
+    html = path.read_text(encoding="utf-8")
+    header_row = re.search(r"<thead><tr>(.*?)</tr></thead>", html, re.S).group(1)
+    headers = [re.sub(r"<[^>]+>", "", value) for value in re.findall(r"<th[^>]*>(.*?)</th>", header_row)]
+    assert headers[headers.index("Exit Mode") + 1] == "Stop Distance"
+    assert '<span class="pill plain">0.1-0.5%</span>' in html
+    assert html.count('<td class="c"></td>') == 1
+    assert '<span class="tag">stop distance 0.1-0.5%</span>' in html
+    limited, unlimited = ((path.parent / "variants" / f"00000{i}.html").read_text(encoding="utf-8") for i in (0, 1))
+    assert "<title>ema50 MGC 1h 1h | 1R | fixed | stop distance 0.1-0.5%</title>" in limited
+    assert "<title>ema50 MGC 1h 1h | 1R | fixed</title>" in unlimited
+
+
 def test_reset_output_dirs_empties_folders_inside_root(monkeypatch, tmp_path):
     results_dir = tmp_path / "results"
     (results_dir / "old_bundle").mkdir(parents=True)
