@@ -140,7 +140,7 @@ f_end(Zone z) =>
     box.set_right(z.area, time)
     line.set_extend(z.drawing, extend.none)
     line.set_x2(z.drawing, time)
-    label.set_x(z.tag, time)
+    label.delete(z.tag)
 
 f_erase(Zone z) =>
     box.delete(z.area)
