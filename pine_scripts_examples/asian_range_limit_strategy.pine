@@ -38,7 +38,9 @@ minStopPips = input.float(4, "Stop Min / Max (Pips)", minval = 0, step = 0.5, in
 maxStopPips = input.float(10, "", minval = 0, step = 0.5, inline = "stop_pips", group = G_FILTERS)
 
 slBufferPips = input.float(1.0, "SL Buffer (Pips)", minval = 0, step = 0.5, group = G_RISK, tooltip = "Added beyond the wick extreme or the FVG far edge. 1 pip = 0.0001 on Forex (0.01 for JPY-quoted pairs) and 1 tick otherwise.")
-rewardRisk = input.float(3.0, "RR", minval = 0.1, step = 0.5, group = G_RISK, tooltip = "Fixed RR target: entry plus or minus RR times the stop distance.")
+targetMode = input.string("Asian Range middle", "Take Profit", options = ["Fixed RR", "Asian Range high", "Asian Range middle", "Asian Range low"], group = G_RISK, tooltip = "Fixed RR targets entry plus or minus RR times the stop distance. An Asian Range target sits at that level on either side of the trade.")
+rewardRisk = input.float(3.0, "RR", minval = 0.1, step = 0.5, group = G_RISK, tooltip = "The target of Fixed RR, and the minimum RR of an Asian Range target. A zone whose range target pays less, or lies behind its entry, falls through to the next-nearest zone on its side.")
+closeAtWindowEnd = input.bool(false, "Close at Window End", group = G_RISK, tooltip = "Close an open trade at the close of the last bar of the trading window. Off: the trade runs to its stop or target.")
 accountSize = input.float(10000, "Account Size ($)", minval = 1, step = 1000, group = G_RISK)
 riskPercent = input.float(1.0, "Risk per Trade (%)", minval = 0.01, maxval = 100, step = 0.1, group = G_RISK)
 
@@ -165,37 +167,51 @@ f_stop_in_band(float entryPrice, float stopPrice) =>
     float maximum = stopDistanceUnit == "%" ? maxStopPercent : maxStopPips
     measured >= minimum - 0.00000001 and measured <= maximum + 0.00000001
 
-f_rejection(float entryPrice, float stopPrice, float rangeEdge) =>
-    not f_within_zone_distance(entryPrice, rangeEdge) ? "Too far" : not f_stop_in_band(entryPrice, stopPrice) ? "Stop out of band" : na(f_quantity(entryPrice, stopPrice)) ? "No size" : ""
+f_target(float entryPrice, float stopPrice, float rangeHigh, float rangeLow) =>
+    switch targetMode
+        "Asian Range high" => math.round_to_mintick(rangeHigh)
+        "Asian Range middle" => math.round_to_mintick((rangeHigh + rangeLow) / 2)
+        "Asian Range low" => math.round_to_mintick(rangeLow)
+        => math.round_to_mintick(entryPrice + (entryPrice - stopPrice) * rewardRisk)
+
+f_reward_risk(float entryPrice, float stopPrice, float targetPrice) =>
+    (targetPrice - entryPrice) / (entryPrice - stopPrice)
+
+f_meets_min_rr(float entryPrice, float stopPrice, float targetPrice) =>
+    targetMode == "Fixed RR" or f_reward_risk(entryPrice, stopPrice, targetPrice) >= rewardRisk - 0.00000001
+
+f_rejection(float entryPrice, float stopPrice, float rangeEdge, float rangeHigh, float rangeLow) =>
+    not f_within_zone_distance(entryPrice, rangeEdge) ? "Too far" : not f_stop_in_band(entryPrice, stopPrice) ? "Stop out of band" : not f_meets_min_rr(entryPrice, stopPrice, f_target(entryPrice, stopPrice, rangeHigh, rangeLow)) ? "RR below minimum" : na(f_quantity(entryPrice, stopPrice)) ? "No size" : ""
 
 f_reason_rank(string reason) =>
     switch reason
         "Too far" => 1
         "Stop out of band" => 2
-        "No size" => 3
+        "RR below minimum" => 3
+        "No size" => 4
         => 0
 
 f_closer_reason(string current, string candidate) =>
     f_reason_rank(candidate) > f_reason_rank(current) ? candidate : current
 
-f_short_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float keyLevel) =>
+f_short_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float rangeLow, float keyLevel) =>
     int best = -1
     string reason = "No zone"
     for [i, z] in zones
         if f_usable(z, snapshotBar, keyLevel) and z.ce > rangeHigh
-            string rejection = f_rejection(z.ce, f_short_stop(z), rangeHigh)
+            string rejection = f_rejection(z.ce, f_short_stop(z), rangeHigh, rangeHigh, rangeLow)
             if rejection != ""
                 reason := f_closer_reason(reason, rejection)
             else if best == -1 or z.ce < zones.get(best).ce
                 best := i
     [best, best >= 0 ? "" : reason]
 
-f_long_zone_index(array<Zone> zones, int snapshotBar, float rangeLow, float keyLevel) =>
+f_long_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float rangeLow, float keyLevel) =>
     int best = -1
     string reason = "No zone"
     for [i, z] in zones
         if f_usable(z, snapshotBar, keyLevel) and z.ce < rangeLow
-            string rejection = f_rejection(z.ce, f_long_stop(z), rangeLow)
+            string rejection = f_rejection(z.ce, f_long_stop(z), rangeLow, rangeHigh, rangeLow)
             if rejection != ""
                 reason := f_closer_reason(reason, rejection)
             else if best == -1 or z.ce > zones.get(best).ce
@@ -334,6 +350,8 @@ var string lastTradeKind = ""
 var float lastTradeEntry = na
 var float lastTradeStop = na
 var float lastTradeTarget = na
+var string lastTradeTargetType = ""
+var float lastTradeRewardRisk = na
 var string pendingShortKind = ""
 var string pendingLongKind = ""
 var float pendingShortEntry = na
@@ -352,6 +370,8 @@ if filledThisBar
     lastTradeEntry := filledPrice
     lastTradeStop := filledLong ? pendingLongStop : pendingShortStop
     lastTradeTarget := filledLong ? pendingLongTarget : pendingShortTarget
+    lastTradeTargetType := targetMode
+    lastTradeRewardRisk := f_reward_risk(filledLong ? pendingLongEntry : pendingShortEntry, lastTradeStop, lastTradeTarget)
     if inWindow
         tradedThisWindow := true
 
@@ -369,15 +389,15 @@ var string longReason = ""
 if canArm
     f_draw_eligible(upperZones, snapshotBar, true, rangeHigh, rangeLow, snapshotPdh, upperWickColor, bearishFvgColor, pdhColor)
     f_draw_eligible(lowerZones, snapshotBar, false, rangeHigh, rangeLow, snapshotPdl, lowerWickColor, bullishFvgColor, pdlColor)
-    [shortIndex, shortRejection] = f_short_zone_index(upperZones, snapshotBar, rangeHigh, snapshotPdh)
-    [longIndex, longRejection] = f_long_zone_index(lowerZones, snapshotBar, rangeLow, snapshotPdl)
+    [shortIndex, shortRejection] = f_short_zone_index(upperZones, snapshotBar, rangeHigh, rangeLow, snapshotPdh)
+    [longIndex, longRejection] = f_long_zone_index(lowerZones, snapshotBar, rangeHigh, rangeLow, snapshotPdl)
     shortReason := shortRejection
     longReason := longRejection
     if shortIndex >= 0
         armedShort := upperZones.get(shortIndex)
         float entryPrice = armedShort.ce
         float stopPrice = f_short_stop(armedShort)
-        float targetPrice = math.round_to_mintick(entryPrice - (stopPrice - entryPrice) * rewardRisk)
+        float targetPrice = f_target(entryPrice, stopPrice, rangeHigh, rangeLow)
         strategy.entry("Short", strategy.short, qty = f_quantity(entryPrice, stopPrice), limit = entryPrice, oca_name = windowOca, oca_type = strategy.oca.cancel)
         strategy.exit("Short exit", from_entry = "Short", stop = stopPrice, limit = targetPrice)
         pendingShortKind := armedShort.kind
@@ -390,7 +410,7 @@ if canArm
         armedLong := lowerZones.get(longIndex)
         float entryPrice = armedLong.ce
         float stopPrice = f_long_stop(armedLong)
-        float targetPrice = math.round_to_mintick(entryPrice + (entryPrice - stopPrice) * rewardRisk)
+        float targetPrice = f_target(entryPrice, stopPrice, rangeHigh, rangeLow)
         strategy.entry("Long", strategy.long, qty = f_quantity(entryPrice, stopPrice), limit = entryPrice, oca_name = windowOca, oca_type = strategy.oca.cancel)
         strategy.exit("Long exit", from_entry = "Long", stop = stopPrice, limit = targetPrice)
         pendingLongKind := armedLong.kind
@@ -407,6 +427,9 @@ if canArm or inWindow
     f_extend_drawings(upperZones, armedShort)
     f_extend_drawings(lowerZones, armedLong)
 
+if windowEndsNow and closeAtWindowEnd and strategy.position_size != 0
+    strategy.close_all(comment = "Window end", immediately = true)
+
 if windowEndsNow
     f_release_drawings(upperZones)
     f_release_drawings(lowerZones)
@@ -415,7 +438,7 @@ f_side_text(Zone armed, bool armedNow, string reason) =>
     string lastWindow = reason == "" ? "" : " (last window: " + reason + ")"
     not na(armed) ? armed.kind + " @ " + f_price(armed.ce) : armedNow ? "No order: " + reason : "Not armed" + lastWindow
 
-var table statusTable = table.new(f_table_position(), 2, 9, border_width = 1)
+var table statusTable = table.new(f_table_position(), 2, 14, border_width = 1)
 f_cell(int row, string caption, string value, color valueColor) =>
     table.cell(statusTable, 0, row, caption, text_color = color.white, bgcolor = color.new(color.black, 50), text_size = size.small)
     table.cell(statusTable, 1, row, value, text_color = valueColor, bgcolor = color.new(color.black, 50), text_size = size.small)
@@ -428,6 +451,11 @@ if barstate.islast and showStatusTable
     f_cell(3, "Range Low", f_price(rangeLow), rangeColor)
     f_cell(4, "Short Zone", f_side_text(armedShort, canArm, shortReason), upperWickColor)
     f_cell(5, "Long Zone", f_side_text(armedLong, canArm, longReason), lowerWickColor)
-    f_cell(6, "Trade", lastTradeSide + " " + lastTradeKind + " @ " + f_price(lastTradeEntry), color.white)
-    f_cell(7, "SL / TP", f_price(lastTradeStop) + " / " + f_price(lastTradeTarget), color.white)
-    f_cell(8, "PDH / PDL", f_price(snapshotPdh) + " / " + f_price(snapshotPdl), pdhColor)
+    f_cell(6, "PDH / PDL", f_price(snapshotPdh) + " / " + f_price(snapshotPdl), pdhColor)
+    f_cell(7, "Trade", lastTradeSide, color.white)
+    f_cell(8, "Zone Type", lastTradeKind == "" ? "-" : lastTradeKind, color.white)
+    f_cell(9, "Entry", f_price(lastTradeEntry), color.white)
+    f_cell(10, "SL", f_price(lastTradeStop), color.red)
+    f_cell(11, "TP", f_price(lastTradeTarget), color.green)
+    f_cell(12, "Target Type", lastTradeTargetType == "" ? "-" : lastTradeTargetType, color.white)
+    f_cell(13, "RR", na(lastTradeRewardRisk) ? "-" : str.tostring(lastTradeRewardRisk, "#.##"), color.white)
