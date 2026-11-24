@@ -204,7 +204,7 @@ def _in_bar_choch_after_a_bullish_break():
 def test_a_choch_made_by_an_earlier_break_inside_the_same_bar_never_fills(reflect, side):
     df = _in_bar_choch_after_a_bullish_break()
     params = {
-        **choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "entry_mode": "break", "stop_max": 1.0,
+        **choch_sr.PARAMS, "swing_length": 2, "tick_size": 0.01, "pip_size": 0.01, "entry_mode": "break",
     }
 
     signals = choch_sr.generate_signals(mirror(df) if reflect else df, asset="TEST", timeframe="5m", params=params)
