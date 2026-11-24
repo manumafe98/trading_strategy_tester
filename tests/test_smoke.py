@@ -28,7 +28,7 @@ REFERENCE_RUNS = {
     "choch_sr": (
         ("--strategies", "choch_sr", "--high_timeframe", "15m", "--risk_reward_ratio", "2",
          "--target_fill", "touch", "--intrabar", "path", "--stop_distance", "0.1-0.5%"),
-        "choch_sr MGC 15m 1m 2 fixed 0.1-0.5% 394 1282198 196 132 0 262 33.50% -0.01R 9h 17m -9.91% 34.54% -0.34 -0.29",
+        "choch_sr MGC 15m 1m 2 fixed 0.1-0.5% 394 1282 198 196 132 0 262 33.50% -0.01R 9h 17m -9.91% 34.54% -0.34 -0.29",
     ),
 }
 
