@@ -1,0 +1,108 @@
+//@version=6
+indicator("PROTOTYPE Wick CE Zones M15", overlay=true, max_boxes_count=500, max_lines_count=500, max_labels_count=500)
+
+var string G_ESTRATEGIA = "Configuración de Estrategia"
+multiplicador  = input.float(1.2, title="Multiplicador de Tamaño de Mecha", step=0.1, group=G_ESTRATEGIA)
+periodoProm    = input.int(20, title="Periodo Promedio de Mechas", group=G_ESTRATEGIA)
+porcentajeATR  = input.float(15.0, title="Distancia de Descarte (% ATR M15)", minval=0.0, maxval=100.0, step=5.0, group=G_ESTRATEGIA) / 100
+
+var string G_ZONA_SUP = "Zonas Superiores (Ventas)"
+colorMechaSup  = input.color(color.new(color.red, 10), title="Color Mecha Superior", group=G_ZONA_SUP)
+
+var string G_ZONA_INF = "Zonas Inferiores (Compras)"
+colorMechaInf  = input.color(color.new(color.green, 10), title="Color Mecha Inferior", group=G_ZONA_INF)
+
+var string G_VISUAL = "Personalización Visual"
+estiloLinea    = input.string("Dashed (Discontinua)", title="Estilo Línea 50%", options=["Dotted (Puntos)", "Dashed (Discontinua)", "Solid (Sólida)"], group=G_VISUAL)
+grosorLinea    = input.int(1, title="Grosor Línea 50% (px)", minval=1, maxval=4, group=G_VISUAL)
+opacidadFondo  = input.int(82, title="Transparencia del Rectángulo (100 = Invisible)", minval=0, maxval=100, group=G_VISUAL)
+opacidadBorde  = input.int(60, title="Transparencia del Borde (100 = Invisible)", minval=0, maxval=100, group=G_VISUAL)
+
+var string G_TEXTO = "Configuración de Precios (Etiquetas)"
+mostrarPrecio  = input.bool(true, title="Mostrar Etiqueta de Precio", group=G_TEXTO)
+tamanioTexto   = input.string("Normal", title="Tamaño del Texto", options=["Chico", "Normal", "Grande"], group=G_TEXTO)
+
+funcionEstilo() =>
+    switch estiloLinea
+        "Dotted (Puntos)"      => line.style_dotted
+        "Dashed (Discontinua)" => line.style_dashed
+        => line.style_solid
+
+funcionTamanio() =>
+    switch tamanioTexto
+        "Chico"  => size.small
+        "Grande" => size.large
+        => size.normal
+
+estiloLineaPine  = funcionEstilo()
+tamanioTextoPine = funcionTamanio()
+
+type zona
+    float nivel
+    box   caja
+    line  linea
+    label etiqueta
+
+var zona[] zonasSuperiores = array.new<zona>()
+var zona[] zonasInferiores = array.new<zona>()
+
+filtrarMechasM15() =>
+    cuerpoSuperior = math.max(open, close)
+    cuerpoInferior = math.min(open, close)
+    tamanioMechaSup = high - cuerpoSuperior
+    tamanioMechaInf = cuerpoInferior - low
+    promMechaSup = ta.sma(tamanioMechaSup, periodoProm)
+    promMechaInf = ta.sma(tamanioMechaInf, periodoProm)
+    esMechaSupAltaProb = (tamanioMechaSup > promMechaSup * multiplicador) and (high > high[1])
+    esMechaInfAltaProb = (tamanioMechaInf > promMechaInf * multiplicador) and (low < low[1])
+    mitadMechaSup = esMechaSupAltaProb ? cuerpoSuperior + (tamanioMechaSup / 2) : na
+    mitadMechaInf = esMechaInfAltaProb ? cuerpoInferior - (tamanioMechaInf / 2) : na
+    [mitadMechaSup, mitadMechaInf, cuerpoSuperior, cuerpoInferior, high, low, time, ta.atr(14)]
+
+[m15_superior, m15_inferior, m15_cuerpoSup, m15_cuerpoInf, m15_high, m15_low, m15_tiempo, m15_atr] = request.security(syminfo.tickerid, "15", filtrarMechasM15(), barmerge.gaps_off, barmerge.lookahead_off)
+umbralDescarte = m15_atr * porcentajeATR
+
+nuevaZona(int izquierda, float arriba, float abajo, float nivel, color colorZona) =>
+    caja = box.new(left=izquierda, top=arriba, right=time + 86400000, bottom=abajo,
+                   border_color=color.new(colorZona, opacidadBorde), border_width=1,
+                   bgcolor=color.new(colorZona, opacidadFondo), extend=extend.right, xloc=xloc.bar_time)
+    linea = line.new(x1=izquierda, y1=nivel, x2=time + 86400000, y2=nivel, xloc=xloc.bar_time, extend=extend.right,
+                     color=colorZona, style=estiloLineaPine, width=grosorLinea)
+    etiqueta = mostrarPrecio ? label.new(x=time, y=nivel, text=str.tostring(nivel, "#.##"), color=color.new(color.white, 100),
+                                         textcolor=colorZona, style=label.style_label_left, xloc=xloc.bar_time, size=tamanioTextoPine) : na
+    zona.new(nivel, caja, linea, etiqueta)
+
+borrarZona(zona z) =>
+    box.delete(z.caja)
+    line.delete(z.linea)
+    label.delete(z.etiqueta)
+
+cambioBarraM15 = ta.change(m15_tiempo) != 0
+
+if cambioBarraM15
+    if not na(m15_superior[1])
+        zonasSuperiores.push(nuevaZona(m15_tiempo[1], m15_high[1], m15_cuerpoSup[1], m15_superior[1], colorMechaSup))
+    if not na(m15_inferior[1])
+        zonasInferiores.push(nuevaZona(m15_tiempo[1], m15_cuerpoInf[1], m15_low[1], m15_inferior[1], colorMechaInf))
+
+if mostrarPrecio
+    for z in zonasSuperiores
+        label.set_x(z.etiqueta, time)
+    for z in zonasInferiores
+        label.set_x(z.etiqueta, time)
+
+puedeMitigar = timeframe.isminutes and timeframe.multiplier <= 15
+
+if puedeMitigar
+    if zonasSuperiores.size() > 0
+        for i = zonasSuperiores.size() - 1 to 0
+            z = zonasSuperiores.get(i)
+            if high >= (z.nivel - umbralDescarte)
+                borrarZona(z)
+                zonasSuperiores.remove(i)
+    if zonasInferiores.size() > 0
+        for i = zonasInferiores.size() - 1 to 0
+            z = zonasInferiores.get(i)
+            if low <= (z.nivel + umbralDescarte)
+                borrarZona(z)
+                zonasInferiores.remove(i)
