@@ -1865,6 +1865,15 @@ def test_stop_distance_limits_with_only_a_minimum_or_only_a_maximum(test_asset_c
     assert _stop_distance_run(_close_entry(stop), limits, test_asset_cfg) == outcome
 
 
+def test_stop_distance_limits_measure_r_before_spread_and_slippage(cost_asset_cfg):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0])
+    signals = [_close_entry(99.5)]
+
+    metrics, trades = _run(data, signals, cost_asset_cfg, with_costs=True, stop_distance=StopDistanceLimits.parse("0-0.5%"))
+
+    assert (metrics["Discarded"], len(trades)) == (0, 1)
+
+
 def test_min_risk_ticks_still_discards_a_signal_inside_the_stop_distance_limits(test_asset_cfg):
     cfg = replace(test_asset_cfg, min_risk_ticks=10)
 
