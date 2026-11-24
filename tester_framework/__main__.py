@@ -39,7 +39,7 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantBatchTask) -> str:
-    return f'{batch_label(task)} {variant_count(len(task["variants"]) * len(task["stop_distances"]))}'
+    return f'{batch_label(task)} {variant_count(len(task["variants"]))}'
 
 
 def status_lines(
@@ -294,6 +294,9 @@ def run(config: RunConfig) -> None:
         if asset not in asset_configs:
             raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
     stop_distance_limits = stop_distance_limits_by_asset(config.stop_distance, assets)
+    asset_variants = {
+        asset: tuple((ratio, mode, limits) for ratio, mode in variant_pairs for limits in stop_distance_limits[asset]) for asset in assets
+    }
     for timeframe in timeframes:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
@@ -320,7 +323,7 @@ def run(config: RunConfig) -> None:
     combinations = {name: combination_count(values) for name, values in param_values.items()}
     asset_batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(session_variants)
     batch_count = asset_batch_count * len(assets)
-    task_count = sum(asset_batch_count * len(variant_pairs) * len(stop_distance_limits[asset]) for asset in assets)
+    task_count = sum(asset_batch_count * len(asset_variants[asset]) for asset in assets)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     if config.max_variants < 1:
@@ -371,7 +374,7 @@ def run(config: RunConfig) -> None:
                                 VariantBatchTask(
                                     strategy=strategy_name,
                                     data_cache=data_cache,
-                                    variants=variant_pairs,
+                                    variants=asset_variants[asset],
                                     asset=asset,
                                     asset_cfg=asset_cfg,
                                     timeframe=timeframe,
@@ -393,7 +396,6 @@ def run(config: RunConfig) -> None:
                                     intrabar=config.intrabar,
                                     strategy_params=params,
                                     params_label=params_label(defaults, params),
-                                    stop_distances=stop_distance_limits[asset],
                                 )
                             )
                     del data

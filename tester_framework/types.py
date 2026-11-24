@@ -9,7 +9,7 @@ from .sessions import SessionSpec
 class VariantBatchTask(TypedDict):
     strategy: str
     data_cache: tuple[str, str, tuple[str, ...]]
-    variants: tuple[tuple[float, str], ...]
+    variants: tuple[tuple[float, str, StopDistanceLimits | None], ...]
     asset: str
     asset_cfg: AssetConfig
     timeframe: str
@@ -31,4 +31,3 @@ class VariantBatchTask(TypedDict):
     intrabar: IntrabarRule
     strategy_params: dict[str, object]
     params_label: str
-    stop_distances: tuple[StopDistanceLimits | None, ...]

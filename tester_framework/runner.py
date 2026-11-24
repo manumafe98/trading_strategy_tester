@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import itertools
 from pathlib import Path
 
 import numpy as np
@@ -168,7 +167,7 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
             detail = str(exc) or type(exc).__name__
             raise RuntimeError(f"{label}: {detail}") from exc
         rows = []
-        for (risk_reward_ratio, exit_mode), stop_distance_limits in itertools.product(task["variants"], task["stop_distances"]):
+        for risk_reward_ratio, exit_mode, stop_distance_limits in task["variants"]:
             variant = f"{label} {risk_reward_ratio:g}R {exit_mode}" + ("" if stop_distance_limits is None else f" {stop_distance_limits}")
             try:
                 rows.append(
