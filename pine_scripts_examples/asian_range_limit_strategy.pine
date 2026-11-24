@@ -8,6 +8,7 @@ var string G_TIME = "Sessions - America/New_York"
 var string G_ZONES = "Zone Types"
 var string G_WICKS = "Wick Zones"
 var string G_KEYS = "Key Levels"
+var string G_FILTERS = "Zone Filters"
 var string G_RISK = "Risk and Exits"
 var string G_VISUAL = "Drawings"
 var string G_TABLE = "Status Table"
@@ -28,6 +29,14 @@ keyLevelMatch = input.float(1.0, "Key Level Match", minval = 0, step = 0.5, inli
 keyLevelMatchUnit = input.string("Pips", "", options = ["Pips", "%"], inline = "key_match", group = G_KEYS)
 keyLevelSlPips = input.float(5.0, "Key Level SL Distance (Pips)", minval = 0, step = 0.5, group = G_KEYS, tooltip = "The stop of a PDH/PDL trade sits this far beyond the level.")
 
+maxZoneDistance = input.float(0, "Max Zone Distance", minval = 0, step = 0.5, inline = "zone_distance", group = G_FILTERS, tooltip = "Skip zones whose entry lies farther than this from the broken range edge (the high for shorts, the low for longs). In %, measured from the range edge. 0 turns the filter off.")
+maxZoneDistanceUnit = input.string("Pips", "", options = ["Pips", "%"], inline = "zone_distance", group = G_FILTERS)
+stopDistanceUnit = input.string("Pips", "Stop Distance Unit", options = ["Pips", "%"], group = G_FILTERS, tooltip = "Skip zones whose entry-to-stop distance falls outside the minimum and maximum of the selected unit. In %, measured from the entry price. Applied after the max zone distance; a skipped zone falls through to the next-nearest zone on its side.")
+minStopPercent = input.float(0.04, "Stop Min / Max (%)", minval = 0, step = 0.01, inline = "stop_percent", group = G_FILTERS)
+maxStopPercent = input.float(0.1, "", minval = 0, step = 0.01, inline = "stop_percent", group = G_FILTERS)
+minStopPips = input.float(4, "Stop Min / Max (Pips)", minval = 0, step = 0.5, inline = "stop_pips", group = G_FILTERS)
+maxStopPips = input.float(10, "", minval = 0, step = 0.5, inline = "stop_pips", group = G_FILTERS)
+
 slBufferPips = input.float(1.0, "SL Buffer (Pips)", minval = 0, step = 0.5, group = G_RISK, tooltip = "Added beyond the wick extreme or the FVG far edge. 1 pip = 0.0001 on Forex (0.01 for JPY-quoted pairs) and 1 tick otherwise.")
 rewardRisk = input.float(3.0, "RR", minval = 0.1, step = 0.5, group = G_RISK, tooltip = "Fixed RR target: entry plus or minus RR times the stop distance.")
 accountSize = input.float(10000, "Account Size ($)", minval = 1, step = 1000, group = G_RISK)
@@ -44,6 +53,11 @@ pdlColor = input.color(color.blue, "PDL", group = G_VISUAL)
 
 showStatusTable = input.bool(true, "Show Status Table", group = G_TABLE)
 statusTablePosition = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = G_TABLE)
+
+if maxStopPercent == 0 or maxStopPips == 0
+    runtime.error("Maximum stop distance must be greater than zero.")
+if minStopPercent > maxStopPercent or minStopPips > maxStopPips
+    runtime.error("Minimum stop distance cannot be greater than the maximum.")
 
 float pipSize = syminfo.type == "forex" ? (syminfo.currency == "JPY" ? 0.01 : 0.0001) : syminfo.mintick
 
@@ -140,21 +154,53 @@ f_drop_kind(array<Zone> zones, string kind) =>
                 f_set_right(z)
                 zones.remove(i)
 
+f_within_zone_distance(float entryPrice, float rangeEdge) =>
+    float allowed = maxZoneDistanceUnit == "%" ? rangeEdge * maxZoneDistance / 100 : maxZoneDistance * pipSize
+    maxZoneDistance == 0 or math.abs(entryPrice - rangeEdge) <= allowed + 0.00000001
+
+f_stop_in_band(float entryPrice, float stopPrice) =>
+    float distance = math.abs(entryPrice - stopPrice)
+    float measured = stopDistanceUnit == "%" ? distance / entryPrice * 100 : distance / pipSize
+    float minimum = stopDistanceUnit == "%" ? minStopPercent : minStopPips
+    float maximum = stopDistanceUnit == "%" ? maxStopPercent : maxStopPips
+    measured >= minimum - 0.00000001 and measured <= maximum + 0.00000001
+
+f_rejection(float entryPrice, float stopPrice, float rangeEdge) =>
+    not f_within_zone_distance(entryPrice, rangeEdge) ? "Too far" : not f_stop_in_band(entryPrice, stopPrice) ? "Stop out of band" : na(f_quantity(entryPrice, stopPrice)) ? "No size" : ""
+
+f_reason_rank(string reason) =>
+    switch reason
+        "Too far" => 1
+        "Stop out of band" => 2
+        "No size" => 3
+        => 0
+
+f_closer_reason(string current, string candidate) =>
+    f_reason_rank(candidate) > f_reason_rank(current) ? candidate : current
+
 f_short_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float keyLevel) =>
     int best = -1
+    string reason = "No zone"
     for [i, z] in zones
-        if f_usable(z, snapshotBar, keyLevel) and z.ce > rangeHigh and not na(f_quantity(z.ce, f_short_stop(z)))
-            if best == -1 or z.ce < zones.get(best).ce
+        if f_usable(z, snapshotBar, keyLevel) and z.ce > rangeHigh
+            string rejection = f_rejection(z.ce, f_short_stop(z), rangeHigh)
+            if rejection != ""
+                reason := f_closer_reason(reason, rejection)
+            else if best == -1 or z.ce < zones.get(best).ce
                 best := i
-    best
+    [best, best >= 0 ? "" : reason]
 
 f_long_zone_index(array<Zone> zones, int snapshotBar, float rangeLow, float keyLevel) =>
     int best = -1
+    string reason = "No zone"
     for [i, z] in zones
-        if f_usable(z, snapshotBar, keyLevel) and z.ce < rangeLow and not na(f_quantity(z.ce, f_long_stop(z)))
-            if best == -1 or z.ce > zones.get(best).ce
+        if f_usable(z, snapshotBar, keyLevel) and z.ce < rangeLow
+            string rejection = f_rejection(z.ce, f_long_stop(z), rangeLow)
+            if rejection != ""
+                reason := f_closer_reason(reason, rejection)
+            else if best == -1 or z.ce > zones.get(best).ce
                 best := i
-    best
+    [best, best >= 0 ? "" : reason]
 
 f_draw_eligible(array<Zone> zones, int snapshotBar, bool isUpper, float rangeHigh, float rangeLow, float keyLevel, color wickColor, color fvgColor, color keyLevelColor) =>
     for z in zones
@@ -317,12 +363,16 @@ bool canArm = windowLiveNext and not tradedThisWindow and strategy.position_size
 string windowOca = "Window " + str.tostring(snapshotBar)
 Zone armedShort = na
 Zone armedLong = na
+var string shortReason = ""
+var string longReason = ""
 
 if canArm
     f_draw_eligible(upperZones, snapshotBar, true, rangeHigh, rangeLow, snapshotPdh, upperWickColor, bearishFvgColor, pdhColor)
     f_draw_eligible(lowerZones, snapshotBar, false, rangeHigh, rangeLow, snapshotPdl, lowerWickColor, bullishFvgColor, pdlColor)
-    int shortIndex = f_short_zone_index(upperZones, snapshotBar, rangeHigh, snapshotPdh)
-    int longIndex = f_long_zone_index(lowerZones, snapshotBar, rangeLow, snapshotPdl)
+    [shortIndex, shortRejection] = f_short_zone_index(upperZones, snapshotBar, rangeHigh, snapshotPdh)
+    [longIndex, longRejection] = f_long_zone_index(lowerZones, snapshotBar, rangeLow, snapshotPdl)
+    shortReason := shortRejection
+    longReason := longRejection
     if shortIndex >= 0
         armedShort := upperZones.get(shortIndex)
         float entryPrice = armedShort.ce
@@ -361,8 +411,9 @@ if windowEndsNow
     f_release_drawings(upperZones)
     f_release_drawings(lowerZones)
 
-f_side_text(Zone armed, bool armedNow) =>
-    not na(armed) ? armed.kind + " @ " + f_price(armed.ce) : armedNow ? "No zone" : "Not armed"
+f_side_text(Zone armed, bool armedNow, string reason) =>
+    string lastWindow = reason == "" ? "" : " (last window: " + reason + ")"
+    not na(armed) ? armed.kind + " @ " + f_price(armed.ce) : armedNow ? "No order: " + reason : "Not armed" + lastWindow
 
 var table statusTable = table.new(f_table_position(), 2, 9, border_width = 1)
 f_cell(int row, string caption, string value, color valueColor) =>
@@ -375,8 +426,8 @@ if barstate.islast and showStatusTable
     f_cell(1, "Range High", f_price(rangeHigh), rangeColor)
     f_cell(2, "Range Middle", f_price(rangeMid), midColor)
     f_cell(3, "Range Low", f_price(rangeLow), rangeColor)
-    f_cell(4, "Short Zone", f_side_text(armedShort, canArm), upperWickColor)
-    f_cell(5, "Long Zone", f_side_text(armedLong, canArm), lowerWickColor)
+    f_cell(4, "Short Zone", f_side_text(armedShort, canArm, shortReason), upperWickColor)
+    f_cell(5, "Long Zone", f_side_text(armedLong, canArm, longReason), lowerWickColor)
     f_cell(6, "Trade", lastTradeSide + " " + lastTradeKind + " @ " + f_price(lastTradeEntry), color.white)
     f_cell(7, "SL / TP", f_price(lastTradeStop) + " / " + f_price(lastTradeTarget), color.white)
     f_cell(8, "PDH / PDL", f_price(snapshotPdh) + " / " + f_price(snapshotPdl), pdhColor)
