@@ -82,6 +82,16 @@ Sizing is fixed-fractional: the risk percentage is applied to current net equity
 
 Every asset in `config/assets.json` must define `min_risk_ticks` (4 for MNQ, MES and MGC; 1 for EURUSD, GBPUSD and BTCUSD); a missing value fails at config load. For every strategy, a signal whose entry-to-stop distance, after the stop is rounded to the tick, is below `min_risk_ticks` × tick size is discarded and counted in `Discarded`. A distance exactly at the minimum is traded. This stops one-tick stops from producing huge positions and absurd R.
 
+`--stop_distance` sets stop distance limits for any strategy: the smallest and largest R a variant accepts. It takes a comma list of ranges with the unit written on each one, and each range runs as its own variant next to RR and exit mode:
+
+```bash
+"$PY" -m tester_framework --strategies orb_candle --asset MGC --sessions ny --stop_distance 0.1-0.5%,0.2-0.6%
+"$PY" -m tester_framework --strategies ema50 --asset EURUSD --stop_distance 5-20pips
+"$PY" -m tester_framework --strategies ema50 --asset MGC --stop_distance 0.2%+,0-0.5%
+```
+
+A range is `<min>-<max><unit>`, or `<min><unit>+` for a minimum only; write a maximum only with a zero minimum, as in `0-0.5%`. The unit is `%`, a percentage of the fill price, or `pips`, which uses the asset's `pip_size` and falls back to `tick_size`. Bounds are non-negative numbers with the minimum no larger than the maximum; a malformed range, a missing unit, a negative bound or a minimum above the maximum fails before data loads, with a message naming `--stop_distance`. A range listed twice runs once. The engine measures R from the raw fill price, before spread and slippage, to the stop after it is rounded to the tick grid: the next bar's open for a next-open entry, the given close for a close entry, and the level, or the bar's open when it opens beyond the level, for a stop entry. Both bounds are inclusive with a 1e-8 tolerance in the range's unit. A signal whose R is outside the limits is discarded and counted in `Discarded`; `min_risk_ticks` still applies on its own. The strategy's signals are generated once and shared across the ranges, and each range counts as a variant towards `--max_variants`. The limits show in the variant label, the variant page title and trade chart names, the run notes, and a `Stop Distance` results column that is hidden when no variant sets limits. Without the flag there are no limits. See `docs/adr/0006-engine-owned-stop-distance-limits.md`.
+
 `--sessions` filters entries by session windows, which are named local time ranges, for any strategy. The values and their hours are:
 
 - `sydney`: 07:00-16:00 Australia/Sydney, following Australian daylight saving.
@@ -150,7 +160,7 @@ The result header (console and results page) also shows, for each strategy and a
 "$PY" -m tester_framework --strategies ema50 --asset MGC --high_timeframe 1h --time_period 2021 --data_source local --oos_start 2021-07-01 --with_costs
 ```
 
-A trade still open on the last bar of the loaded data closes at that bar's close with exit reason `end`, after any partial fills it already banked; costs apply as for any exit, and it counts like any other trade. Signals skipped due to invalid stops, bad entries, a close entry on the last bar, a stop entry whose bar never reaches its level, minimum risk, overlap, a setup time before the first high-timeframe bar after the previous exit, a fill in the 60 minutes before a roll or across one, or minimum-quantity filters are reported in `Discarded`.
+A trade still open on the last bar of the loaded data closes at that bar's close with exit reason `end`, after any partial fills it already banked; costs apply as for any exit, and it counts like any other trade. Signals skipped due to invalid stops, bad entries, a close entry on the last bar, a stop entry whose bar never reaches its level, minimum risk, overlap, a setup time before the first high-timeframe bar after the previous exit, a fill in the 60 minutes before a roll or across one, R outside the stop distance limits, or minimum-quantity filters are reported in `Discarded`.
 
 ## Strategy API
 
@@ -161,7 +171,7 @@ def generate_signals(df, asset, timeframe, params):
     return signals  # columns: time, side, stop
 ```
 
-`side` must be `long` or `short`. The strategy owns entries and stops; the framework owns fixed, trailing, and partial exits.
+`side` must be `long` or `short`. The strategy owns entries and stops; the framework owns fixed, trailing, and partial exits. The engine owns stop distance limits (`--stop_distance`), so a strategy needs no filter of its own for them.
 
 `params["tick_size"]` contains the configured price tick for the current asset. `params["pip_size"]` contains its pip, the unit of `pips` settings: the optional `pip_size` asset field (0.0001 for EURUSD and GBPUSD), defaulting to `tick_size`. `params["session"]` is either `None` or the parsed session mapping selected by `--sessions`. Positions in the window are minutes from its start, not midnight, and a bar is inside while its position is below `length_minute`. The window day is the day the window starts on, so a bar after midnight in a window that crosses midnight belongs to the window that began the evening before. `add_session_columns` in `tester_framework/sessions.py` computes both.
 
