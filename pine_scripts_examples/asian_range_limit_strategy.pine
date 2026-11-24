@@ -7,6 +7,7 @@ if timeframe.in_seconds() != 900
 var string G_TIME = "Sessions - America/New_York"
 var string G_ZONES = "Zone Types"
 var string G_WICKS = "Wick Zones"
+var string G_KEYS = "Key Levels"
 var string G_RISK = "Risk and Exits"
 var string G_VISUAL = "Drawings"
 var string G_TABLE = "Status Table"
@@ -17,10 +18,15 @@ windowSession = input.session("0200-0500", "Trading Window", group = G_TIME, too
 
 useWicks = input.bool(true, "Use wicks", group = G_ZONES, tooltip = "Liquid wicks arm orders at their 50%.")
 useFvgs = input.bool(true, "Use FVGs", group = G_ZONES, tooltip = "Fair value gaps arm orders at their 50%. Bullish when high[2] < low, bearish when low[2] > high.")
+useKeyLevels = input.bool(true, "Use PDH/PDL", group = G_ZONES, tooltip = "The previous trading day's high arms a short and its low arms a long, at the level itself.")
 maxZonesPerSide = input.int(200, "Max Stored Zones per Side", minval = 1, maxval = 1000, group = G_ZONES, tooltip = "Oldest unconsumed zones of all types on a side are dropped beyond this count.")
 
 wickMultiplier = input.float(1.2, "Wick Multiplier", minval = 0.1, step = 0.1, group = G_WICKS, tooltip = "A wick is liquid when it is longer than this multiple of the average wick and the bar makes a new high or low versus the prior bar.")
 wickPeriod = input.int(20, "Wick Averaging Period", minval = 1, group = G_WICKS)
+
+keyLevelMatch = input.float(1.0, "Key Level Match", minval = 0, step = 0.5, inline = "key_match", group = G_KEYS, tooltip = "A wick whose extreme lies within this distance of PDH (upper wicks) or PDL (lower wicks) is dropped in favour of the key level. FVGs are never dropped. In %, measured from the key level.")
+keyLevelMatchUnit = input.string("Pips", "", options = ["Pips", "%"], inline = "key_match", group = G_KEYS)
+keyLevelSlPips = input.float(5.0, "Key Level SL Distance (Pips)", minval = 0, step = 0.5, group = G_KEYS, tooltip = "The stop of a PDH/PDL trade sits this far beyond the level.")
 
 slBufferPips = input.float(1.0, "SL Buffer (Pips)", minval = 0, step = 0.5, group = G_RISK, tooltip = "Added beyond the wick extreme or the FVG far edge. 1 pip = 0.0001 on Forex (0.01 for JPY-quoted pairs) and 1 tick otherwise.")
 rewardRisk = input.float(3.0, "RR", minval = 0.1, step = 0.5, group = G_RISK, tooltip = "Fixed RR target: entry plus or minus RR times the stop distance.")
@@ -33,6 +39,8 @@ upperWickColor = input.color(color.red, "Upper Wick CE", group = G_VISUAL)
 lowerWickColor = input.color(color.green, "Lower Wick CE", group = G_VISUAL)
 bearishFvgColor = input.color(color.red, "Bearish FVG", group = G_VISUAL)
 bullishFvgColor = input.color(color.green, "Bullish FVG", group = G_VISUAL)
+pdhColor = input.color(color.purple, "PDH", group = G_VISUAL)
+pdlColor = input.color(color.blue, "PDL", group = G_VISUAL)
 
 showStatusTable = input.bool(true, "Show Status Table", group = G_TABLE)
 statusTablePosition = input.string("Top Right", "Table Position", options = ["Top Right", "Top Left", "Bottom Right", "Bottom Left"], group = G_TABLE)
@@ -65,11 +73,22 @@ f_table_position() =>
         "Bottom Left" => position.bottom_left
         => position.top_right
 
+f_stop_offset(Zone z) =>
+    (z.kind == "PDH" or z.kind == "PDL" ? keyLevelSlPips : slBufferPips) * pipSize
+
 f_short_stop(Zone z) =>
-    f_ceil_to_tick(z.extreme + slBufferPips * pipSize)
+    f_ceil_to_tick(z.extreme + f_stop_offset(z))
 
 f_long_stop(Zone z) =>
-    f_floor_to_tick(z.extreme - slBufferPips * pipSize)
+    f_floor_to_tick(z.extreme - f_stop_offset(z))
+
+f_matches_key_level(float price, float level) =>
+    float allowed = keyLevelMatchUnit == "%" ? level * keyLevelMatch / 100 : keyLevelMatch * pipSize
+    math.abs(price - level) <= allowed + 0.00000001
+
+f_usable(Zone z, int snapshotBar, float keyLevel) =>
+    bool droppedForKeyLevel = z.kind == "Wick" and useKeyLevels and not na(keyLevel) and f_matches_key_level(z.extreme, keyLevel)
+    z.bornBar < snapshotBar and not droppedForKeyLevel
 
 f_quantity(float entryPrice, float stopPrice) =>
     float minimumQuantity = na(syminfo.mincontract) or syminfo.mincontract <= 0 ? 1.0 : syminfo.mincontract
@@ -113,30 +132,40 @@ f_store(array<Zone> zones, Zone z) =>
     if zones.size() > maxZonesPerSide
         f_set_right(zones.shift())
 
-f_short_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh) =>
+f_drop_kind(array<Zone> zones, string kind) =>
+    if zones.size() > 0
+        for i = zones.size() - 1 to 0
+            Zone z = zones.get(i)
+            if z.kind == kind
+                f_set_right(z)
+                zones.remove(i)
+
+f_short_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float keyLevel) =>
     int best = -1
     for [i, z] in zones
-        if z.bornBar < snapshotBar and z.ce > rangeHigh and not na(f_quantity(z.ce, f_short_stop(z)))
+        if f_usable(z, snapshotBar, keyLevel) and z.ce > rangeHigh and not na(f_quantity(z.ce, f_short_stop(z)))
             if best == -1 or z.ce < zones.get(best).ce
                 best := i
     best
 
-f_long_zone_index(array<Zone> zones, int snapshotBar, float rangeLow) =>
+f_long_zone_index(array<Zone> zones, int snapshotBar, float rangeLow, float keyLevel) =>
     int best = -1
     for [i, z] in zones
-        if z.bornBar < snapshotBar and z.ce < rangeLow and not na(f_quantity(z.ce, f_long_stop(z)))
+        if f_usable(z, snapshotBar, keyLevel) and z.ce < rangeLow and not na(f_quantity(z.ce, f_long_stop(z)))
             if best == -1 or z.ce > zones.get(best).ce
                 best := i
     best
 
-f_draw_eligible(array<Zone> zones, int snapshotBar, bool isUpper, float rangeHigh, float rangeLow, color wickColor, color fvgColor) =>
+f_draw_eligible(array<Zone> zones, int snapshotBar, bool isUpper, float rangeHigh, float rangeLow, float keyLevel, color wickColor, color fvgColor, color keyLevelColor) =>
     for z in zones
         bool outside = isUpper ? z.ce > rangeHigh : z.ce < rangeLow
-        if z.bornBar < snapshotBar and outside and na(z.drawing) and na(z.area)
+        if f_usable(z, snapshotBar, keyLevel) and outside and na(z.drawing) and na(z.area)
             if z.kind == "FVG"
                 z.area := box.new(z.bornTime, math.max(z.extreme, z.edge), time, math.min(z.extreme, z.edge), xloc = xloc.bar_time, border_color = fvgColor, border_style = line.style_dashed, border_width = 1, bgcolor = color.new(fvgColor, 85))
             if z.kind == "Wick"
                 z.drawing := line.new(z.bornTime, z.ce, time, z.ce, xloc = xloc.bar_time, color = wickColor, style = line.style_dashed, width = 1)
+            if z.kind == "PDH" or z.kind == "PDL"
+                z.drawing := line.new(z.bornTime, z.ce, time, z.ce, xloc = xloc.bar_time, color = keyLevelColor, style = line.style_dashed, width = 1)
 
 f_extend_drawings(array<Zone> zones, Zone armed) =>
     for z in zones
@@ -151,6 +180,35 @@ f_release_drawings(array<Zone> zones) =>
 
 var array<Zone> upperZones = array.new<Zone>()
 var array<Zone> lowerZones = array.new<Zone>()
+
+var float dayHigh = na
+var int dayHighTime = na
+var float dayLow = na
+var int dayLowTime = na
+var float pdh = na
+var float pdl = na
+bool newDay = ta.change(time("D")) != 0
+
+if newDay
+    pdh := dayHigh
+    pdl := dayLow
+    f_drop_kind(upperZones, "PDH")
+    f_drop_kind(lowerZones, "PDL")
+    if useKeyLevels and not na(pdh)
+        f_store(upperZones, Zone.new("PDH", pdh, pdh, pdh, bar_index - 1, dayHighTime, na, na))
+    if useKeyLevels and not na(pdl)
+        f_store(lowerZones, Zone.new("PDL", pdl, pdl, pdl, bar_index - 1, dayLowTime, na, na))
+    dayHigh := high
+    dayHighTime := time
+    dayLow := low
+    dayLowTime := time
+else
+    if na(dayHigh) or high > dayHigh
+        dayHigh := high
+        dayHighTime := time
+    if na(dayLow) or low < dayLow
+        dayLow := low
+        dayLowTime := time
 
 f_drop_consumed_upper(upperZones)
 f_drop_consumed_lower(lowerZones)
@@ -188,6 +246,8 @@ bool windowStartsNext = windowLiveNext and not inWindow
 bool windowEndsNow = inWindow and not windowLiveNext
 
 var int snapshotBar = na
+var float snapshotPdh = na
+var float snapshotPdl = na
 var float rangeHigh = na
 var float rangeLow = na
 var line rangeHighLine = na
@@ -196,6 +256,8 @@ var line rangeLowLine = na
 
 if asianStarts
     snapshotBar := bar_index
+    snapshotPdh := pdh
+    snapshotPdl := pdl
     rangeHigh := high
     rangeLow := low
     rangeHighLine := line.new(bar_index, high, bar_index, high, color = rangeColor, width = 2)
@@ -257,10 +319,10 @@ Zone armedShort = na
 Zone armedLong = na
 
 if canArm
-    f_draw_eligible(upperZones, snapshotBar, true, rangeHigh, rangeLow, upperWickColor, bearishFvgColor)
-    f_draw_eligible(lowerZones, snapshotBar, false, rangeHigh, rangeLow, lowerWickColor, bullishFvgColor)
-    int shortIndex = f_short_zone_index(upperZones, snapshotBar, rangeHigh)
-    int longIndex = f_long_zone_index(lowerZones, snapshotBar, rangeLow)
+    f_draw_eligible(upperZones, snapshotBar, true, rangeHigh, rangeLow, snapshotPdh, upperWickColor, bearishFvgColor, pdhColor)
+    f_draw_eligible(lowerZones, snapshotBar, false, rangeHigh, rangeLow, snapshotPdl, lowerWickColor, bullishFvgColor, pdlColor)
+    int shortIndex = f_short_zone_index(upperZones, snapshotBar, rangeHigh, snapshotPdh)
+    int longIndex = f_long_zone_index(lowerZones, snapshotBar, rangeLow, snapshotPdl)
     if shortIndex >= 0
         armedShort := upperZones.get(shortIndex)
         float entryPrice = armedShort.ce
@@ -302,7 +364,7 @@ if windowEndsNow
 f_side_text(Zone armed, bool armedNow) =>
     not na(armed) ? armed.kind + " @ " + f_price(armed.ce) : armedNow ? "No zone" : "Not armed"
 
-var table statusTable = table.new(f_table_position(), 2, 8, border_width = 1)
+var table statusTable = table.new(f_table_position(), 2, 9, border_width = 1)
 f_cell(int row, string caption, string value, color valueColor) =>
     table.cell(statusTable, 0, row, caption, text_color = color.white, bgcolor = color.new(color.black, 50), text_size = size.small)
     table.cell(statusTable, 1, row, value, text_color = valueColor, bgcolor = color.new(color.black, 50), text_size = size.small)
@@ -317,3 +379,4 @@ if barstate.islast and showStatusTable
     f_cell(5, "Long Zone", f_side_text(armedLong, canArm), lowerWickColor)
     f_cell(6, "Trade", lastTradeSide + " " + lastTradeKind + " @ " + f_price(lastTradeEntry), color.white)
     f_cell(7, "SL / TP", f_price(lastTradeStop) + " / " + f_price(lastTradeTarget), color.white)
+    f_cell(8, "PDH / PDL", f_price(snapshotPdh) + " / " + f_price(snapshotPdl), pdhColor)
