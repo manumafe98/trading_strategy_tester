@@ -246,7 +246,7 @@ def test_a_contract_change_clears_channels_touches_and_swings():
 
 
 @pytest.mark.parametrize(("stop_distance", "discarded"), [(None, 0), ("0.1-0.5%", 1)])
-def test_choch_sr_needs_stop_distance_to_drop_the_stops_the_pine_filters_by_default(test_asset_cfg, stop_distance, discarded):
+def test_choch_sr_needs_stop_distance_to_match_the_pine_stop_filter(test_asset_cfg, stop_distance, discarded):
     df = append(role_flip_setup(100.05), RECOVERY_CLOSES)
     limits = StopDistanceLimits.parse(stop_distance) if stop_distance else None
 
