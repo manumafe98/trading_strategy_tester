@@ -107,15 +107,15 @@ def write_trade_html(data: pd.DataFrame, trade: dict, strategy: types.ModuleType
         fig.add_hline(y=target["price"], line_dash="dot", line_color="green", annotation_text=f'{target["r"]:g}R target')
     labels = (trade["strategy"], trade["asset"], trade["timeframe"], trade["low_timeframe"])
     params_label = trade.get("params_label", "")
-    stop_distance = [trade["stop_distance"]] if trade.get("stop_distance") else []
-    title = " ".join([*variant_parts(*labels, trade.get("session"), params_label), str(trade["side"]), trade["exit_mode"], *stop_distance])
+    stop_distance_limits = [trade["stop_distance_limits"]] if trade.get("stop_distance_limits") else []
+    title = " ".join([*variant_parts(*labels, trade.get("session"), params_label), str(trade["side"]), trade["exit_mode"], *stop_distance_limits])
     fig.update_layout(title=title, xaxis_rangeslider_visible=False, xaxis_title="time (UTC)")
 
     stamp = pd.Timestamp(trade["entry_time"]).strftime("%Y-%m-%d_%H%M")
     rr = clean_exit_name(f"{trade['risk_reward_ratio']:g}RR")
     session = clean_exit_name(str(trade["session"])) if trade.get("session") else None
     params = clean_exit_name(params_label)
-    limits = [clean_exit_name(limit) for limit in stop_distance]
+    limits = [clean_exit_name(limit) for limit in stop_distance_limits]
     base = "_".join([*variant_parts(*labels, session, params), rr, trade["exit_mode"], *limits, stamp, str(trade["side"])])
     path = TRADES_DIR / f"{base}.html"
     n = 2

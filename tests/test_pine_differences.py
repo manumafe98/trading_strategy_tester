@@ -250,7 +250,7 @@ def test_choch_sr_needs_stop_distance_to_match_the_pine_stop_filter(test_asset_c
     df = append(role_flip_setup(100.05), RECOVERY_CLOSES)
     limits = StopDistanceLimits.parse(stop_distance) if stop_distance else None
 
-    metrics, trades = _run(df, _choch_sr(df), replace(test_asset_cfg, tick_size=0.01), stop_distance=limits)
+    metrics, trades = _run(df, _choch_sr(df), replace(test_asset_cfg, tick_size=0.01), stop_distance_limits=limits)
 
     assert (len(trades), metrics["Discarded"]) == (1 - discarded, discarded)
 

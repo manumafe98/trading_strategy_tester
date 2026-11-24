@@ -1791,7 +1791,7 @@ def _close_entry(stop, entry=100.0):
 
 def _stop_distance_run(signal, limits, cfg, data=None):
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0]) if data is None else data
-    metrics, trades = _run(data, [signal], cfg, stop_distance=StopDistanceLimits.parse(limits))
+    metrics, trades = _run(data, [signal], cfg, stop_distance_limits=StopDistanceLimits.parse(limits))
     return metrics["Discarded"], len(trades)
 
 
@@ -1869,7 +1869,7 @@ def test_stop_distance_limits_measure_r_before_spread_and_slippage(cost_asset_cf
     data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0])
     signals = [_close_entry(99.5)]
 
-    metrics, trades = _run(data, signals, cost_asset_cfg, with_costs=True, stop_distance=StopDistanceLimits.parse("0-0.5%"))
+    metrics, trades = _run(data, signals, cost_asset_cfg, with_costs=True, stop_distance_limits=StopDistanceLimits.parse("0-0.5%"))
 
     assert (metrics["Discarded"], len(trades)) == (0, 1)
 

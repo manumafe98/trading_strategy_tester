@@ -183,7 +183,7 @@ def exit_mode_variants(value: str | None, risk_reward_ratio: float) -> list[str]
     return modes
 
 
-def stop_distance_variants(value: str | None, assets: list[str]) -> dict[str, tuple[StopDistanceLimits | None, ...]]:
+def stop_distance_limits_by_asset(value: str | None, assets: list[str]) -> dict[str, tuple[StopDistanceLimits | None, ...]]:
     untagged: dict[StopDistanceLimits, None] = {}
     tagged: dict[str, dict[StopDistanceLimits, None]] = {}
     for item in csv_items(value):
@@ -293,7 +293,7 @@ def run(config: RunConfig) -> None:
     for asset in assets:
         if asset not in asset_configs:
             raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
-    stop_distances = stop_distance_variants(config.stop_distance, assets)
+    stop_distance_limits = stop_distance_limits_by_asset(config.stop_distance, assets)
     for timeframe in timeframes:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
@@ -320,7 +320,7 @@ def run(config: RunConfig) -> None:
     combinations = {name: combination_count(values) for name, values in param_values.items()}
     asset_batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(session_variants)
     batch_count = asset_batch_count * len(assets)
-    task_count = sum(asset_batch_count * len(variant_pairs) * len(stop_distances[asset]) for asset in assets)
+    task_count = sum(asset_batch_count * len(variant_pairs) * len(stop_distance_limits[asset]) for asset in assets)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     if config.max_variants < 1:
@@ -393,7 +393,7 @@ def run(config: RunConfig) -> None:
                                     intrabar=config.intrabar,
                                     strategy_params=params,
                                     params_label=params_label(defaults, params),
-                                    stop_distances=stop_distances[asset],
+                                    stop_distances=stop_distance_limits[asset],
                                 )
                             )
                     del data

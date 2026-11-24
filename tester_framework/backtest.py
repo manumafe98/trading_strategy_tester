@@ -159,7 +159,7 @@ def _prepare_trade(
     strategy: str,
     entry_i: int,
     with_costs: bool,
-    stop_distance: StopDistanceLimits | None,
+    stop_distance_limits: StopDistanceLimits | None,
 ) -> dict | None:
     side = Side(signal["side"])
     raw_entry = float(fill_price)
@@ -173,7 +173,7 @@ def _prepare_trade(
     risk_points = abs(raw_entry - stop)
     if round(risk_points / asset_cfg.tick_size, 6) < asset_cfg.min_risk_ticks:
         return None
-    if stop_distance is not None and not stop_distance.within(risk_points, raw_entry, asset_cfg.pip_size):
+    if stop_distance_limits is not None and not stop_distance_limits.within(risk_points, raw_entry, asset_cfg.pip_size):
         return None
     qty = rounded_qty((current_net * risk_pct / 100) / (risk_points * asset_cfg.point_value), asset_cfg.qty_step)
     if qty < asset_cfg.min_qty:
@@ -402,7 +402,7 @@ def run_backtest(
     oos_cutoff: int | None = None,
     target_fill: TargetFill = TargetFill.TICK_THROUGH,
     intrabar: IntrabarRule = IntrabarRule.PATH,
-    stop_distance: StopDistanceLimits | None = None,
+    stop_distance_limits: StopDistanceLimits | None = None,
 ) -> tuple[dict, list[dict]]:
     if not math.isfinite(risk_reward_ratio) or risk_reward_ratio <= 0:
         raise ValueError("--risk_reward_ratio must be positive")
@@ -537,7 +537,7 @@ def run_backtest(
 
         trade = _prepare_trade(
             signal, signal["entry"] if close_entry else entry_path[0], data.index[entry_i], asset_cfg, current_net, risk_pct,
-            risk_reward_ratio, exit_mode, asset, timeframe, strategy, entry_i, with_costs, stop_distance,
+            risk_reward_ratio, exit_mode, asset, timeframe, strategy, entry_i, with_costs, stop_distance_limits,
         )
         if trade is None:
             discarded_signals += 1
