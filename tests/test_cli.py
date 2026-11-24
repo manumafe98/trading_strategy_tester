@@ -1020,12 +1020,12 @@ def test_stop_distance_flag_defaults_off_and_maps_to_config(monkeypatch):
     assert configs[0].stop_distance == "0.1-0.5%,5-20pips"
 
 
-def _stop_distance_run(monkeypatch, tmp_path, asset_cfg, **overrides):
+def _stop_distance_run(monkeypatch, tmp_path, asset_cfg, asset_names=("TEST",), **overrides):
     generated, submitted, written = [], [], []
     data = _two_day_data()
     signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
     strategy = SimpleNamespace(generate_signals=lambda *_args, **_kwargs: generated.append(True) or signals)
-    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": asset_cfg})
+    monkeypatch.setattr(cli, "load_assets", lambda: {name: replace(asset_cfg, ticker=name) for name in asset_names})
     monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
     monkeypatch.setattr(runner, "load_strategy", lambda _name: strategy)
     monkeypatch.setattr(cli, "load_data", lambda *_args: data)
@@ -1124,3 +1124,60 @@ def test_variant_label_counts_stop_distance_variants():
     }
 
     assert cli.variant_label(task) == "orb_candle MGC 15m 5m 6 variants"
+
+
+def test_each_asset_runs_its_tagged_stop_distances_or_else_the_untagged_ones(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    _generated, submitted, (table, _config_arg, _columns, _splits) = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, asset_names=("MGC", "EURUSD", "MNQ"), asset="MGC,EURUSD,MNQ",
+        stop_distance="MGC=0.1-0.5%,mgc=0.2-0.6%,EURUSD=5-20pips,0.1-0.4%",
+    )
+
+    assert {task["asset"]: tuple(map(str, task["stop_distances"])) for task in submitted} == {
+        "MGC": ("0.1-0.5%", "0.2-0.6%"),
+        "EURUSD": ("5-20pips",),
+        "MNQ": ("0.1-0.4%",),
+    }
+    assert sorted(zip(table["Asset"], table["Stop Distance"])) == [
+        ("EURUSD", "5-20pips"), ("MGC", "0.1-0.5%"), ("MGC", "0.2-0.6%"), ("MNQ", "0.1-0.4%"),
+    ]
+    assert "4 variants" in capsys.readouterr().err
+
+
+def test_an_asset_without_a_tagged_or_untagged_stop_distance_runs_without_limits(monkeypatch, tmp_path, test_asset_cfg):
+    _generated, submitted, (table, _config_arg, columns, _splits) = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, asset_names=("MGC", "EURUSD"), asset="MGC,EURUSD", stop_distance="MGC=0.6%+"
+    )
+
+    assert {task["asset"]: task["stop_distances"] for task in submitted}["EURUSD"] == (None,)
+    assert "Stop Distance" in columns
+    assert sorted(zip(table["Asset"], table["Stop Distance"], table["Trades"])) == [("EURUSD", "", 1), ("MGC", "0.6%+", 0)]
+
+
+def test_run_rejects_a_stop_distance_tag_for_an_asset_not_in_the_run_before_loading_data(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg, "MGC": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--stop_distance tag for unknown asset: MGC"):
+        cli.run(_config(stop_distance="0.1-0.5%,mgc=0.1-0.5%"))
+
+
+def test_a_stop_distance_listed_twice_for_an_asset_runs_once(monkeypatch, tmp_path, test_asset_cfg):
+    _generated, submitted, _written = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, stop_distance="TEST=0.1-0.5%,test=0.10-0.50%,0.2%+,0.2%+"
+    )
+
+    assert [tuple(map(str, task["stop_distances"])) for task in submitted] == [("0.1-0.5%",)]
+
+
+def test_each_asset_counts_its_own_stop_distances_against_max_variants(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"MGC": test_asset_cfg, "EURUSD": test_asset_cfg, "MNQ": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="8 variants exceed --max_variants 7"):
+        cli.run(_config(
+            asset="MGC,EURUSD,MNQ", risk_reward_ratio="1,2", stop_distance="MGC=0.1-0.5%,MGC=0.2-0.6%,EURUSD=5-20pips,0.1-0.4%",
+            max_variants=7,
+        ))

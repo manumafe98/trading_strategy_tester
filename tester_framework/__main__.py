@@ -183,8 +183,20 @@ def exit_mode_variants(value: str | None, risk_reward_ratio: float) -> list[str]
     return modes
 
 
-def stop_distance_variants(value: str | None) -> tuple[StopDistanceLimits | None, ...]:
-    return tuple(dict.fromkeys(StopDistanceLimits.parse(item) for item in csv_items(value))) or (None,)
+def stop_distance_variants(value: str | None, assets: list[str]) -> dict[str, tuple[StopDistanceLimits | None, ...]]:
+    untagged: dict[StopDistanceLimits, None] = {}
+    tagged: dict[str, dict[StopDistanceLimits, None]] = {}
+    for item in csv_items(value):
+        asset, separator, text = item.rpartition("=")
+        limits = StopDistanceLimits.parse(text)
+        if not separator:
+            untagged[limits] = None
+            continue
+        asset = asset.strip().upper()
+        if asset not in assets:
+            raise ValueError(f"--stop_distance tag for unknown asset: {asset or '(empty)'}")
+        tagged.setdefault(asset, {})[limits] = None
+    return {asset: tuple(tagged.get(asset, untagged)) or (None,) for asset in assets}
 
 
 def worker_count(requested: int | None, task_count: int) -> int:
@@ -257,7 +269,6 @@ def run(config: RunConfig) -> None:
     if not any(variants.values()):
         raise ValueError("No exit modes are compatible with the requested risk/reward ratios")
     variant_pairs = tuple((ratio, mode) for ratio in ratios for mode in variants[ratio])
-    stop_distances = stop_distance_variants(config.stop_distance)
     if not math.isfinite(config.capital) or config.capital <= 0:
         raise ValueError("--capital must be finite and positive")
     if config.max_trades is not None and config.max_trades < 1:
@@ -282,6 +293,7 @@ def run(config: RunConfig) -> None:
     for asset in assets:
         if asset not in asset_configs:
             raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
+    stop_distances = stop_distance_variants(config.stop_distance, assets)
     for timeframe in timeframes:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
@@ -306,8 +318,9 @@ def run(config: RunConfig) -> None:
                     raise ValueError(f"{source}: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
                 strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
     combinations = {name: combination_count(values) for name, values in param_values.items()}
-    batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
-    task_count = batch_count * len(variant_pairs) * len(stop_distances)
+    asset_batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(session_variants)
+    batch_count = asset_batch_count * len(assets)
+    task_count = sum(asset_batch_count * len(variant_pairs) * len(stop_distances[asset]) for asset in assets)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     if config.max_variants < 1:
@@ -380,7 +393,7 @@ def run(config: RunConfig) -> None:
                                     intrabar=config.intrabar,
                                     strategy_params=params,
                                     params_label=params_label(defaults, params),
-                                    stop_distances=stop_distances,
+                                    stop_distances=stop_distances[asset],
                                 )
                             )
                     del data
@@ -501,7 +514,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--stop_distance",
         metavar="RANGE,...",
-        help="comma list of stop distance limits, each its own variant, e.g. 0.1-0.5%%,5-20pips or 0.2%%+; default no limits",
+        help="comma list of stop distance limits, each its own variant, optionally tagged ASSET=, e.g. 0.1-0.5%%,EURUSD=5-20pips or 0.2%%+; default no limits",
     )
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
