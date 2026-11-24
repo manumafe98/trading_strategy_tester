@@ -14,13 +14,13 @@ var string G_VISUAL = "Drawings"
 var string G_TABLE = "Status Table"
 var string NY = "America/New_York"
 
-asianSession = input.session("1900-0200", "Asian Range", group = G_TIME, tooltip = "The range is the high and low of the bars inside this session.")
-windowSession = input.session("0200-0500", "Trading Window", group = G_TIME, tooltip = "Limit orders rest only inside this session.")
+asianWindow = input.session("1900-0200", "Asian Range", group = G_TIME, tooltip = "The range is the high and low of the bars inside this session.")
+tradingWindow = input.session("0200-0500", "Trading Window", group = G_TIME, tooltip = "Limit orders rest only inside this session.")
 
 useWicks = input.bool(true, "Use wicks", group = G_ZONES, tooltip = "Liquid wicks arm orders at their 50%.")
 useFvgs = input.bool(true, "Use FVGs", group = G_ZONES, tooltip = "Fair value gaps arm orders at their 50%. Bullish when high[2] < low, bearish when low[2] > high.")
 useKeyLevels = input.bool(true, "Use PDH/PDL", group = G_ZONES, tooltip = "The previous trading day's high arms a short and its low arms a long, at the level itself.")
-maxZonesPerSide = input.int(200, "Max Stored Zones per Side", minval = 1, maxval = 1000, group = G_ZONES, tooltip = "Oldest unconsumed zones of all types on a side are dropped beyond this count.")
+maxZonesPerSide = input.int(200, "Max Stored Zones per Side", minval = 1, maxval = 1000, group = G_ZONES, tooltip = "Beyond this count, the unconsumed zone on a side whose 50% lies farthest from the close is dropped.")
 
 wickMultiplier = input.float(1.2, "Wick Multiplier", minval = 0.1, step = 0.1, group = G_WICKS, tooltip = "A wick is liquid when it is longer than this multiple of the average wick and the bar makes a new high or low versus the prior bar.")
 wickPeriod = input.int(20, "Wick Averaging Period", minval = 1, group = G_WICKS)
@@ -63,6 +63,8 @@ if minStopPercent > maxStopPercent or minStopPips > maxStopPips
 
 float pipSize = syminfo.type == "forex" ? (syminfo.currency == "JPY" ? 0.01 : 0.0001) : syminfo.mintick
 
+const int DRAWN_ZONES_PER_SIDE = 3
+
 type Zone
     string kind
     float ce
@@ -72,6 +74,13 @@ type Zone
     int bornTime
     line drawing
     box area
+    bool shown = false
+
+type TradePlan
+    string kind
+    float entry
+    float stop
+    float target
 
 f_ceil_to_tick(float price) =>
     math.ceil(price / syminfo.mintick - 0.00000001) * syminfo.mintick
@@ -92,11 +101,8 @@ f_table_position() =>
 f_stop_offset(Zone z) =>
     (z.kind == "PDH" or z.kind == "PDL" ? keyLevelSlPips : slBufferPips) * pipSize
 
-f_short_stop(Zone z) =>
-    f_ceil_to_tick(z.extreme + f_stop_offset(z))
-
-f_long_stop(Zone z) =>
-    f_floor_to_tick(z.extreme - f_stop_offset(z))
+f_stop(Zone z, bool isShort) =>
+    isShort ? f_ceil_to_tick(z.extreme + f_stop_offset(z)) : f_floor_to_tick(z.extreme - f_stop_offset(z))
 
 f_matches_key_level(float price, float level) =>
     float allowed = keyLevelMatchUnit == "%" ? level * keyLevelMatch / 100 : keyLevelMatch * pipSize
@@ -127,34 +133,31 @@ f_highlight(Zone z, bool isArmed) =>
         box.set_border_width(z.area, isArmed ? 3 : 1)
         box.set_border_style(z.area, isArmed ? line.style_solid : line.style_dashed)
 
-f_drop_consumed_upper(array<Zone> zones) =>
-    if zones.size() > 0
-        for i = zones.size() - 1 to 0
-            Zone z = zones.get(i)
-            if z.bornBar < bar_index and high >= z.ce
-                f_set_right(z)
-                zones.remove(i)
+f_remove(array<Zone> zones, int index) =>
+    f_set_right(zones.get(index))
+    zones.remove(index)
 
-f_drop_consumed_lower(array<Zone> zones) =>
+f_drop_consumed(array<Zone> zones, bool isUpper) =>
     if zones.size() > 0
         for i = zones.size() - 1 to 0
             Zone z = zones.get(i)
-            if z.bornBar < bar_index and low <= z.ce
-                f_set_right(z)
-                zones.remove(i)
+            if z.bornBar < bar_index and (isUpper ? high >= z.ce : low <= z.ce)
+                f_remove(zones, i)
 
 f_store(array<Zone> zones, Zone z) =>
     zones.push(z)
     if zones.size() > maxZonesPerSide
-        f_set_right(zones.shift())
+        int farthest = 0
+        for [i, stored] in zones
+            if math.abs(stored.ce - close) > math.abs(zones.get(farthest).ce - close)
+                farthest := i
+        f_remove(zones, farthest)
 
 f_drop_kind(array<Zone> zones, string kind) =>
     if zones.size() > 0
         for i = zones.size() - 1 to 0
-            Zone z = zones.get(i)
-            if z.kind == kind
-                f_set_right(z)
-                zones.remove(i)
+            if zones.get(i).kind == kind
+                f_remove(zones, i)
 
 f_within_zone_distance(float entryPrice, float rangeEdge) =>
     float allowed = maxZoneDistanceUnit == "%" ? rangeEdge * maxZoneDistance / 100 : maxZoneDistance * pipSize
@@ -181,7 +184,16 @@ f_meets_min_rr(float entryPrice, float stopPrice, float targetPrice) =>
     targetMode == "Fixed RR" or f_reward_risk(entryPrice, stopPrice, targetPrice) >= rewardRisk - 0.00000001
 
 f_rejection(float entryPrice, float stopPrice, float rangeEdge, float rangeHigh, float rangeLow) =>
-    not f_within_zone_distance(entryPrice, rangeEdge) ? "Too far" : not f_stop_in_band(entryPrice, stopPrice) ? "Stop out of band" : not f_meets_min_rr(entryPrice, stopPrice, f_target(entryPrice, stopPrice, rangeHigh, rangeLow)) ? "RR below minimum" : na(f_quantity(entryPrice, stopPrice)) ? "No size" : ""
+    if not f_within_zone_distance(entryPrice, rangeEdge)
+        "Too far"
+    else if not f_stop_in_band(entryPrice, stopPrice)
+        "Stop out of band"
+    else if not f_meets_min_rr(entryPrice, stopPrice, f_target(entryPrice, stopPrice, rangeHigh, rangeLow))
+        "RR below minimum"
+    else if na(f_quantity(entryPrice, stopPrice))
+        "No size"
+    else
+        ""
 
 f_reason_rank(string reason) =>
     switch reason
@@ -194,51 +206,68 @@ f_reason_rank(string reason) =>
 f_closer_reason(string current, string candidate) =>
     f_reason_rank(candidate) > f_reason_rank(current) ? candidate : current
 
-f_short_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float rangeLow, float keyLevel) =>
-    int best = -1
-    string reason = "No zone"
-    for [i, z] in zones
-        if f_usable(z, snapshotBar, keyLevel) and z.ce > rangeHigh
-            string rejection = f_rejection(z.ce, f_short_stop(z), rangeHigh, rangeHigh, rangeLow)
-            if rejection != ""
-                reason := f_closer_reason(reason, rejection)
-            else if best == -1 or z.ce < zones.get(best).ce
+f_nearest(array<Zone> candidates, float rangeEdge) =>
+    array<Zone> nearest = array.new<Zone>()
+    array<Zone> remaining = candidates.copy()
+    while nearest.size() < DRAWN_ZONES_PER_SIDE and remaining.size() > 0
+        int best = 0
+        for [i, z] in remaining
+            if math.abs(z.ce - rangeEdge) < math.abs(remaining.get(best).ce - rangeEdge)
                 best := i
-    [best, best >= 0 ? "" : reason]
+        nearest.push(remaining.remove(best))
+    nearest
 
-f_long_zone_index(array<Zone> zones, int snapshotBar, float rangeHigh, float rangeLow, float keyLevel) =>
-    int best = -1
+f_eligible_zones(array<Zone> zones, bool isUpper, int snapshotBar, float rangeHigh, float rangeLow, float keyLevel) =>
+    float rangeEdge = isUpper ? rangeHigh : rangeLow
+    array<Zone> passing = array.new<Zone>()
     string reason = "No zone"
-    for [i, z] in zones
-        if f_usable(z, snapshotBar, keyLevel) and z.ce < rangeLow
-            string rejection = f_rejection(z.ce, f_long_stop(z), rangeLow, rangeHigh, rangeLow)
-            if rejection != ""
+    for z in zones
+        if f_usable(z, snapshotBar, keyLevel) and (isUpper ? z.ce > rangeHigh : z.ce < rangeLow)
+            string rejection = f_rejection(z.ce, f_stop(z, isUpper), rangeEdge, rangeHigh, rangeLow)
+            if rejection == ""
+                passing.push(z)
+            else
                 reason := f_closer_reason(reason, rejection)
-            else if best == -1 or z.ce > zones.get(best).ce
-                best := i
-    [best, best >= 0 ? "" : reason]
+    [f_nearest(passing, rangeEdge), passing.size() > 0 ? "" : reason]
 
-f_draw_eligible(array<Zone> zones, int snapshotBar, bool isUpper, float rangeHigh, float rangeLow, float keyLevel, color wickColor, color fvgColor, color keyLevelColor) =>
-    for z in zones
-        bool outside = isUpper ? z.ce > rangeHigh : z.ce < rangeLow
-        if f_usable(z, snapshotBar, keyLevel) and outside and na(z.drawing) and na(z.area)
-            if z.kind == "FVG"
-                z.area := box.new(z.bornTime, math.max(z.extreme, z.edge), time, math.min(z.extreme, z.edge), xloc = xloc.bar_time, border_color = fvgColor, border_style = line.style_dashed, border_width = 1, bgcolor = color.new(fvgColor, 85))
-            if z.kind == "Wick"
-                z.drawing := line.new(z.bornTime, z.ce, time, z.ce, xloc = xloc.bar_time, color = wickColor, style = line.style_dashed, width = 1)
-            if z.kind == "PDH" or z.kind == "PDL"
-                z.drawing := line.new(z.bornTime, z.ce, time, z.ce, xloc = xloc.bar_time, color = keyLevelColor, style = line.style_dashed, width = 1)
+f_draw(Zone z, bool isUpper) =>
+    color wickColor = isUpper ? upperWickColor : lowerWickColor
+    color fvgColor = isUpper ? bearishFvgColor : bullishFvgColor
+    color keyLevelColor = isUpper ? pdhColor : pdlColor
+    if z.kind == "FVG" and na(z.area)
+        z.area := box.new(z.bornTime, math.max(z.extreme, z.edge), time, math.min(z.extreme, z.edge), xloc = xloc.bar_time, border_color = fvgColor, border_style = line.style_dashed, border_width = 1, bgcolor = color.new(fvgColor, 85))
+    if z.kind != "FVG" and na(z.drawing)
+        z.drawing := line.new(z.bornTime, z.ce, time, z.ce, xloc = xloc.bar_time, color = z.kind == "Wick" ? wickColor : keyLevelColor, style = line.style_dashed, width = 1)
 
-f_extend_drawings(array<Zone> zones, Zone armed) =>
+f_show(array<Zone> zones, array<Zone> nearest, bool isUpper) =>
     for z in zones
-        f_set_right(z)
-        f_highlight(z, not na(armed) and z.bornBar == armed.bornBar and z.kind == armed.kind)
+        z.shown := false
+    for z in nearest
+        z.shown := true
+        f_draw(z, isUpper)
 
-f_release_drawings(array<Zone> zones) =>
+f_hide(array<Zone> zones) =>
     for z in zones
-        f_set_right(z)
-        z.drawing := na
-        z.area := na
+        z.shown := false
+
+f_extend_shown(array<Zone> zones, Zone armed) =>
+    for z in zones
+        if z.shown
+            f_set_right(z)
+            f_highlight(z, not na(armed) and z.bornBar == armed.bornBar and z.kind == armed.kind)
+
+f_arm(Zone z, bool isShort, string oca, float rangeHigh, float rangeLow) =>
+    string id = isShort ? "Short" : "Long"
+    TradePlan plan = na
+    if na(z)
+        strategy.cancel(id)
+    else
+        float stopPrice = f_stop(z, isShort)
+        float targetPrice = f_target(z.ce, stopPrice, rangeHigh, rangeLow)
+        strategy.entry(id, isShort ? strategy.short : strategy.long, qty = f_quantity(z.ce, stopPrice), limit = z.ce, oca_name = oca, oca_type = strategy.oca.cancel)
+        strategy.exit(id + " exit", from_entry = id, stop = stopPrice, limit = targetPrice)
+        plan := TradePlan.new(z.kind, z.ce, stopPrice, targetPrice)
+    plan
 
 var array<Zone> upperZones = array.new<Zone>()
 var array<Zone> lowerZones = array.new<Zone>()
@@ -272,8 +301,8 @@ else
         dayLow := low
         dayLowTime := time
 
-f_drop_consumed_upper(upperZones)
-f_drop_consumed_lower(lowerZones)
+f_drop_consumed(upperZones, true)
+f_drop_consumed(lowerZones, false)
 
 float bodyTop = math.max(open, close)
 float bodyBottom = math.min(open, close)
@@ -300,10 +329,10 @@ if useFvgs and bearishFvg
 if useFvgs and bullishFvg
     f_store(lowerZones, Zone.new("FVG", math.round_to_mintick((low + fvgOldHigh) / 2), fvgOldHigh, low, bar_index, fvgOldTime, na, na))
 
-bool inAsian = not na(time(timeframe.period, asianSession, NY))
+bool inAsian = not na(time(timeframe.period, asianWindow, NY))
 bool asianStarts = inAsian and not inAsian[1]
-bool inWindow = not na(time(timeframe.period, windowSession, NY))
-bool windowLiveNext = not na(time(timeframe.period, windowSession, NY, -1))
+bool inWindow = not na(time(timeframe.period, tradingWindow, NY))
+bool windowLiveNext = not na(time(timeframe.period, tradingWindow, NY, -1))
 bool windowStartsNext = windowLiveNext and not inWindow
 bool windowEndsNow = inWindow and not windowLiveNext
 
@@ -345,33 +374,22 @@ int tradeCount = strategy.opentrades + strategy.closedtrades
 bool filledThisBar = tradeCount > knownTradeCount
 knownTradeCount := tradeCount
 
+var TradePlan pendingShort = na
+var TradePlan pendingLong = na
 var string lastTradeSide = "-"
-var string lastTradeKind = ""
-var float lastTradeEntry = na
-var float lastTradeStop = na
-var float lastTradeTarget = na
+var TradePlan lastTrade = na
 var string lastTradeTargetType = ""
 var float lastTradeRewardRisk = na
-var string pendingShortKind = ""
-var string pendingLongKind = ""
-var float pendingShortEntry = na
-var float pendingShortStop = na
-var float pendingShortTarget = na
-var float pendingLongEntry = na
-var float pendingLongStop = na
-var float pendingLongTarget = na
 
 if filledThisBar
     float filledSize = strategy.opentrades > 0 ? strategy.opentrades.size(strategy.opentrades - 1) : strategy.closedtrades.size(strategy.closedtrades - 1)
     float filledPrice = strategy.opentrades > 0 ? strategy.opentrades.entry_price(strategy.opentrades - 1) : strategy.closedtrades.entry_price(strategy.closedtrades - 1)
     bool filledLong = filledSize > 0
+    TradePlan plan = filledLong ? pendingLong : pendingShort
     lastTradeSide := filledLong ? "Long" : "Short"
-    lastTradeKind := filledLong ? pendingLongKind : pendingShortKind
-    lastTradeEntry := filledPrice
-    lastTradeStop := filledLong ? pendingLongStop : pendingShortStop
-    lastTradeTarget := filledLong ? pendingLongTarget : pendingShortTarget
+    lastTrade := TradePlan.new(plan.kind, filledPrice, plan.stop, plan.target)
     lastTradeTargetType := targetMode
-    lastTradeRewardRisk := f_reward_risk(filledLong ? pendingLongEntry : pendingShortEntry, lastTradeStop, lastTradeTarget)
+    lastTradeRewardRisk := f_reward_risk(plan.entry, plan.stop, plan.target)
     if inWindow
         tradedThisWindow := true
 
@@ -387,52 +405,34 @@ var string shortReason = ""
 var string longReason = ""
 
 if canArm
-    f_draw_eligible(upperZones, snapshotBar, true, rangeHigh, rangeLow, snapshotPdh, upperWickColor, bearishFvgColor, pdhColor)
-    f_draw_eligible(lowerZones, snapshotBar, false, rangeHigh, rangeLow, snapshotPdl, lowerWickColor, bullishFvgColor, pdlColor)
-    [shortIndex, shortRejection] = f_short_zone_index(upperZones, snapshotBar, rangeHigh, rangeLow, snapshotPdh)
-    [longIndex, longRejection] = f_long_zone_index(lowerZones, snapshotBar, rangeHigh, rangeLow, snapshotPdl)
+    [shortZones, shortRejection] = f_eligible_zones(upperZones, true, snapshotBar, rangeHigh, rangeLow, snapshotPdh)
+    [longZones, longRejection] = f_eligible_zones(lowerZones, false, snapshotBar, rangeHigh, rangeLow, snapshotPdl)
+    f_show(upperZones, shortZones, true)
+    f_show(lowerZones, longZones, false)
     shortReason := shortRejection
     longReason := longRejection
-    if shortIndex >= 0
-        armedShort := upperZones.get(shortIndex)
-        float entryPrice = armedShort.ce
-        float stopPrice = f_short_stop(armedShort)
-        float targetPrice = f_target(entryPrice, stopPrice, rangeHigh, rangeLow)
-        strategy.entry("Short", strategy.short, qty = f_quantity(entryPrice, stopPrice), limit = entryPrice, oca_name = windowOca, oca_type = strategy.oca.cancel)
-        strategy.exit("Short exit", from_entry = "Short", stop = stopPrice, limit = targetPrice)
-        pendingShortKind := armedShort.kind
-        pendingShortEntry := entryPrice
-        pendingShortStop := stopPrice
-        pendingShortTarget := targetPrice
-    else
-        strategy.cancel("Short")
-    if longIndex >= 0
-        armedLong := lowerZones.get(longIndex)
-        float entryPrice = armedLong.ce
-        float stopPrice = f_long_stop(armedLong)
-        float targetPrice = f_target(entryPrice, stopPrice, rangeHigh, rangeLow)
-        strategy.entry("Long", strategy.long, qty = f_quantity(entryPrice, stopPrice), limit = entryPrice, oca_name = windowOca, oca_type = strategy.oca.cancel)
-        strategy.exit("Long exit", from_entry = "Long", stop = stopPrice, limit = targetPrice)
-        pendingLongKind := armedLong.kind
-        pendingLongEntry := entryPrice
-        pendingLongStop := stopPrice
-        pendingLongTarget := targetPrice
-    else
-        strategy.cancel("Long")
+    armedShort := shortZones.size() > 0 ? shortZones.first() : na
+    armedLong := longZones.size() > 0 ? longZones.first() : na
+    TradePlan shortPlan = f_arm(armedShort, true, windowOca, rangeHigh, rangeLow)
+    TradePlan longPlan = f_arm(armedLong, false, windowOca, rangeHigh, rangeLow)
+    if not na(shortPlan)
+        pendingShort := shortPlan
+    if not na(longPlan)
+        pendingLong := longPlan
 else
     strategy.cancel("Short")
     strategy.cancel("Long")
 
 if canArm or inWindow
-    f_extend_drawings(upperZones, armedShort)
-    f_extend_drawings(lowerZones, armedLong)
+    f_extend_shown(upperZones, armedShort)
+    f_extend_shown(lowerZones, armedLong)
 
 if windowEndsNow and closeAtWindowEnd and strategy.position_size != 0
     strategy.close_all(comment = "Window end", immediately = true)
 
 if windowEndsNow
-    f_release_drawings(upperZones)
-    f_release_drawings(lowerZones)
+    f_hide(upperZones)
+    f_hide(lowerZones)
 
 f_side_text(Zone armed, bool armedNow, string reason) =>
     string lastWindow = reason == "" ? "" : " (last window: " + reason + ")"
@@ -443,7 +443,7 @@ f_cell(int row, string caption, string value, color valueColor) =>
     table.cell(statusTable, 0, row, caption, text_color = color.white, bgcolor = color.new(color.black, 50), text_size = size.small)
     table.cell(statusTable, 1, row, value, text_color = valueColor, bgcolor = color.new(color.black, 50), text_size = size.small)
 
-if barstate.islast and showStatusTable
+if showStatusTable and (barstate.islastconfirmedhistory or barstate.isrealtime)
     string status = strategy.position_size != 0 ? "In position" : canArm ? "Armed" : tradedThisWindow ? "Traded this window" : "Outside window"
     f_cell(0, "Asian Range Limit", status, color.white)
     f_cell(1, "Range High", f_price(rangeHigh), rangeColor)
@@ -453,9 +453,9 @@ if barstate.islast and showStatusTable
     f_cell(5, "Long Zone", f_side_text(armedLong, canArm, longReason), lowerWickColor)
     f_cell(6, "PDH / PDL", f_price(snapshotPdh) + " / " + f_price(snapshotPdl), pdhColor)
     f_cell(7, "Trade", lastTradeSide, color.white)
-    f_cell(8, "Zone Type", lastTradeKind == "" ? "-" : lastTradeKind, color.white)
-    f_cell(9, "Entry", f_price(lastTradeEntry), color.white)
-    f_cell(10, "SL", f_price(lastTradeStop), color.red)
-    f_cell(11, "TP", f_price(lastTradeTarget), color.green)
+    f_cell(8, "Zone Type", na(lastTrade) ? "-" : lastTrade.kind, color.white)
+    f_cell(9, "Entry", na(lastTrade) ? "-" : f_price(lastTrade.entry), color.white)
+    f_cell(10, "SL", na(lastTrade) ? "-" : f_price(lastTrade.stop), color.red)
+    f_cell(11, "TP", na(lastTrade) ? "-" : f_price(lastTrade.target), color.green)
     f_cell(12, "Target Type", lastTradeTargetType == "" ? "-" : lastTradeTargetType, color.white)
     f_cell(13, "RR", na(lastTradeRewardRisk) ? "-" : str.tostring(lastTradeRewardRisk, "#.##"), color.white)
