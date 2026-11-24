@@ -9,10 +9,10 @@ from strategy import choch_sr
 from strategy.orb_fvg import generate_signals
 from strategy.utils.market_structure import market_structure
 from strategy.utils.sr_channels import build_channels
-from tests.choch_sr_bars import long_setup, mirror, two_channel_setup
+from tests.choch_sr_bars import RECOVERY_CLOSES, append, long_setup, mirror, role_flip_setup, two_channel_setup
 from tester_framework.backtest import run_backtest
 from tester_framework.data import resample_data
-from tester_framework.models import ExitReason
+from tester_framework.models import ExitReason, StopDistanceLimits
 from tester_framework.sessions import parse_sessions
 from tester_framework.settings import load_assets
 
@@ -243,6 +243,16 @@ def test_a_contract_change_clears_channels_touches_and_swings():
 
     assert len(_choch_sr(df)) == 1
     assert _choch_sr(rolled).empty
+
+
+@pytest.mark.parametrize(("stop_distance", "discarded"), [(None, 0), ("0.1-0.5%", 1)])
+def test_choch_sr_needs_stop_distance_to_drop_the_stops_the_pine_filters_by_default(test_asset_cfg, stop_distance, discarded):
+    df = append(role_flip_setup(100.05), RECOVERY_CLOSES)
+    limits = StopDistanceLimits.parse(stop_distance) if stop_distance else None
+
+    metrics, trades = _run(df, _choch_sr(df), replace(test_asset_cfg, tick_size=0.01), stop_distance=limits)
+
+    assert (len(trades), metrics["Discarded"]) == (1 - discarded, discarded)
 
 
 def test_a_choch_uses_the_matching_touch_with_the_latest_retest_not_the_first_pending_touch():
