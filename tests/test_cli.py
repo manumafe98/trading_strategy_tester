@@ -1020,12 +1020,12 @@ def test_stop_distance_flag_defaults_off_and_maps_to_config(monkeypatch):
     assert configs[0].stop_distance == "0.1-0.5%,5-20pips"
 
 
-def _stop_distance_run(monkeypatch, tmp_path, asset_cfg, **overrides):
+def _stop_distance_run(monkeypatch, tmp_path, asset_cfg, asset_names=("TEST",), **overrides):
     generated, submitted, written = [], [], []
     data = _two_day_data()
     signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
     strategy = SimpleNamespace(generate_signals=lambda *_args, **_kwargs: generated.append(True) or signals)
-    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": asset_cfg})
+    monkeypatch.setattr(cli, "load_assets", lambda: {name: replace(asset_cfg, ticker=name) for name in asset_names})
     monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
     monkeypatch.setattr(runner, "load_strategy", lambda _name: strategy)
     monkeypatch.setattr(cli, "load_data", lambda *_args: data)
@@ -1124,3 +1124,20 @@ def test_variant_label_counts_stop_distance_variants():
     }
 
     assert cli.variant_label(task) == "orb_candle MGC 15m 5m 6 variants"
+
+
+def test_each_asset_runs_its_tagged_stop_distances_or_else_the_untagged_ones(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    _generated, submitted, (table, _config_arg, _columns, _splits) = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, asset_names=("MGC", "EURUSD", "MNQ"), asset="MGC,EURUSD,MNQ",
+        stop_distance="MGC=0.1-0.5%,mgc=0.2-0.6%,EURUSD=5-20pips,0.1-0.4%",
+    )
+
+    assert {task["asset"]: tuple(map(str, task["stop_distances"])) for task in submitted} == {
+        "MGC": ("0.1-0.5%", "0.2-0.6%"),
+        "EURUSD": ("5-20pips",),
+        "MNQ": ("0.1-0.4%",),
+    }
+    assert sorted(zip(table["Asset"], table["Stop Distance"])) == [
+        ("EURUSD", "5-20pips"), ("MGC", "0.1-0.5%"), ("MGC", "0.2-0.6%"), ("MNQ", "0.1-0.4%"),
+    ]
+    assert "4 variants" in capsys.readouterr().err
