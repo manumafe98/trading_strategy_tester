@@ -1097,6 +1097,16 @@ def test_run_rejects_a_bad_stop_distance_before_loading_data(monkeypatch, test_a
         cli.run(_config(stop_distance=value))
 
 
+@pytest.mark.parametrize("value", ["-0.1-0.5%", "-0.1%+"])
+def test_run_rejects_a_negative_stop_distance_minimum_as_a_negative_bound(monkeypatch, test_asset_cfg, value):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--stop_distance bounds must be finite and non-negative"):
+        cli.run(_config(stop_distance=value))
+
+
 def test_stop_distance_ranges_count_against_max_variants(monkeypatch, test_asset_cfg):
     monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
     monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))

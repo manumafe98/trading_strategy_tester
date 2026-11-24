@@ -120,7 +120,9 @@ class StopDistanceLimits:
         if unit is None:
             raise ValueError(f"--stop_distance range needs a unit, % or pips; got: {text}")
         body = body.removesuffix(unit)
-        minimum, separator, maximum = (body, "", "") if open_ended else body.partition("-")
+        separator_at = -1 if open_ended else body.find("-", 1)
+        separator = "" if separator_at < 0 else "-"
+        minimum, maximum = (body, "") if separator_at < 0 else (body[:separator_at], body[separator_at + 1 :])
         bounds = (_number(minimum), math.inf if open_ended else _number(maximum))
         if (not open_ended and not separator) or None in bounds:
             raise ValueError(f"--stop_distance must be a range like 0.1-0.5%, 5-20pips or 0.2%+; got: {text}")
