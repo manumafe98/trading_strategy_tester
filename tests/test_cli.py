@@ -1141,3 +1141,43 @@ def test_each_asset_runs_its_tagged_stop_distances_or_else_the_untagged_ones(mon
         ("EURUSD", "5-20pips"), ("MGC", "0.1-0.5%"), ("MGC", "0.2-0.6%"), ("MNQ", "0.1-0.4%"),
     ]
     assert "4 variants" in capsys.readouterr().err
+
+
+def test_an_asset_without_a_tagged_or_untagged_stop_distance_runs_without_limits(monkeypatch, tmp_path, test_asset_cfg):
+    _generated, submitted, (table, _config_arg, columns, _splits) = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, asset_names=("MGC", "EURUSD"), asset="MGC,EURUSD", stop_distance="MGC=0.6%+"
+    )
+
+    assert {task["asset"]: task["stop_distances"] for task in submitted}["EURUSD"] == (None,)
+    assert "Stop Distance" in columns
+    assert sorted(zip(table["Asset"], table["Stop Distance"], table["Trades"])) == [("EURUSD", "", 1), ("MGC", "0.6%+", 0)]
+
+
+def test_run_rejects_a_stop_distance_tag_for_an_asset_not_in_the_run_before_loading_data(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg, "MGC": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--stop_distance tag for unknown asset: MGC"):
+        cli.run(_config(stop_distance="0.1-0.5%,mgc=0.1-0.5%"))
+
+
+def test_a_stop_distance_listed_twice_for_an_asset_runs_once(monkeypatch, tmp_path, test_asset_cfg):
+    _generated, submitted, _written = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, stop_distance="TEST=0.1-0.5%,test=0.10-0.50%,0.2%+,0.2%+"
+    )
+
+    assert [tuple(map(str, task["stop_distances"])) for task in submitted] == [("0.1-0.5%",)]
+
+
+def test_each_asset_counts_its_own_stop_distances_against_max_variants(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"MGC": test_asset_cfg, "EURUSD": test_asset_cfg, "MNQ": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="8 variants exceed --max_variants 7"):
+        cli.run(_config(
+            asset="MGC,EURUSD,MNQ", risk_reward_ratio="1,2", stop_distance="MGC=0.1-0.5%,MGC=0.2-0.6%,EURUSD=5-20pips,0.1-0.4%",
+            max_variants=7,
+        ))
