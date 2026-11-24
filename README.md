@@ -257,7 +257,7 @@ The Pine references in `pine_scripts_examples/` differ from these strategies on 
 - **Futures roll.** A contract change clears `choch_sr`'s pivots, channels, pending touches and swings. TradingView's continuous chart keeps them, so its channels hold old-contract prices for up to 290 high-timeframe bars after a roll (about three sessions at 15m), and trades in that span can differ.
 - **High-timeframe bars.** The Pine reads 15m channels through `request.security` with `lookahead_on` and a one-bar shift. We resample the 1m bars on the clock and use the channels computed at the previous 15m close. Both give the same channels.
 - **Pip size.** The Pine derives a pip from `syminfo.type` (0.0001 on forex, 0.01 on JPY pairs, one tick otherwise). We read `pip_size` from `config/assets.json`, which defaults to `tick_size`.
-- **Channel script.** The reference is the repo's `pine_scripts_examples/support_and_resistance.pine`, with 0.1% / 0.4% minimum and maximum channel widths and a pips unit. LonesomeTheBlue's published original caps the width at 5% of the 300-bar high-low range and has no minimum (per a mirror of its source).
+- **Channel script.** The reference is the repo's `pine_scripts_examples/indicators/support_and_resistance.pine`, with 0.1% / 0.4% minimum and maximum channel widths and a pips unit. LonesomeTheBlue's published original caps the width at 5% of the 300-bar high-low range and has no minimum (per a mirror of its source).
 - **FVG window.** Pine detects FVGs in a separate `FVG Session` input that defaults to 09:30-12:00 New York, and its trade window is hardcoded to 09:30-11:59. Both of ours follow the `--sessions` window, so a wider window detects and trades FVGs outside 09:30-12:00.
 
 ## CHoCH + SR Strategy

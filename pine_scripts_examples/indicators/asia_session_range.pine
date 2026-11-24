@@ -1,0 +1,48 @@
+//@version=6
+indicator("Asia Session Range", overlay=true, max_boxes_count=500, max_lines_count=500)
+
+sessionInput  = input.session("1900-0200", "Session")
+timezoneInput = input.string("America/New_York", "Timezone")
+extendLines   = input.bool(true, "Extend lines until next session")
+boxColor      = input.color(color.new(color.aqua, 75), "Box")
+edgeColor     = input.color(color.aqua, "High / Low")
+midColor      = input.color(color.orange, "50%")
+
+inSession     = not na(time(timeframe.period, sessionInput, timezoneInput))
+sessionStarts = inSession and not inSession[1]
+
+var box   rangeBox    = na
+var line  highLine    = na
+var line  lowLine     = na
+var line  midLine     = na
+var float sessionHigh = na
+var float sessionLow  = na
+
+if sessionStarts
+    sessionHigh := high
+    sessionLow  := low
+    rangeBox    := box.new(bar_index, high, bar_index, low, border_width=0, bgcolor=boxColor)
+    highLine    := line.new(bar_index, high, bar_index, high, color=edgeColor)
+    lowLine     := line.new(bar_index, low, bar_index, low, color=edgeColor)
+    midLine     := line.new(bar_index, low, bar_index, low, color=midColor)
+else if inSession
+    sessionHigh := math.max(sessionHigh, high)
+    sessionLow  := math.min(sessionLow, low)
+
+sessionMid = (sessionHigh + sessionLow) / 2
+
+if inSession
+    box.set_top(rangeBox, sessionHigh)
+    box.set_bottom(rangeBox, sessionLow)
+    box.set_right(rangeBox, bar_index)
+    line.set_y1(highLine, sessionHigh)
+    line.set_y2(highLine, sessionHigh)
+    line.set_y1(lowLine, sessionLow)
+    line.set_y2(lowLine, sessionLow)
+    line.set_y1(midLine, sessionMid)
+    line.set_y2(midLine, sessionMid)
+
+if not na(highLine) and (inSession or extendLines)
+    line.set_x2(highLine, bar_index)
+    line.set_x2(lowLine, bar_index)
+    line.set_x2(midLine, bar_index)
