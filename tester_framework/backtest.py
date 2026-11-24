@@ -173,7 +173,7 @@ def _prepare_trade(
     risk_points = abs(raw_entry - stop)
     if round(risk_points / asset_cfg.tick_size, 6) < asset_cfg.min_risk_ticks:
         return None
-    if stop_distance is not None and not stop_distance.within(raw_entry, stop, asset_cfg.pip_size):
+    if stop_distance is not None and not stop_distance.within(risk_points, raw_entry, asset_cfg.pip_size):
         return None
     qty = rounded_qty((current_net * risk_pct / 100) / (risk_points * asset_cfg.point_value), asset_cfg.qty_step)
     if qty < asset_cfg.min_qty:

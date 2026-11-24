@@ -133,8 +133,7 @@ class StopDistanceLimits:
             return f"{self.minimum:g}{self.unit}+"
         return f"{self.minimum:g}-{self.maximum:g}{self.unit}"
 
-    def within(self, fill_price: float, stop: float, pip_size: float) -> bool:
-        risk_points = abs(fill_price - stop)
+    def within(self, risk_points: float, fill_price: float, pip_size: float) -> bool:
         shortest = distance_in_price(self.minimum - STOP_DISTANCE_TOLERANCE, self.unit, fill_price, pip_size)
         if risk_points < shortest:
             return False
