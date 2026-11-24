@@ -514,7 +514,7 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument(
         "--stop_distance",
         metavar="RANGE,...",
-        help="comma list of stop distance limits, each its own variant, e.g. 0.1-0.5%%,5-20pips or 0.2%%+; default no limits",
+        help="comma list of stop distance limits, each its own variant, optionally tagged ASSET=, e.g. 0.1-0.5%%,EURUSD=5-20pips or 0.2%%+; default no limits",
     )
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
