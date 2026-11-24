@@ -134,7 +134,9 @@ f_highlight(Zone z, bool isArmed) =>
         box.set_border_style(z.area, isArmed ? line.style_solid : line.style_dashed)
 
 f_remove(array<Zone> zones, int index) =>
-    f_set_right(zones.get(index))
+    Zone z = zones.get(index)
+    if z.shown
+        f_set_right(z)
     zones.remove(index)
 
 f_drop_consumed(array<Zone> zones, bool isUpper) =>
