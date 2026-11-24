@@ -53,7 +53,7 @@ def test_status_lines():
 
 
 def test_variant_label_names_both_timeframes():
-    task = {"strategy": "orb_candle", "asset": "MGC", "timeframe": "15m", "low_timeframe": "5m", "session": None, "params_label": "", "variants": ((1, "fixed"),)}
+    task = {"strategy": "orb_candle", "asset": "MGC", "timeframe": "15m", "low_timeframe": "5m", "session": None, "params_label": "", "variants": ((1, "fixed"),), "stop_distances": (None,)}
 
     assert cli.variant_label(task) == "orb_candle MGC 15m 5m 1 variant"
 
@@ -1008,3 +1008,119 @@ def test_run_without_split_keeps_return_sort_and_adds_no_rank_columns(monkeypatc
     table, _config_arg, columns, _splits = written[0]
     assert list(table["RR"]) == ["1", "3", "2"]
     assert "IS Rank" not in table and "IS Rank" not in columns and "WFE" not in columns
+
+
+def test_stop_distance_flag_defaults_off_and_maps_to_config(monkeypatch):
+    assert cli.parser().parse_args([]).stop_distance is None
+    configs = []
+    monkeypatch.setattr(cli, "run", configs.append)
+    monkeypatch.setattr(sys, "argv", ["tester_framework", "--strategies", "ema50", "--stop_distance", "0.1-0.5%,5-20pips"])
+    cli.main()
+
+    assert configs[0].stop_distance == "0.1-0.5%,5-20pips"
+
+
+def _stop_distance_run(monkeypatch, tmp_path, asset_cfg, **overrides):
+    generated, submitted, written = [], [], []
+    data = _two_day_data()
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
+    strategy = SimpleNamespace(generate_signals=lambda *_args, **_kwargs: generated.append(True) or signals)
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: strategy)
+    monkeypatch.setattr(runner, "load_strategy", lambda _name: strategy)
+    monkeypatch.setattr(cli, "load_data", lambda *_args: data)
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: None)
+    monkeypatch.setattr(cli, "ProcessPoolExecutor", _InlineExecutor)
+    monkeypatch.setattr(cli, "wait", lambda futures, **_kwargs: (set(futures), set()))
+    monkeypatch.setattr(cli, "run_variants", lambda task: submitted.append(task) or runner.run_variants(task))
+    monkeypatch.setattr(cli, "write_results_html", lambda *args: written.append(args) or tmp_path / "results.html")
+    cli.run(_config(trade_html=0, **overrides))
+    return generated, submitted, written[0]
+
+
+def test_each_stop_distance_range_is_its_own_variant_sharing_one_signal_generation(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    generated, submitted, (table, _config_arg, columns, _splits) = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, risk_reward_ratio="1,2", stop_distance="0.1-0.5%,0.6%+"
+    )
+
+    assert generated == [True]
+    assert [len(task["variants"]) * len(task["stop_distances"]) for task in submitted] == [4]
+    assert columns.index("Stop Distance") == columns.index("Exit Mode") + 1
+    assert sorted(zip(table["RR"], table["Stop Distance"], table["Trades"], table["Discarded"])) == [
+        ("1", "0.1-0.5%", 1, 0),
+        ("1", "0.6%+", 0, 1),
+        ("2", "0.1-0.5%", 1, 0),
+        ("2", "0.6%+", 0, 1),
+    ]
+    captured = capsys.readouterr()
+    assert "4 variants" in captured.err
+    assert "Stop Distance" in captured.out
+
+
+def test_run_without_stop_distance_has_no_limits_and_no_stop_distance_column(monkeypatch, tmp_path, capsys, test_asset_cfg):
+    _generated, submitted, (table, _config_arg, columns, _splits) = _stop_distance_run(monkeypatch, tmp_path, test_asset_cfg)
+
+    assert [task["stop_distances"] for task in submitted] == [(None,)]
+    assert "Stop Distance" not in columns
+    assert list(table["Trades"]) == [1]
+    assert "Stop Distance" not in capsys.readouterr().out
+
+
+def test_stop_distance_values_listed_twice_run_once(monkeypatch, tmp_path, test_asset_cfg):
+    _generated, submitted, _written = _stop_distance_run(monkeypatch, tmp_path, test_asset_cfg, stop_distance="0.1-0.5%,0.10-0.50%")
+
+    assert [tuple(map(str, task["stop_distances"])) for task in submitted] == [("0.1-0.5%",)]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("0.1-0.5", id="missing-unit"),
+        pytest.param("0.1-0.5pts", id="unknown-unit"),
+        pytest.param("0.1%", id="no-maximum-and-no-plus"),
+        pytest.param("a-0.5%", id="not-a-number"),
+        pytest.param("0.1-0.5-0.6%", id="three-bounds"),
+        pytest.param("-0.1-0.5%", id="negative-minimum"),
+        pytest.param("-0.1%+", id="negative-minimum-only"),
+        pytest.param("0.5-0.1%", id="minimum-above-maximum"),
+        pytest.param("nan-0.5%", id="not-finite"),
+        pytest.param("0.1-0.5%,5pips", id="one-bad-range-in-a-list"),
+    ],
+)
+def test_run_rejects_a_bad_stop_distance_before_loading_data(monkeypatch, test_asset_cfg, value):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "reset_output_dirs", lambda: pytest.fail("outputs must not be cleared"))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="--stop_distance"):
+        cli.run(_config(stop_distance=value))
+
+
+def test_stop_distance_ranges_count_against_max_variants(monkeypatch, test_asset_cfg):
+    monkeypatch.setattr(cli, "load_assets", lambda: {"TEST": test_asset_cfg})
+    monkeypatch.setattr(cli, "load_strategy", lambda _name: SimpleNamespace(generate_signals=lambda *_args: None))
+    monkeypatch.setattr(cli, "load_data", lambda *_args: pytest.fail("load_data should not be called"))
+
+    with pytest.raises(ValueError, match="6 variants exceed --max_variants 5"):
+        cli.run(_config(risk_reward_ratio="1,2", stop_distance="0.1-0.5%,0.2-0.6%,5-20pips", max_variants=5))
+
+
+def test_split_run_ranks_stop_distance_variants_with_the_other_variants_of_their_strategy_and_asset(
+    monkeypatch, tmp_path, test_asset_cfg
+):
+    _generated, _submitted, (table, _config_arg, _columns, _splits) = _stop_distance_run(
+        monkeypatch, tmp_path, test_asset_cfg, stop_distance="0.1-0.5%,0.6%+", oos_start="2025-01-02"
+    )
+
+    assert sorted(table["Stop Distance"]) == ["0.1-0.5%", "0.6%+"]
+    assert sorted(table["IS Rank"]) == [1, 2]
+
+
+def test_variant_label_counts_stop_distance_variants():
+    task = {
+        "strategy": "orb_candle", "asset": "MGC", "timeframe": "15m", "low_timeframe": "5m", "session": None, "params_label": "",
+        "variants": ((1, "fixed"), (2, "fixed")), "stop_distances": (None, None, None),
+    }
+
+    assert cli.variant_label(task) == "orb_candle MGC 15m 5m 6 variants"

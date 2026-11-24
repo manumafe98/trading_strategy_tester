@@ -17,7 +17,7 @@ from .analytics import format_duration
 from .backtest import BAR_DURATIONS, INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
-from .models import OPERATIONS, IntrabarRule, TargetFill
+from .models import OPERATIONS, IntrabarRule, StopDistanceLimits, TargetFill
 from .reports import fill_rule_tags, format_metric, reset_output_dirs, write_results_html
 from .runner import batch_label, cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions
@@ -39,7 +39,7 @@ WorkerState = tuple[str, float] | None
 
 
 def variant_label(task: VariantBatchTask) -> str:
-    return f'{batch_label(task)} {variant_count(len(task["variants"]))}'
+    return f'{batch_label(task)} {variant_count(len(task["variants"]) * len(task["stop_distances"]))}'
 
 
 def status_lines(
@@ -183,6 +183,10 @@ def exit_mode_variants(value: str | None, risk_reward_ratio: float) -> list[str]
     return modes
 
 
+def stop_distance_variants(value: str | None) -> tuple[StopDistanceLimits | None, ...]:
+    return tuple(dict.fromkeys(StopDistanceLimits.parse(item) for item in csv_items(value))) or (None,)
+
+
 def worker_count(requested: int | None, task_count: int) -> int:
     if requested is not None and requested < 1:
         raise ValueError("--workers must be at least 1")
@@ -253,6 +257,7 @@ def run(config: RunConfig) -> None:
     if not any(variants.values()):
         raise ValueError("No exit modes are compatible with the requested risk/reward ratios")
     variant_pairs = tuple((ratio, mode) for ratio in ratios for mode in variants[ratio])
+    stop_distances = stop_distance_variants(config.stop_distance)
     if not math.isfinite(config.capital) or config.capital <= 0:
         raise ValueError("--capital must be finite and positive")
     if config.max_trades is not None and config.max_trades < 1:
@@ -302,7 +307,7 @@ def run(config: RunConfig) -> None:
                 strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
     combinations = {name: combination_count(values) for name, values in param_values.items()}
     batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
-    task_count = batch_count * len(variant_pairs)
+    task_count = batch_count * len(variant_pairs) * len(stop_distances)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     if config.max_variants < 1:
@@ -375,6 +380,7 @@ def run(config: RunConfig) -> None:
                                     intrabar=config.intrabar,
                                     strategy_params=params,
                                     params_label=params_label(defaults, params),
+                                    stop_distances=stop_distances,
                                 )
                             )
                     del data
@@ -417,7 +423,14 @@ def run(config: RunConfig) -> None:
 
         table = pd.DataFrame(rows)
         include_params = "Params" in table and bool(table["Params"].astype(bool).any())
-        columns = result_columns(config.operation, include_session=bool(session_specs), split=split_mode, include_params=include_params)
+        include_stop_distance = "Stop Distance" in table and bool(table["Stop Distance"].astype(bool).any())
+        columns = result_columns(
+            config.operation,
+            include_session=bool(session_specs),
+            split=split_mode,
+            include_params=include_params,
+            include_stop_distance=include_stop_distance,
+        )
         if not table.empty:
             strategy_order = {name: i for i, name in enumerate(strategies)}
             order = {asset: i for i, asset in enumerate(assets)}
@@ -485,6 +498,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
     p.add_argument("--exit_mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
+    p.add_argument(
+        "--stop_distance",
+        metavar="RANGE,...",
+        help="comma list of stop distance limits, each its own variant, e.g. 0.1-0.5%%,5-20pips or 0.2%%+; default no limits",
+    )
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
     p.add_argument(
@@ -571,6 +589,7 @@ def main() -> None:
             strategy_params=args.strategy_params,
             low_timeframe=args.low_timeframe,
             max_variants=args.max_variants,
+            stop_distance=args.stop_distance,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

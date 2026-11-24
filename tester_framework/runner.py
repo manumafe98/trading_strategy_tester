@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import gc
+import itertools
 from pathlib import Path
 
 import numpy as np
@@ -8,6 +9,7 @@ import pandas as pd
 
 from .analytics import analyze_trades, encode_analytics, strategy_metrics
 from .backtest import add_trade_counts, run_backtest
+from .models import StopDistanceLimits
 from .reports import write_trade_html
 from .sessions import filter_signals, session_label
 from .settings import FINANCIAL_COLUMNS, OOS_FINANCIAL_COLUMNS
@@ -57,6 +59,7 @@ def _run_variant(
     signals: pd.DataFrame,
     risk_reward_ratio: float,
     exit_mode: str,
+    stop_distance: StopDistanceLimits | None,
     hook_params: dict[str, object],
 ) -> dict[str, object]:
     session = session_label(task["session"])
@@ -81,6 +84,7 @@ def _run_variant(
         oos_cutoff=task["oos_cutoff"],
         target_fill=task["target_fill"],
         intrabar=task["intrabar"],
+        stop_distance=stop_distance,
     )
     params = {
         **hook_params,
@@ -99,6 +103,8 @@ def _run_variant(
         for chart_number, trade in enumerate(trades, 1):
             trade["low_timeframe"] = task["low_timeframe"]
             trade["params_label"] = task["params_label"]
+            if stop_distance is not None:
+                trade["stop_distance"] = str(stop_distance)
             if session:
                 trade["session"] = session
             if task["trade_html"] is None or chart_number <= task["trade_html"]:
@@ -123,6 +129,7 @@ def _run_variant(
     row["Low TF"] = task["low_timeframe"]
     row["RR"] = f"{risk_reward_ratio:g}"
     row["Exit Mode"] = exit_mode
+    row["Stop Distance"] = "" if stop_distance is None else str(stop_distance)
     if session:
         row["Session"] = session
     row["Params"] = task["params_label"]
@@ -161,10 +168,12 @@ def run_variants(task: VariantBatchTask) -> list[dict[str, object]]:
             detail = str(exc) or type(exc).__name__
             raise RuntimeError(f"{label}: {detail}") from exc
         rows = []
-        for risk_reward_ratio, exit_mode in task["variants"]:
-            variant = f"{label} {risk_reward_ratio:g}R {exit_mode}"
+        for (risk_reward_ratio, exit_mode), stop_distance in itertools.product(task["variants"], task["stop_distances"]):
+            variant = f"{label} {risk_reward_ratio:g}R {exit_mode}" + ("" if stop_distance is None else f" {stop_distance}")
             try:
-                rows.append(_run_variant(task, data, strategy, signals, risk_reward_ratio, exit_mode, hook_params))
+                rows.append(
+                    _run_variant(task, data, strategy, signals, risk_reward_ratio, exit_mode, stop_distance, hook_params)
+                )
             except MemoryError as exc:
                 raise RuntimeError(f"{variant}: insufficient memory; retry with fewer --workers") from exc
             except (FileNotFoundError, RuntimeError, ValueError) as exc:

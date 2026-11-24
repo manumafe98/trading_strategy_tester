@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from .models import AssetConfig, IntrabarRule, TargetFill
+from .models import AssetConfig, IntrabarRule, StopDistanceLimits, TargetFill
 from .sessions import SessionSpec
 
 
@@ -31,3 +31,4 @@ class VariantBatchTask(TypedDict):
     intrabar: IntrabarRule
     strategy_params: dict[str, object]
     params_label: str
+    stop_distances: tuple[StopDistanceLimits | None, ...]

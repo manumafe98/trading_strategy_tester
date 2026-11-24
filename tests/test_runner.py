@@ -12,6 +12,7 @@ import tester_framework.reports as reports
 import tester_framework.runner as runner
 from tester_framework.analytics import decode_analytics
 from tester_framework.cli import RunConfig
+from tester_framework.models import StopDistanceLimits
 from tester_framework.runner import cache_data
 from tester_framework.sessions import parse_sessions
 
@@ -41,6 +42,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
         "target_fill": "tick_through",
         "intrabar": "path",
         "strategy_params": {}, "params_label": "",
+        "stop_distances": (None,),
     }
     task.update(overrides)
     return task
@@ -131,6 +133,24 @@ def test_trade_chart_names_the_changed_parameters(monkeypatch, tmp_path, test_as
     assert "ema50 TEST 1h 1h swing_length=10 long fixed" in chart.read_text(encoding="utf-8")
 
 
+def test_trade_chart_names_the_stop_distance_limits(monkeypatch, tmp_path, test_asset_cfg):
+    trades_dir = tmp_path / "trades"
+    monkeypatch.setattr(reports, "TRADES_DIR", trades_dir)
+    data = _target_bars([100.0, 102.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+    limits = (StopDistanceLimits.parse("0.1-0.5%"), StopDistanceLimits.parse("0.2-0.6%"))
+
+    runner.run_variants(_task(data, tmp_path, test_asset_cfg, trade_html=None, stop_distances=limits))
+
+    charts = sorted(trades_dir.glob("*.html"))
+    assert [chart.name.split("_2025")[0] for chart in charts] == [
+        "ema50_TEST_1h_1h_1rr_fixed_0.1-0.5",
+        "ema50_TEST_1h_1h_1rr_fixed_0.2-0.6",
+    ]
+    assert "ema50 TEST 1h 1h long fixed 0.1-0.5%" in charts[0].read_text(encoding="utf-8")
+
+
 def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
     generated = []
     monkeypatch.setattr(
@@ -143,6 +163,39 @@ def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, ba
 
     assert generated == [True]
     assert [(row["RR"], row["Exit Mode"]) for row in rows] == [("1", "fixed"), ("2", "trailing")]
+
+
+def test_run_variants_shares_one_signal_generation_across_stop_distance_limits(monkeypatch, tmp_path, test_asset_cfg):
+    generated = []
+    data = _target_bars([100.0, 100.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: generated.append(True) or signals),
+    )
+    limits = (None, StopDistanceLimits.parse("0.1-0.5%"), StopDistanceLimits.parse("0.6%+"))
+
+    rows = runner.run_variants(_task(data, tmp_path, test_asset_cfg, variants=((1, "fixed"), (2, "fixed")), stop_distances=limits))
+
+    assert generated == [True]
+    assert [(row["RR"], row["Stop Distance"], row["Trades"], row["Discarded"]) for row in rows] == [
+        ("1", "", 1, 0),
+        ("1", "0.1-0.5%", 1, 0),
+        ("1", "0.6%+", 0, 1),
+        ("2", "", 1, 0),
+        ("2", "0.1-0.5%", 1, 0),
+        ("2", "0.6%+", 0, 1),
+    ]
+
+
+def test_variant_error_names_its_stop_distance_limits(monkeypatch, tmp_path, test_asset_cfg):
+    data = _target_bars([100.0, 100.0, 100.0])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame()))
+    monkeypatch.setattr(runner, "run_backtest", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")))
+
+    with pytest.raises(RuntimeError, match=r"^ema50 TEST 1h 1h 1R fixed 0\.1-0\.5%: boom$"):
+        runner.run_variants(_task(data, tmp_path, test_asset_cfg, stop_distances=(StopDistanceLimits.parse("0.1-0.5%"),)))
 
 
 def test_run_variants_drops_signals_at_or_after_session_window_end(monkeypatch, tmp_path, test_asset_cfg):
@@ -525,6 +578,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "target_fill": "tick_through",
                 "intrabar": "path",
                 "strategy_params": {}, "params_label": "",
+                "stop_distances": (None,),
             }
 
             rows = runner.run_variants(task)

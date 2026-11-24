@@ -63,3 +63,4 @@ class RunConfig:
     strategy_params: str | None = None
     low_timeframe: str | None = None
     max_variants: int = DEFAULT_MAX_VARIANTS
+    stop_distance: str | None = None
