@@ -6,6 +6,7 @@ import numpy as np
 import pandas as pd
 
 from strategy.utils.pivots import pivot_high_bars
+from tester_framework.models import distance_in_price
 
 
 PIVOT_PERIOD = 10
@@ -92,16 +93,12 @@ def validate_widths(
         raise ValueError(f"{min_name} must not exceed {max_name}")
 
 
-def width_in_price(width: float, width_unit: str, base_price: float, pip_size: float) -> float:
-    return base_price * width / 100 if width_unit == "%" else width * pip_size
-
-
 def _cluster(pivot_values: list[float], seed: int, max_width: float, width_unit: str, pip_size: float) -> tuple[float, float, int]:
     low = high = pivot_values[seed]
     strength = 0
     for pivot in pivot_values:
         width = high - pivot if pivot <= high else pivot - low
-        allowed = width_in_price(max_width, width_unit, min(low, pivot), pip_size)
+        allowed = distance_in_price(max_width, width_unit, min(low, pivot), pip_size)
         if width <= allowed:
             if pivot <= high:
                 low = min(low, pivot)
@@ -124,7 +121,7 @@ def _select_channels(
     for seed in range(len(pivot_values)):
         top, bottom, strength = _cluster(pivot_values, seed, max_width, width_unit, pip_size)
         touches = int((((highs <= top) & (highs >= bottom)) | ((lows <= top) & (lows >= bottom))).sum())
-        min_allowed = width_in_price(min_width, width_unit, bottom, pip_size)
+        min_allowed = distance_in_price(min_width, width_unit, bottom, pip_size)
         rejected = min_width > 0 and top - bottom < min_allowed
         candidates.append((top, bottom, -1.0 if rejected else float(strength + touches)))
 
