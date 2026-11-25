@@ -2,14 +2,14 @@ from __future__ import annotations
 
 from typing import TypedDict
 
-from .models import AssetConfig, IntrabarRule, TargetFill
+from .models import AssetConfig, IntrabarRule, StopDistanceLimits, TargetFill
 from .sessions import SessionSpec
 
 
 class VariantBatchTask(TypedDict):
     strategy: str
     data_cache: tuple[str, str, tuple[str, ...]]
-    variants: tuple[tuple[float, str], ...]
+    variants: tuple[tuple[float, str, StopDistanceLimits | None], ...]
     asset: str
     asset_cfg: AssetConfig
     timeframe: str

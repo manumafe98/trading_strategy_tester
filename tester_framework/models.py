@@ -81,4 +81,65 @@ class AssetConfig:
             raise ValueError(f"Invalid session_start: {self.session_start}") from None
 
 
-__all__ = ["OPERATIONS", "AssetConfig", "ExitReason", "IntrabarRule", "Side", "TargetFill"]
+STOP_DISTANCE_UNITS = ("%", "pips")
+STOP_DISTANCE_TOLERANCE = 1e-8
+
+
+def _number(text: str) -> float | None:
+    try:
+        return float(text)
+    except ValueError:
+        return None
+
+
+def distance_in_price(distance: float, unit: str, base_price: float, pip_size: float) -> float:
+    return base_price * distance / 100 if unit == "%" else distance * pip_size
+
+
+@dataclass(frozen=True)
+class StopDistanceLimits:
+    minimum: float
+    maximum: float | None
+    unit: str
+
+    def __post_init__(self) -> None:
+        if self.unit not in STOP_DISTANCE_UNITS:
+            raise ValueError(f"--stop_distance unit must be % or pips; got: {self.unit}")
+        bounds = (self.minimum,) if self.maximum is None else (self.minimum, self.maximum)
+        if any(isinstance(bound, bool) or not math.isfinite(bound) or bound < 0 for bound in bounds):
+            raise ValueError(f"--stop_distance bounds must be finite and non-negative; got: {self}")
+        if self.maximum is not None and self.minimum > self.maximum:
+            raise ValueError(f"--stop_distance minimum must not exceed the maximum; got: {self}")
+
+    @classmethod
+    def parse(cls, text: str) -> StopDistanceLimits:
+        body = text.strip().lower()
+        open_ended = body.endswith("+")
+        body = body.removesuffix("+")
+        unit = next((unit for unit in STOP_DISTANCE_UNITS if body.endswith(unit)), None)
+        if unit is None:
+            raise ValueError(f"--stop_distance range needs a unit, % or pips; got: {text}")
+        body = body.removesuffix(unit)
+        separator_at = -1 if open_ended else body.find("-", 1)
+        separator = "" if separator_at < 0 else "-"
+        minimum, maximum = (body, "") if separator_at < 0 else (body[:separator_at], body[separator_at + 1 :])
+        bounds = (_number(minimum), math.inf if open_ended else _number(maximum))
+        if (not open_ended and not separator) or None in bounds:
+            raise ValueError(f"--stop_distance must be a range like 0.1-0.5%, 5-20pips or 0.2%+; got: {text}")
+        return cls(bounds[0], None if open_ended else bounds[1], unit)
+
+    def __str__(self) -> str:
+        if self.maximum is None:
+            return f"{self.minimum:g}{self.unit}+"
+        return f"{self.minimum:g}-{self.maximum:g}{self.unit}"
+
+    def within(self, risk_points: float, fill_price: float, pip_size: float) -> bool:
+        shortest = distance_in_price(self.minimum - STOP_DISTANCE_TOLERANCE, self.unit, fill_price, pip_size)
+        if risk_points < shortest:
+            return False
+        return self.maximum is None or risk_points <= distance_in_price(
+            self.maximum + STOP_DISTANCE_TOLERANCE, self.unit, fill_price, pip_size
+        )
+
+
+__all__ = ["OPERATIONS", "AssetConfig", "ExitReason", "IntrabarRule", "Side", "StopDistanceLimits", "TargetFill", "distance_in_price"]

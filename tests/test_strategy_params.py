@@ -261,7 +261,7 @@ def test_value_lists_run_the_cartesian_product_in_the_order_names_were_given(mon
     assert [(params["mode"], params["swing_length"]) for params in seen] == [
         ("break", 10), ("break", 20), ("break", 30), ("close", 10), ("close", 20), ("close", 30)
     ]
-    assert [task["variants"] for task in tasks] == [((2.0, "fixed"), (2.0, "trailing"))] * 6
+    assert [task["variants"] for task in tasks] == [((2.0, "fixed", None), (2.0, "trailing", None))] * 6
     assert [task["params_label"] for task in tasks] == [
         "swing_length=10 mode=break", "mode=break", "swing_length=30 mode=break",
         "swing_length=10", "", "swing_length=30",

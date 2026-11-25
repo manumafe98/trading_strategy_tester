@@ -96,6 +96,10 @@ _Avoid_: position, deal
 The entry-to-stop price distance of a trade, used as the unit for targets and results.
 _Avoid_: risk unit
 
+**Stop distance limits**:
+The smallest and largest R a variant accepts, set per asset as a percentage of the fill price or in pips; a signal whose R falls outside them is discarded.
+_Avoid_: SL size, stop size, risk bounds, R limits
+
 **RR (risk/reward ratio)**:
 The final target distance expressed as a multiple of R.
 
@@ -127,11 +131,11 @@ An exit filled at a bar's open because the price gapped through the stop or a ta
 _Avoid_: slippage exit
 
 **Discarded signal**:
-A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, an open trade, a close entry on the last bar, a stop entry whose bar never reaches its level, a calendar filter, a fill in the 60 minutes before a roll or across one, a setup time before the first high-timeframe bar after the previous trade's exit, or a size below the minimum quantity.
+A signal that never became a trade, because of an invalid stop or entry, R below the asset's minimum risk, R outside the stop distance limits, an open trade, a close entry on the last bar, a stop entry whose bar never reaches its level, a calendar filter, a fill in the 60 minutes before a roll or across one, a setup time before the first high-timeframe bar after the previous trade's exit, or a size below the minimum quantity.
 _Avoid_: skipped signal, rejected signal
 
 **Variant**:
-One combination of strategy, asset, high timeframe, low timeframe, RR, exit mode, session window, and strategy parameter values, backtested independently.
+One combination of strategy, asset, high timeframe, low timeframe, RR, exit mode, stop distance limits, session window, and strategy parameter values, backtested independently.
 _Avoid_: run, scenario
 
 **Strategy parameter**:

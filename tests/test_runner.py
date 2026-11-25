@@ -12,6 +12,7 @@ import tester_framework.reports as reports
 import tester_framework.runner as runner
 from tester_framework.analytics import decode_analytics
 from tester_framework.cli import RunConfig
+from tester_framework.models import StopDistanceLimits
 from tester_framework.runner import cache_data
 from tester_framework.sessions import parse_sessions
 
@@ -20,7 +21,7 @@ def _task(data, cache_dir, asset_cfg, **overrides):
     task = {
         "strategy": "ema50",
         "data_cache": cache_data(data, str(cache_dir), 0),
-        "variants": ((1, "fixed"),),
+        "variants": ((1, "fixed", None),),
         "asset": "TEST",
         "asset_cfg": asset_cfg,
         "timeframe": "1h",
@@ -80,7 +81,7 @@ def test_zero_trade_html_skips_writer_and_keeps_empty_chart_cell(
     monkeypatch.setattr(runner, "write_trade_html", lambda *_args: pytest.fail("trade HTML writer should not be called"))
     monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": hourly_index[0], "side": "long", "stop": 99}])))
 
-    row = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "trailing"),)))[0]
+    row = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "trailing", None),)))[0]
 
     trade = decode_analytics(row["_analytics"])["trades"][0]
     assert trade["chart_path"] is None
@@ -94,7 +95,7 @@ def test_trade_html_limit_charts_first_trades_and_keeps_all_trades(monkeypatch, 
     signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 2, 4)])
     monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
 
-    row = runner.run_variants(_task(data, tmp_path, test_asset_cfg, variants=((1, "trailing"),), trade_html=2))[0]
+    row = runner.run_variants(_task(data, tmp_path, test_asset_cfg, variants=((1, "trailing", None),), trade_html=2))[0]
 
     trades = decode_analytics(row["_analytics"])["trades"]
     assert row["Trades"] == 3
@@ -131,6 +132,24 @@ def test_trade_chart_names_the_changed_parameters(monkeypatch, tmp_path, test_as
     assert "ema50 TEST 1h 1h swing_length=10 long fixed" in chart.read_text(encoding="utf-8")
 
 
+def test_trade_chart_names_the_stop_distance_limits(monkeypatch, tmp_path, test_asset_cfg):
+    trades_dir = tmp_path / "trades"
+    monkeypatch.setattr(reports, "TRADES_DIR", trades_dir)
+    data = _target_bars([100.0, 102.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
+    limits = (StopDistanceLimits.parse("0.1-0.5%"), StopDistanceLimits.parse("0.2-0.6%"))
+
+    runner.run_variants(_task(data, tmp_path, test_asset_cfg, trade_html=None, variants=tuple((1, "fixed", limit) for limit in limits)))
+
+    charts = sorted(trades_dir.glob("*.html"))
+    assert [chart.name.split("_2025")[0] for chart in charts] == [
+        "ema50_TEST_1h_1h_1rr_fixed_0.1-0.5",
+        "ema50_TEST_1h_1h_1rr_fixed_0.2-0.6",
+    ]
+    assert "ema50 TEST 1h 1h long fixed 0.1-0.5%" in charts[0].read_text(encoding="utf-8")
+
+
 def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, base_data, test_asset_cfg):
     generated = []
     monkeypatch.setattr(
@@ -139,10 +158,43 @@ def test_run_variants_generates_signals_once_per_batch(monkeypatch, tmp_path, ba
         lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: generated.append(True) or pd.DataFrame()),
     )
 
-    rows = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "fixed"), (2, "trailing"))))
+    rows = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "fixed", None), (2, "trailing", None))))
 
     assert generated == [True]
     assert [(row["RR"], row["Exit Mode"]) for row in rows] == [("1", "fixed"), ("2", "trailing")]
+
+
+def test_run_variants_shares_one_signal_generation_across_stop_distance_limits(monkeypatch, tmp_path, test_asset_cfg):
+    generated = []
+    data = _target_bars([100.0, 100.0, 100.0])
+    signals = pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.5}])
+    monkeypatch.setattr(
+        runner,
+        "load_strategy",
+        lambda _name: SimpleNamespace(generate_signals=lambda *_args, **_kwargs: generated.append(True) or signals),
+    )
+    limits = (None, StopDistanceLimits.parse("0.1-0.5%"), StopDistanceLimits.parse("0.6%+"))
+
+    rows = runner.run_variants(_task(data, tmp_path, test_asset_cfg, variants=tuple((rr, "fixed", limit) for rr in (1, 2) for limit in limits)))
+
+    assert generated == [True]
+    assert [(row["RR"], row["Stop Distance"], row["Trades"], row["Discarded"]) for row in rows] == [
+        ("1", "", 1, 0),
+        ("1", "0.1-0.5%", 1, 0),
+        ("1", "0.6%+", 0, 1),
+        ("2", "", 1, 0),
+        ("2", "0.1-0.5%", 1, 0),
+        ("2", "0.6%+", 0, 1),
+    ]
+
+
+def test_variant_error_names_its_stop_distance_limits(monkeypatch, tmp_path, test_asset_cfg):
+    data = _target_bars([100.0, 100.0, 100.0])
+    monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame()))
+    monkeypatch.setattr(runner, "run_backtest", lambda *_args, **_kwargs: (_ for _ in ()).throw(ValueError("boom")))
+
+    with pytest.raises(RuntimeError, match=r"^ema50 TEST 1h 1h 1R fixed 0\.1-0\.5%: boom$"):
+        runner.run_variants(_task(data, tmp_path, test_asset_cfg, variants=((1, "fixed", StopDistanceLimits.parse("0.1-0.5%")),)))
 
 
 def test_run_variants_drops_signals_at_or_after_session_window_end(monkeypatch, tmp_path, test_asset_cfg):
@@ -241,7 +293,7 @@ def test_extra_signal_columns_reach_plot_indicators_and_trade_records(
         ),
     )
 
-    row = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "trailing"),), trade_html=None))[0]
+    row = runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "trailing", None),), trade_html=None))[0]
 
     (trade,) = plotted
     assert trade["vwap"] == 100.25
@@ -276,7 +328,7 @@ def test_run_variants_session_exit_closes_trades_at_the_variant_session_window_e
     london_open = parse_sessions("london=08:00-10:00")[0]
     data = _target_bars([100.0, 100.0, 102.1])
     monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame([{"time": data.index[0], "side": "long", "stop": 99.0}])))
-    task = _task(data, tmp_path, test_asset_cfg, variants=((2, "trailing"),), session=london_open)
+    task = _task(data, tmp_path, test_asset_cfg, variants=((2, "trailing", None),), session=london_open)
 
     held, exited = (runner.run_variants({**task, "session_exit": flag})[0] for flag in (False, True))
 
@@ -416,7 +468,7 @@ def test_variant_page_trade_rows_show_period_by_entry_bar_only_in_split_mode(
     signals = pd.DataFrame([{"time": data.index[i], "side": "long", "stop": 99.0} for i in (0, 3)])
     monkeypatch.setattr(runner, "load_strategy", _strategy(signals))
     monkeypatch.setattr(reports, "RESULTS_DIR", tmp_path / "results")
-    task = _task(data, tmp_path, test_asset_cfg, variants=((1, exit_mode),), oos_cutoff=oos_cutoff)
+    task = _task(data, tmp_path, test_asset_cfg, variants=((1, exit_mode, None),), oos_cutoff=oos_cutoff)
     table = pd.DataFrame(runner.run_variants(task))
     config = RunConfig(("ema50",), "TEST", "1h", None, "1d", "local", "all", "1", exit_mode, "1", 10_000, False, None)
 
@@ -445,7 +497,7 @@ def test_run_variants_surfaces_strategy_errors_from_mid_batch(monkeypatch, tmp_p
     monkeypatch.setattr(runner, "load_strategy", _strategy(pd.DataFrame(), calculate_metrics=calculate_metrics))
 
     with pytest.raises(ZeroDivisionError, match="strategy raised on its second variant"):
-        runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "fixed"), (2, "trailing"))))
+        runner.run_variants(_task(base_data, tmp_path, test_asset_cfg, variants=((1, "fixed", None), (2, "trailing", None))))
 
     assert calls == [True, True]
 
@@ -504,7 +556,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
             task = {
                 "strategy": "ema50",
                 "data_cache": cache_data(data, str(tmp_path), 0),
-                "variants": ((1, "fixed"),),
+                "variants": ((1, "fixed", None),),
                 "asset": "TEST",
                 "asset_cfg": asset_cfg,
                 "timeframe": "1h",
@@ -525,7 +577,7 @@ def test_failing_runner_test_reports_its_assertion_instead_of_crashing(pytester)
                 "target_fill": "tick_through",
                 "intrabar": "path",
                 "strategy_params": {}, "params_label": "",
-            }
+                    }
 
             rows = runner.run_variants(task)
 

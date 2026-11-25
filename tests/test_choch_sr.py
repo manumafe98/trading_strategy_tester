@@ -85,30 +85,15 @@ def test_touch_on_the_choch_bar_itself_gives_none():
     assert run(df).empty
 
 
-@pytest.mark.parametrize(
-    ("overrides", "trades"),
-    [
-        ({}, 1),
-        ({"stop_max": 0.42}, 0),
-        ({"stop_min": 0.43}, 0),
-        ({"stop_unit": "pips", "stop_min": 0.0, "stop_max": 43.0}, 1),
-        ({"stop_unit": "pips", "stop_min": 0.0, "stop_max": 42.0}, 0),
-        ({"stop_unit": "pips", "stop_min": 44.0, "stop_max": 50.0}, 0),
-    ],
-)
-def test_setup_is_skipped_when_the_stop_distance_is_outside_the_limits(overrides, trades):
-    assert len(run(long_setup(), **overrides)) == trades
-
-
 @pytest.mark.parametrize(("side", "entry", "kept"), [("long", 100.55, True), ("long", 100.12, False), ("short", 103.0, True), ("short", 103.5, False)])
 def test_a_stop_on_the_wrong_side_of_the_entry_gives_no_signal(side, entry, kept):
     df = long_setup()
     bar = len(df) - 1
     structure = market_structure(df, 2)
     touch = choch_sr.Touch(100.2, 100.0, choch_sr.SUPPORT, bar - 3)
-    params = {**choch_sr.PARAMS, "swing_length": 2, "pip_size": 0.01, "stop_min": 0.0, "stop_max": 100.0}
+    params = {**choch_sr.PARAMS, "swing_length": 2, "pip_size": 0.01}
 
-    row = choch_sr.signal_row(structure, bar, side, touch, entry, entry, 103.0, df.index, 0.01, params)
+    row = choch_sr.signal_row(structure, bar, side, touch, entry, 103.0, df.index, 0.01, params)
 
     assert (row is not None) == kept
 
@@ -132,14 +117,9 @@ def test_last_swing_stop_short_is_one_tick_above_the_last_swing_high():
     assert (row["side"], row["stop"], row["stop_swing_price"]) == ("short", 99.81, 99.80)
 
 
-@pytest.mark.parametrize(("stop_max", "trades"), [(0.36, 1), (0.35, 0)])
-def test_last_swing_stop_is_checked_against_the_stop_distance_limits(stop_max, trades):
-    assert len(run(higher_low_setup(), stop_source="last_swing", stop_max=stop_max)) == trades
-
-
 def test_role_flip_drops_the_pending_touch():
-    inside = run(role_flip_setup(100.05), stop_max=1.0)
-    flipped = run(role_flip_setup(99.95), stop_max=1.0)
+    inside = run(role_flip_setup(100.05))
+    flipped = run(role_flip_setup(99.95))
 
     assert len(inside) == 1
     assert inside.iloc[0]["time"] == at("04:41")
@@ -166,7 +146,7 @@ def test_channels_are_built_once_per_data_and_channel_settings(monkeypatch):
     df = long_setup()
 
     first = run(df)
-    assert run(df, swing_length=3, stop_max=1.0) is not None
+    assert run(df, swing_length=3) is not None
     assert run(df).equals(first)
     run(df, channel_max_width=0.5)
 
@@ -176,7 +156,7 @@ def test_channels_are_built_once_per_data_and_channel_settings(monkeypatch):
 def test_contact_while_the_channel_is_in_price_is_not_a_retest():
     df = append(long_setup().iloc[:-1], [100.25, 100.2, 100.1, 100.0, 100.05, 100.15, 100.55])
 
-    (row,) = run(df, stop_max=1.0).to_dict("records")
+    (row,) = run(df).to_dict("records")
 
     assert row["time"] == at("04:41")
     assert row["channel_role"] == "in-price"
@@ -281,13 +261,9 @@ def test_input_is_not_mutated():
     [
         ({"swing_length": 0}, "swing_length"),
         ({"channel_unit": "points"}, "channel_unit"),
-        ({"stop_unit": "ticks"}, "stop_unit"),
         ({"channel_min_width": -0.1}, "channel_min_width"),
         ({"channel_max_width": 0.0}, "channel_max_width"),
         ({"channel_min_width": 0.5, "channel_max_width": 0.4}, "channel_min_width"),
-        ({"stop_min": -1.0}, "stop_min"),
-        ({"stop_max": 0.0}, "stop_max"),
-        ({"stop_min": 0.6, "stop_max": 0.5}, "stop_min"),
         ({"stop_source": "last_hl"}, "stop_source"),
         ({"entry_mode": "touch"}, "entry_mode"),
         ({"max_touch_minutes": 0}, "max_touch_minutes"),
@@ -314,9 +290,6 @@ def test_defaults_are_the_pine_defaults():
         "channel_min_width": 0.1,
         "channel_max_width": 0.4,
         "channel_unit": "%",
-        "stop_min": 0.1,
-        "stop_max": 0.5,
-        "stop_unit": "%",
         "stop_source": "last_ll_hh",
         "entry_mode": "close",
         "max_touch_minutes": None,
@@ -383,11 +356,6 @@ def test_entry_mode_break_fills_at_the_level_or_at_an_open_beyond_it(test_asset_
     assert trade["entry_mode"] == "break"
 
 
-@pytest.mark.parametrize(("setup", "stop_max", "trades"), [(long_setup, 0.42, 0), (long_setup, 0.43, 1), (wick_only_break, 0.42, 1)])
-def test_entry_mode_break_measures_the_stop_distance_from_the_fill(setup, stop_max, trades):
-    assert len(run(setup(), entry_mode="break", stop_max=stop_max)) == trades
-
-
 def test_entry_mode_break_ignores_a_stop_swing_confirmed_on_the_choch_bar():
     df = long_setup().iloc[:-1].copy()
     df.iloc[-1] = [100.30, 100.56, 100.28, 100.30, 1.0]
@@ -396,7 +364,7 @@ def test_entry_mode_break_ignores_a_stop_swing_confirmed_on_the_choch_bar():
     assert run(df, entry_mode="break").empty
 def test_touch_to_choch_minutes_runs_from_the_contact_start_close_to_the_choch_close():
     assert run(long_setup()).iloc[0]["touch_to_choch_minutes"] == 3
-    assert run(role_flip_setup(100.05), stop_max=1.0).iloc[0]["touch_to_choch_minutes"] == 5
+    assert run(role_flip_setup(100.05)).iloc[0]["touch_to_choch_minutes"] == 5
     assert run(repeated_setup())["touch_to_choch_minutes"].tolist() == [3, 3]
 
 
@@ -458,3 +426,11 @@ def test_multi_band_touch_buckets_round_trip_through_strategy_params():
     trades = [band_trade(12.0, 1.0, 1.0)]
     metrics = choch_sr.calculate_metrics(None, None, trades, "TEST", "5m", {**first, "with_costs": False})
     assert (metrics["Trades 0-10m"], metrics["Trades 10+m"]) == (0, 1)
+
+
+@pytest.mark.parametrize("name", ["stop_min", "stop_max", "stop_unit"])
+def test_the_old_stop_distance_parameters_are_undeclared(name):
+    strategies = {"choch_sr": load_strategy("choch_sr")}
+
+    with pytest.raises(ValueError, match=f"{name} is not declared in choch_sr PARAMS"):
+        strategy_param_values(strategies, f"{name}=0.5")

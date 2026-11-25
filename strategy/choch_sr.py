@@ -6,7 +6,7 @@ import numpy as np
 import pandas as pd
 
 from strategy.utils.market_structure import market_structure, one_tick_beyond
-from strategy.utils.sr_channels import EXPOSED_CHANNELS, build_channels, validate_widths, width_in_price
+from strategy.utils.sr_channels import EXPOSED_CHANNELS, build_channels, validate_widths
 from tester_framework.data import LOCAL_RESAMPLE_RULES, resample_data
 
 
@@ -16,9 +16,6 @@ PARAMS = {
     "channel_min_width": 0.1,
     "channel_max_width": 0.4,
     "channel_unit": "%",
-    "stop_min": 0.1,
-    "stop_max": 0.5,
-    "stop_unit": "%",
     "stop_source": "last_ll_hh",
     "entry_mode": "close",
     "max_touch_minutes": None,
@@ -33,7 +30,6 @@ ENTRY_MODES = {
     "close": {"confirmation": "close", "choch_column": "choch", "stop_entry": False},
     "break": {"confirmation": "wick", "choch_column": "choch_at_open", "stop_entry": True},
 }
-EPSILON = 1e-8
 CHANNEL_CACHE: dict[tuple, pd.DataFrame] = {}
 CHANNEL_CACHE_SIZE = 32
 SUPPORT, RESISTANCE = 1, -1
@@ -75,8 +71,8 @@ PLOT_KEYS = (
 def validate_params(params):
     if params["swing_length"] < 1:
         raise ValueError("swing_length must be at least 1")
-    for names in (("channel_min_width", "channel_max_width", "channel_unit"), ("stop_min", "stop_max", "stop_unit")):
-        validate_widths(*(params[name] for name in names), names=names)
+    names = ("channel_min_width", "channel_max_width", "channel_unit")
+    validate_widths(*(params[name] for name in names), names=names)
     for name, choices in (("stop_source", STOP_SOURCES), ("entry_mode", ENTRY_MODES)):
         validate_choice(name, params[name], choices)
     if params["max_touch_minutes"] is not None and params["max_touch_minutes"] < 1:
@@ -158,13 +154,6 @@ def nearest_channel(touch: Touch, channels: list[tuple[float, float]], tick_size
     return best
 
 
-def stop_distance_ok(entry: float, stop: float, params: dict) -> bool:
-    unit, pip_size = params["stop_unit"], params["pip_size"]
-    shortest = width_in_price(params["stop_min"] - EPSILON, unit, entry, pip_size)
-    longest = width_in_price(params["stop_max"] + EPSILON, unit, entry, pip_size)
-    return shortest <= abs(entry - stop) <= longest
-
-
 def generate_signals(df, asset, timeframe, params):
     validate_params(params)
     tick_size = float(params.get("tick_size", 0))
@@ -207,7 +196,6 @@ def segment_signals(df, rule, tick_size, params):
     highs = df["high"].to_numpy(dtype=float)
     lows = df["low"].to_numpy(dtype=float)
     closes = df["close"].to_numpy(dtype=float)
-    opens = df["open"].to_numpy(dtype=float)
     times = df.index
 
     touches: list[Touch] = []
@@ -252,7 +240,7 @@ def segment_signals(df, rule, tick_size, params):
             if usable:
                 touch = max(usable, key=lambda t: t.prior_latest_retest_bar)
                 row = signal_row(
-                    structure, bar, side, touch, closes[bar], opens[bar], reference_close, times, tick_size, params
+                    structure, bar, side, touch, closes[bar], reference_close, times, tick_size, params
                 )
                 if row is not None:
                     row["touch_to_choch_minutes"] = (times[bar] - row["touch_time"]) / pd.Timedelta(minutes=1)
@@ -276,7 +264,7 @@ def cached_channels(high_bars: pd.DataFrame, params: dict) -> pd.DataFrame:
     return CHANNEL_CACHE[key]
 
 
-def signal_row(structure, bar, side, touch, entry, bar_open, reference_close, times, tick_size, params):
+def signal_row(structure, bar, side, touch, entry, reference_close, times, tick_size, params):
     is_long = side == "long"
     prefix = "bullish" if is_long else "bearish"
     swing = structure.iloc[bar]
@@ -286,11 +274,9 @@ def signal_row(structure, bar, side, touch, entry, bar_open, reference_close, ti
     if pd.isna(stop_swing_price):
         return None
     stop = one_tick_beyond(stop_swing_price, not is_long, tick_size)
-    fill = entry
     if is_stop_entry:
         entry = one_tick_beyond(swing[f"{prefix}_break_price"], is_long, tick_size)
-        fill = max(bar_open, entry) if is_long else min(bar_open, entry)
-    if (stop >= entry if is_long else stop <= entry) or not stop_distance_ok(fill, stop, params):
+    if stop >= entry if is_long else stop <= entry:
         return None
     touch_time = times[touch.prior_contact_start]
     swing_time = swing[f"{prefix}_break_swing_time"]

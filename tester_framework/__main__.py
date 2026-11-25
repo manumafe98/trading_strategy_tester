@@ -17,7 +17,7 @@ from .analytics import format_duration
 from .backtest import BAR_DURATIONS, INTRABAR_RULES, TARGET_FILLS, result_columns, risk_for, risk_reward_ratios, validate_calendar_filters
 from .cli import RunConfig, days_arg, months_arg
 from .data import load_data, read_local_csv, time_period_args
-from .models import OPERATIONS, IntrabarRule, TargetFill
+from .models import OPERATIONS, IntrabarRule, StopDistanceLimits, TargetFill
 from .reports import fill_rule_tags, format_metric, reset_output_dirs, write_results_html
 from .runner import batch_label, cache_data, run_variants
 from .sessions import SessionSpec, parse_sessions
@@ -183,6 +183,22 @@ def exit_mode_variants(value: str | None, risk_reward_ratio: float) -> list[str]
     return modes
 
 
+def stop_distance_limits_by_asset(value: str | None, assets: list[str]) -> dict[str, tuple[StopDistanceLimits | None, ...]]:
+    untagged: dict[StopDistanceLimits, None] = {}
+    tagged: dict[str, dict[StopDistanceLimits, None]] = {}
+    for item in csv_items(value):
+        asset, separator, text = item.rpartition("=")
+        limits = StopDistanceLimits.parse(text)
+        if not separator:
+            untagged[limits] = None
+            continue
+        asset = asset.strip().upper()
+        if asset not in assets:
+            raise ValueError(f"--stop_distance tag for unknown asset: {asset or '(empty)'}")
+        tagged.setdefault(asset, {})[limits] = None
+    return {asset: tuple(tagged.get(asset, untagged)) or (None,) for asset in assets}
+
+
 def worker_count(requested: int | None, task_count: int) -> int:
     if requested is not None and requested < 1:
         raise ValueError("--workers must be at least 1")
@@ -277,6 +293,10 @@ def run(config: RunConfig) -> None:
     for asset in assets:
         if asset not in asset_configs:
             raise ValueError(f"Unknown asset {asset}. Add it to config/assets.json")
+    stop_distance_limits = stop_distance_limits_by_asset(config.stop_distance, assets)
+    asset_variants = {
+        asset: tuple((ratio, mode, limits) for ratio, mode in variant_pairs for limits in stop_distance_limits[asset]) for asset in assets
+    }
     for timeframe in timeframes:
         if timeframe not in TIMEFRAMES:
             raise ValueError(f"Unknown timeframe {timeframe}. Add it to TIMEFRAMES in tester_framework/settings.py")
@@ -301,8 +321,9 @@ def run(config: RunConfig) -> None:
                     raise ValueError(f"{source}: low timeframe {low_timeframe} must divide high timeframe {timeframe} evenly")
                 strategy_high_low_timeframes.append((strategy_name, strategy, timeframe, low_timeframe))
     combinations = {name: combination_count(values) for name, values in param_values.items()}
-    batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(assets) * len(session_variants)
-    task_count = batch_count * len(variant_pairs)
+    asset_batch_count = sum(combinations[name] for name, *_ in strategy_high_low_timeframes) * len(session_variants)
+    batch_count = asset_batch_count * len(assets)
+    task_count = sum(asset_batch_count * len(asset_variants[asset]) for asset in assets)
     workers = worker_count(config.workers, batch_count)
     risks = {asset: risk_for(asset, config.risk, assets) for asset in assets}
     if config.max_variants < 1:
@@ -353,7 +374,7 @@ def run(config: RunConfig) -> None:
                                 VariantBatchTask(
                                     strategy=strategy_name,
                                     data_cache=data_cache,
-                                    variants=variant_pairs,
+                                    variants=asset_variants[asset],
                                     asset=asset,
                                     asset_cfg=asset_cfg,
                                     timeframe=timeframe,
@@ -417,7 +438,14 @@ def run(config: RunConfig) -> None:
 
         table = pd.DataFrame(rows)
         include_params = "Params" in table and bool(table["Params"].astype(bool).any())
-        columns = result_columns(config.operation, include_session=bool(session_specs), split=split_mode, include_params=include_params)
+        include_stop_distance = "Stop Distance" in table and bool(table["Stop Distance"].astype(bool).any())
+        columns = result_columns(
+            config.operation,
+            include_session=bool(session_specs),
+            split=split_mode,
+            include_params=include_params,
+            include_stop_distance=include_stop_distance,
+        )
         if not table.empty:
             strategy_order = {name: i for i, name in enumerate(strategies)}
             order = {asset: i for i, asset in enumerate(assets)}
@@ -485,6 +513,11 @@ def parser() -> argparse.ArgumentParser:
     p.add_argument("--risk_reward_ratio", default="1", help="comma list of positive numeric RR targets, e.g. 1,2,3")
     p.add_argument("--exit_mode", default="fixed", help="comma list of fixed, trailing, partial; use all to run every mode")
     p.add_argument("--risk", default="1", help="global percent or map, e.g. 1 or MGC=1,MNQ=0.5")
+    p.add_argument(
+        "--stop_distance",
+        metavar="RANGE,...",
+        help="comma list of stop distance limits, each its own variant, optionally tagged ASSET=, e.g. 0.1-0.5%%,EURUSD=5-20pips or 0.2%%+; default no limits",
+    )
     p.add_argument("--capital", type=float, default=10000)
     p.add_argument("--with_costs", action="store_true")
     p.add_argument(
@@ -571,6 +604,7 @@ def main() -> None:
             strategy_params=args.strategy_params,
             low_timeframe=args.low_timeframe,
             max_variants=args.max_variants,
+            stop_distance=args.stop_distance,
         )
         run(config)
     except (FileNotFoundError, RuntimeError, ValueError) as exc:

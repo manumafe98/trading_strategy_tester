@@ -18,7 +18,7 @@ from tester_framework.backtest import (
     risk_for,
     run_backtest,
 )
-from tester_framework.models import ExitReason, Side
+from tester_framework.models import ExitReason, Side, StopDistanceLimits
 from tester_framework.sessions import parse_sessions
 from tester_framework.split import walk_forward_efficiency
 
@@ -1783,3 +1783,99 @@ def test_stop_entry_on_the_roll_bar_is_discarded(test_asset_cfg):
 )
 def test_tick_price_ignores_float_noise_but_rounds_off_grid_prices(price, direction, expected):
     assert backtest.tick_price(price, 0.1, direction) == expected
+
+
+def _close_entry(stop, entry=100.0):
+    return {"time": pd.Timestamp("2025-01-01 00:00"), "side": "long", "entry": entry, "stop": stop}
+
+
+def _stop_distance_run(signal, limits, cfg, data=None):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0]) if data is None else data
+    metrics, trades = _run(data, [signal], cfg, stop_distance_limits=StopDistanceLimits.parse(limits))
+    return metrics["Discarded"], len(trades)
+
+
+@pytest.mark.parametrize(
+    ("stop", "outcome"),
+    [
+        pytest.param(99.8, (0, 1), id="at-the-minimum"),
+        pytest.param(99.9, (1, 0), id="one-tick-below-the-minimum"),
+        pytest.param(99.5, (0, 1), id="at-the-maximum"),
+        pytest.param(99.4, (1, 0), id="one-tick-past-the-maximum"),
+    ],
+)
+def test_stop_distance_limits_take_r_at_either_bound_and_discard_one_tick_past_it(test_asset_cfg, stop, outcome):
+    assert _stop_distance_run(_close_entry(stop), "0.2-0.5%", test_asset_cfg) == outcome
+
+
+@pytest.mark.parametrize(
+    ("fill_bar", "signal", "outcome"),
+    [
+        pytest.param([100.4, 100.4, 100.4, 100.4], {"stop": 99.9}, (0, 1), id="next-open-at-the-maximum"),
+        pytest.param([100.4, 100.4, 100.4, 100.4], {"stop": 99.8}, (1, 0), id="next-open-one-tick-past"),
+        pytest.param([100.0, 100.6, 100.0, 100.6], {"stop_entry": 100.5, "stop": 100.0}, (0, 1), id="stop-entry-at-the-maximum"),
+        pytest.param([100.0, 100.6, 100.0, 100.6], {"stop_entry": 100.5, "stop": 99.9}, (1, 0), id="stop-entry-one-tick-past"),
+        pytest.param([100.4, 100.4, 100.4, 100.4], {"stop_entry": 100.0, "stop": 99.9}, (0, 1), id="gapped-stop-entry-at-the-maximum"),
+        pytest.param([100.4, 100.4, 100.4, 100.4], {"stop_entry": 100.0, "stop": 99.8}, (1, 0), id="gapped-stop-entry-one-tick-past"),
+    ],
+)
+def test_stop_distance_limits_measure_r_from_the_fill(test_asset_cfg, fill_bar, signal, outcome):
+    stop_entry = "stop_entry" in signal
+    data = _bars(fill_bar, fill_bar, fill_bar) if stop_entry else _bars([100.0, 100.0, 100.0, 100.0], fill_bar, fill_bar)
+    signal = {"time": data.index[0], "side": "long", **signal}
+
+    assert _stop_distance_run(signal, "0-0.5%", test_asset_cfg, data) == outcome
+
+
+@pytest.mark.parametrize(
+    ("limits", "outcome"),
+    [pytest.param("0-0.95%", (1, 0), id="rounded-past-the-maximum"), pytest.param("1%+", (0, 1), id="rounded-up-to-the-minimum")],
+)
+def test_stop_distance_limits_measure_the_stop_rounded_to_the_tick_grid(test_asset_cfg, limits, outcome):
+    cfg = replace(test_asset_cfg, tick_size=0.25)
+
+    assert _stop_distance_run(_close_entry(99.1), limits, cfg) == outcome
+
+
+@pytest.mark.parametrize(
+    ("pip_size", "stop", "outcome"),
+    [
+        pytest.param(0.01, 99.8, (0, 1), id="pip-size-inside"),
+        pytest.param(0.01, 99.0, (1, 0), id="pip-size-past-the-maximum"),
+        pytest.param(None, 99.8, (1, 0), id="tick-size-below-the-minimum"),
+        pytest.param(None, 99.0, (0, 1), id="tick-size-inside"),
+    ],
+)
+def test_stop_distance_limits_in_pips_use_pip_size_or_fall_back_to_tick_size(test_asset_cfg, pip_size, stop, outcome):
+    cfg = replace(test_asset_cfg, pip_size=pip_size)
+
+    assert _stop_distance_run(_close_entry(stop), "5-20pips", cfg) == outcome
+
+
+@pytest.mark.parametrize(
+    ("limits", "stop", "outcome"),
+    [
+        pytest.param("0.2%+", 95.0, (0, 1), id="minimum-only-takes-a-wide-stop"),
+        pytest.param("0.2%+", 99.9, (1, 0), id="minimum-only-discards-a-tight-stop"),
+        pytest.param("0-0.5%", 99.9, (0, 1), id="maximum-only-takes-a-tight-stop"),
+        pytest.param("0-0.5%", 99.4, (1, 0), id="maximum-only-discards-a-wide-stop"),
+    ],
+)
+def test_stop_distance_limits_with_only_a_minimum_or_only_a_maximum(test_asset_cfg, limits, stop, outcome):
+    assert _stop_distance_run(_close_entry(stop), limits, test_asset_cfg) == outcome
+
+
+def test_stop_distance_limits_measure_r_before_spread_and_slippage(cost_asset_cfg):
+    data = _bars([100.0, 100.0, 100.0, 100.0], [100.0, 100.0, 100.0, 100.0])
+    signals = [_close_entry(99.5)]
+
+    metrics, trades = _run(data, signals, cost_asset_cfg, with_costs=True, stop_distance_limits=StopDistanceLimits.parse("0-0.5%"))
+
+    assert (metrics["Discarded"], len(trades)) == (0, 1)
+
+
+def test_min_risk_ticks_still_discards_a_signal_inside_the_stop_distance_limits(test_asset_cfg):
+    cfg = replace(test_asset_cfg, min_risk_ticks=10)
+
+    assert _stop_distance_run(_close_entry(99.5), "0-1%", cfg) == (1, 0)
+    assert _stop_distance_run(_close_entry(99.0), "0-1%", cfg) == (0, 1)
